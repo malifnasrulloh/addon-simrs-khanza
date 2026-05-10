@@ -1,0 +1,11 @@
+# Environment (contains secrets)
+.env
+
+# Logs
+logs/*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
