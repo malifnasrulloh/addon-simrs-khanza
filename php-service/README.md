@@ -186,3 +186,105 @@ php-service/
 | `0` | All patients processed successfully |
 | `1` | Fatal error (config, DB, etc.) |
 | `2` | Partial failure (some patients failed) |
+
+---
+
+# Mobile JKN Queue Sync Service (PHP)
+
+PHP CLI replacement for the Java `KhanzaHMSServiceMobileJKN` Swing application.
+Synchronizes patient queue data (Task IDs 3, 4, 5, 6, 7, 99) with the BPJS Mobile JKN Antrean API.
+
+## How It Works
+
+1. **Block 1 — New JKN Bookings**: Sends unsent bookings to `/antrean/add`, marks as `Sudah`
+2. **Block 2 — Cancellations**: Sends cancellations to `/antrean/batal` + `taskid=99`
+3. **Block 3 — JKN Task Updates**: Checks all 6 task triggers per patient in a single query, sends updates via `curl_multi`
+4. **Block 4 — Non-JKN Patients**: Adds non-BPJS patients to queue + processes their task IDs
+
+### Task ID Reference
+
+| Task ID | Trigger | Meaning |
+|---------|---------|---------|
+| 3 | `mutasi_berkas.dikirim` | Patient file sent to polyclinic (waiting) |
+| 4 | `mutasi_berkas.diterima` | Patient file received (service starts) |
+| 5 | `pemeriksaan_ralan` | Outpatient examination completed |
+| 6 | `resep_obat.tgl_perawatan` | Prescription created |
+| 7 | `resep_obat.tgl_penyerahan` | Prescription dispensed |
+| 99 | `reg_periksa.stts='Batal'` | Visit cancelled |
+
+## Quick Start
+
+```bash
+# 1. Configure Mobile JKN credentials in .env
+nano .env   # Fill in MOBILEJKN_BASE_URL (and optionally MOBILEJKN_CONS_ID etc.)
+
+# 2. Test with dry-run (DB query only, no API calls)
+php mobilejkn_sync.php --dry-run --verbose
+
+# 3. Run for real
+php mobilejkn_sync.php
+```
+
+## CLI Options
+
+| Flag | Description |
+|------|-------------|
+| `--help` | Show help message with task ID reference |
+| `--dry-run` | Query DB only, skip all API calls |
+| `--verbose` | Enable DEBUG-level logging |
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `MOBILEJKN_BASE_URL` | ✅ | BPJS Mobile JKN Antrean API base URL |
+| `MOBILEJKN_CONS_ID` | ❌ | Cons-ID (auto-uses `APLICARE_CONS_ID` if empty) |
+| `MOBILEJKN_SECRET_KEY` | ❌ | Secret key (auto-uses `APLICARE_SECRET_KEY` if empty) |
+| `MOBILEJKN_USER_KEY` | ❌ | User key (auto-uses `APLICARE_USER_KEY` if empty) |
+| `MOBILEJKN_BATCH_SIZE` | ❌ | Concurrent HTTP requests (default: 4) |
+| `MOBILEJKN_LOOKBACK_DAYS` | ❌ | Days to look back for unsent bookings (default: 6) |
+| `MOBILEJKN_INCLUDE_NON_JKN` | ❌ | Include non-BPJS patients (default: true) |
+
+## Cron Setup
+
+```bash
+# Every 10 minutes (matches original Java scheduler)
+*/10 * * * * cd /path/to/php-service && php mobilejkn_sync.php >> /dev/null 2>&1
+
+# Or with output to a cron log
+*/10 * * * * cd /path/to/php-service && php mobilejkn_sync.php >> /var/log/mobilejkn-cron.log 2>&1
+```
+
+## File Structure
+
+```
+php-service/
+├── mobilejkn_sync.php            # CLI entry point
+├── lib/mobilejkn/
+│   ├── Config.php                # Env loader + credential fallback
+│   ├── Database.php              # PDO wrapper (optimized batch queries)
+│   ├── BpjsAntreanClient.php     # API client with curl_multi
+│   └── QueueProcessor.php        # Business logic orchestrator
+└── logs/
+    └── mobilejkn_YYYY-MM-DD.log  # Daily log files
+```
+
+## Key Improvements over Java
+
+| Java (before) | PHP (after) |
+|---|---|
+| Swing JFrame GUI | Pure CLI (`php mobilejkn_sync.php`) |
+| `ScheduledExecutorService` (10-min loop) | System cron (`*/10 * * * *`) |
+| 6 queries per patient (N+1) | 1 batch query per block |
+| Sequential HTTP calls | Parallel via `curl_multi_*` |
+| Copy-pasted JKN/Non-JKN logic (~180 lines) | Unified `processTaskIdsForPatient()` |
+| SQL string concatenation | Parameterized prepared statements |
+| No retry on API failure | Auto-retry via DB rollback pattern |
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All operations completed successfully |
+| `1` | Fatal error (config, DB connection, etc.) |
+| `2` | Partial failure (some API calls failed) |
