@@ -369,6 +369,7 @@ class QueueProcessor
         ];
 
         foreach ($taskMap as $taskId => $field) {
+            $taskId   = (string) $taskId;
             $waktuStr = $patientData[$field] ?? '';
 
             // Skip if no trigger data available
