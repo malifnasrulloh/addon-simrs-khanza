@@ -102,7 +102,7 @@ class PatientCache
         $cutoff = time() - ($days * 86400);
         foreach (glob($dir . '/icare_cache_*.json') as $file) {
             if (filemtime($file) < $cutoff) {
-                // @unlink($file);
+                @unlink($file);
             }
         }
     }

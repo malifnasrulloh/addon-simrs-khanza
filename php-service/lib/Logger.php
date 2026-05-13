@@ -74,7 +74,7 @@ class Logger
         $cutoff = time() - ($days * 86400);
         foreach (glob($dir . '/' . $prefix . '_*.log') as $file) {
             if (filemtime($file) < $cutoff) {
-                // @unlink($file);
+                @unlink($file);
             }
         }
     }
