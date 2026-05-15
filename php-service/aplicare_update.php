@@ -75,29 +75,19 @@ $env = parseEnvFile($envFile);
 date_default_timezone_set($env['TIMEZONE'] ?? 'Asia/Jakarta');
 
 // ─── Logger setup ──────────────────────────────────────────────────────────
-$logDir = rtrim($env['LOG_DIR'] ?? 'logs', '/');
-if (!str_starts_with($logDir, '/')) {
-    $logDir = BASE_DIR . '/' . $logDir;
-}
-if (!is_dir($logDir) && !mkdir($logDir, 0755, true)) {
-    fwrite(STDERR, "[FATAL] Cannot create log directory: {$logDir}\n");
-    exit(1);
-}
-$logFile = $logDir . '/aplicare_' . date('Y-m-d') . '.log';
-$logLevel = strtoupper($env['LOG_LEVEL'] ?? 'INFO');
-$logLevels = ['DEBUG' => 0, 'INFO' => 1, 'WARNING' => 2, 'ERROR' => 3];
-$minLogLevel = $logLevels[$logLevel] ?? 1;
+require_once BASE_DIR . '/lib/Logger.php';
 
-// Clean old logs
-cleanOldLogs($logDir, (int)($env['LOG_RETENTION_DAYS'] ?? 30));
+$logLevel = $isVerbose ? 'DEBUG' : strtoupper($env['LOG_LEVEL'] ?? 'INFO');
+$log = new Logger($env['LOG_DIR'] ?? 'logs', 'aplicare', $logLevel, $isVerbose);
+$log->cleanOldLogs((int)($env['LOG_RETENTION_DAYS'] ?? 30));
 
 // ─── Banner ────────────────────────────────────────────────────────────────
-logInfo("══════════════════════════════════════════════════════════════");
-logInfo("  SIMRS Khanza - Aplicare Bed Availability Update Service");
-logInfo("  Version: " . SERVICE_VERSION . " | PHP " . PHP_VERSION);
-logInfo("  Timestamp: " . date('Y-m-d H:i:s T'));
-logInfo("  Mode: " . ($isDryRun ? 'DRY-RUN (no API calls)' : 'PRODUCTION'));
-logInfo("══════════════════════════════════════════════════════════════");
+$log->info("══════════════════════════════════════════════════════════════");
+$log->info("  SIMRS Khanza - Aplicare Bed Availability Update Service");
+$log->info("  Version: " . SERVICE_VERSION . " | PHP " . PHP_VERSION);
+$log->info("  Timestamp: " . date('Y-m-d H:i:s T'));
+$log->info("  Mode: " . ($isDryRun ? 'DRY-RUN (no API calls)' : 'PRODUCTION'));
+$log->info("══════════════════════════════════════════════════════════════");
 
 // ─── Validate required config ──────────────────────────────────────────────
 $required = ['DB_HOST', 'DB_NAME', 'DB_USER', 'APLICARE_CONS_ID', 'APLICARE_SECRET_KEY', 'APLICARE_BASE_URL'];
@@ -108,12 +98,12 @@ foreach ($required as $key) {
     }
 }
 if (!empty($missing)) {
-    logError("Missing required environment variables: " . implode(', ', $missing));
+    $log->error("Missing required environment variables: " . implode(', ', $missing));
     exit(1);
 }
 
 // ─── Database connection ───────────────────────────────────────────────────
-logInfo("[DB] Connecting to {$env['DB_HOST']}:{$env['DB_PORT']}/{$env['DB_NAME']}...");
+$log->info("[DB] Connecting to {$env['DB_HOST']}:{$env['DB_PORT']}/{$env['DB_NAME']}...");
 try {
     $dsn = sprintf(
         'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
@@ -127,35 +117,35 @@ try {
         PDO::ATTR_EMULATE_PREPARES   => false,
         PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci",
     ]);
-    logInfo("[DB] Connection established successfully.");
+    $log->info("[DB] Connection established successfully.");
 } catch (PDOException $e) {
-    logError("[DB] Connection failed: " . $e->getMessage());
+    $log->error("[DB] Connection failed: " . $e->getMessage());
     exit(1);
 }
 
 // ─── Resolve kode PPK ─────────────────────────────────────────────────────
 $kodePPK = $env['KODE_PPK'] ?? '';
 if (empty($kodePPK)) {
-    logInfo("[PPK] KODE_PPK not set in .env, fetching from `setting` table...");
+    $log->info("[PPK] KODE_PPK not set in .env, fetching from `setting` table...");
     try {
         $stmt = $pdo->query("SELECT kode_ppk FROM setting LIMIT 1");
         $row = $stmt->fetch();
         $kodePPK = $row['kode_ppk'] ?? '';
     } catch (PDOException $e) {
-        logError("[PPK] Failed to fetch kode_ppk: " . $e->getMessage());
+        $log->error("[PPK] Failed to fetch kode_ppk: " . $e->getMessage());
         exit(1);
     }
     if (empty($kodePPK)) {
-        logError("[PPK] kode_ppk is empty in `setting` table and not configured in .env");
+        $log->error("[PPK] kode_ppk is empty in `setting` table and not configured in .env");
         exit(1);
     }
-    logInfo("[PPK] Resolved kode_ppk = {$kodePPK}");
+    $log->info("[PPK] Resolved kode_ppk = {$kodePPK}");
 } else {
-    logInfo("[PPK] Using kode_ppk from .env = {$kodePPK}");
+    $log->info("[PPK] Using kode_ppk from .env = {$kodePPK}");
 }
 
 // ─── Query bed availability ───────────────────────────────────────────────
-logInfo("[QUERY] Fetching bed availability data...");
+$log->info("[QUERY] Fetching bed availability data...");
 $sql = <<<SQL
 SELECT
     akk.kode_kelas_aplicare,
@@ -169,23 +159,23 @@ LEFT JOIN kamar k ON b.kd_bangsal = k.kd_bangsal AND k.statusdata = '1'
 GROUP BY akk.kd_bangsal
 SQL;
 
-logDebug("[SQL] " . preg_replace('/\s+/', ' ', $sql));
+$log->debug("[SQL] " . preg_replace('/\s+/', ' ', $sql));
 
 try {
     $stmt = $pdo->query($sql);
     $rooms = $stmt->fetchAll();
 } catch (PDOException $e) {
-    logError("[QUERY] Failed: " . $e->getMessage());
+    $log->error("[QUERY] Failed: " . $e->getMessage());
     exit(1);
 }
 
 $totalRooms = count($rooms);
 if ($totalRooms === 0) {
-    logWarning("[QUERY] No rooms found in aplicare_ketersediaan_kamar. Nothing to update.");
-    logInfo("[DONE] Finished with 0 rooms processed.");
+    $log->warning("[QUERY] No rooms found in aplicare_ketersediaan_kamar. Nothing to update.");
+    $log->info("[DONE] Finished with 0 rooms processed.");
     exit(0);
 }
-logInfo("[QUERY] Found {$totalRooms} room(s) to update.");
+$log->info("[QUERY] Found {$totalRooms} room(s) to update.");
 
 // ─── Process each room ────────────────────────────────────────────────────
 $successCount = 0;
@@ -195,9 +185,9 @@ $consId = $env['APLICARE_CONS_ID'];
 $secretKey = $env['APLICARE_SECRET_KEY'];
 $headerConsId = $env['APLICARE_HEADER_CONS_ID'] ?: $consId;
 
-logInfo("[API] Base URL: {$baseUrl}");
-logInfo("[API] Target endpoint: /rest/bed/update/{$kodePPK}");
-logInfo("──────────────────────────────────────────────────────────────");
+$log->info("[API] Base URL: {$baseUrl}");
+$log->info("[API] Target endpoint: /rest/bed/update/{$kodePPK}");
+$log->info("──────────────────────────────────────────────────────────────");
 
 foreach ($rooms as $index => $room) {
     $roomNum = $index + 1;
@@ -207,8 +197,8 @@ foreach ($rooms as $index => $room) {
     $kapasitas = (int)$room['kapasitas'];
     $tersedia = (int)($room['tersedia'] ?? 0);
 
-    logInfo("[{$roomNum}/{$totalRooms}] Processing: {$namaBangsal} (kelas={$kodeKelas}, bangsal={$kdBangsal})");
-    logInfo("  Kapasitas: {$kapasitas} | Tersedia: {$tersedia}");
+    $log->info("[{$roomNum}/{$totalRooms}] Processing: {$namaBangsal} (kelas={$kodeKelas}, bangsal={$kdBangsal})");
+    $log->info("  Kapasitas: {$kapasitas} | Tersedia: {$tersedia}");
 
     // Build JSON payload
     $payload = json_encode([
@@ -222,10 +212,10 @@ foreach ($rooms as $index => $room) {
         'tersediapriawanita' => $tersedia,
     ], JSON_UNESCAPED_UNICODE);
 
-    logDebug("  [HTTP] Request JSON: {$payload}");
+    $log->debug("  [HTTP] Request JSON: {$payload}");
 
     if ($isDryRun) {
-        logInfo("  [DRY-RUN] Skipped API call.");
+        $log->info("  [DRY-RUN] Skipped API call.");
         $successCount++;
         continue;
     }
@@ -244,11 +234,11 @@ foreach ($rooms as $index => $room) {
         'X-Signature: ' . $signature,
     ]);
 
-    logDebug("  [HTTP] URL: {$url}");
-    logDebug("  [HTTP] Status: {$result['http_code']}");
+    $log->debug("  [HTTP] URL: {$url}");
+    $log->debug("  [HTTP] Status: {$result['http_code']}");
 
     if ($result['error']) {
-        logError("  [HTTP] cURL error: {$result['error']}");
+        $log->error("  [HTTP] cURL error: {$result['error']}");
         $failCount++;
         continue;
     }
@@ -256,7 +246,7 @@ foreach ($rooms as $index => $room) {
     // Parse response
     $response = json_decode($result['body'], true);
     if (json_last_error() !== JSON_ERROR_NONE) {
-        logError("  [HTTP] Invalid JSON response: " . substr($result['body'], 0, 500));
+        $log->error("  [HTTP] Invalid JSON response: " . substr($result['body'], 0, 500));
         $failCount++;
         continue;
     }
@@ -267,23 +257,23 @@ foreach ($rooms as $index => $room) {
         $message = $metadata['message'] ?? 'No message';
         $logMsg = "  [BPJS] Response: {$code} - {$message}";
         if ((int)$code === 200 || (int)$code === 1) {
-            logInfo($logMsg);
+            $log->info($logMsg);
             $successCount++;
         } else {
-            logWarning($logMsg);
+            $log->warning($logMsg);
             $failCount++;
         }
     } else {
-        logWarning("  [BPJS] Unexpected response structure: " . substr($result['body'], 0, 500));
+        $log->warning("  [BPJS] Unexpected response structure: " . substr($result['body'], 0, 500));
         $failCount++;
     }
 }
 
 // ─── Summary ───────────────────────────────────────────────────────────────
-logInfo("──────────────────────────────────────────────────────────────");
-logInfo("[SUMMARY] Total: {$totalRooms} | Success: {$successCount} | Failed: {$failCount}");
-logInfo("[DONE] Finished at " . date('Y-m-d H:i:s T'));
-logInfo("══════════════════════════════════════════════════════════════");
+$log->info("──────────────────────────────────────────────────────────────");
+$log->info("[SUMMARY] Total: {$totalRooms} | Success: {$successCount} | Failed: {$failCount}");
+$log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
+$log->info("══════════════════════════════════════════════════════════════");
 
 $pdo = null;
 exit($failCount > 0 ? 2 : 0);
@@ -354,39 +344,4 @@ function sendRequest(string $url, string $body, array $headers): array
     return ['body' => $response ?: '', 'http_code' => $httpCode, 'error' => $error];
 }
 
-/**
- * Delete log files older than $days days.
- */
-function cleanOldLogs(string $dir, int $days): void
-{
-    if ($days <= 0) return;
-    $cutoff = time() - ($days * 86400);
-    foreach (glob($dir . '/aplicare_*.log') as $file) {
-        if (filemtime($file) < $cutoff) {
-            unlink($file);
-        }
-    }
-}
 
-// ─── Logging functions ────────────────────────────────────────────────────
-function writeLog(string $level, string $message): void
-{
-    global $logFile, $minLogLevel, $logLevels, $isVerbose;
-    $levelNum = $logLevels[$level] ?? 1;
-    if ($levelNum < $minLogLevel && !$isVerbose) return;
-
-    $timestamp = date('Y-m-d H:i:s');
-    $formatted = "[{$timestamp}] [{$level}] {$message}";
-
-    // Always write to log file
-    file_put_contents($logFile, $formatted . PHP_EOL, FILE_APPEND | LOCK_EX);
-
-    // Always output to terminal (for cron logs / manual runs)
-    $stream = ($level === 'ERROR' || $level === 'WARNING') ? STDERR : STDOUT;
-    fwrite($stream, $formatted . PHP_EOL);
-}
-
-function logDebug(string $msg): void   { writeLog('DEBUG', $msg); }
-function logInfo(string $msg): void    { writeLog('INFO', $msg); }
-function logWarning(string $msg): void { writeLog('WARNING', $msg); }
-function logError(string $msg): void   { writeLog('ERROR', $msg); }

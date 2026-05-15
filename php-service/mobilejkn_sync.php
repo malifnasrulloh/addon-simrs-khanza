@@ -88,7 +88,7 @@ require_once BASE_DIR . '/lib/Logger.php';
 
 $logLevel = $isVerbose ? 'DEBUG' : $config->logLevel;
 $log = new Logger($config->logDir, 'mobilejkn', $logLevel, $isVerbose);
-$log->cleanOldLogs($config->logDir, 'mobilejkn', $config->logRetentionDays);
+$log->cleanOldLogs($config->logRetentionDays);
 
 // ─── Banner ────────────────────────────────────────────────────────────────
 $log->info("══════════════════════════════════════════════════════════════");

@@ -128,11 +128,15 @@ SQL;
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * Fetch sent JKN bookings with ALL task trigger data in a single query.
+     * Fetch checked-in JKN bookings with ALL task trigger data in a single query.
      * Eliminates the N+1 problem: instead of 6 queries per patient, 1 query total.
      *
-     * Uses correlated subqueries to safely handle tables with multiple rows
-     * per no_rawat (e.g. multiple pemeriksaan_ralan or resep_obat entries).
+     * Task sources use cascading merge (ERM → Original) for maximum delivery success:
+     *   Task 3: validasi (check-in time) → mutasi_berkas.dikirim (file sent)
+     *   Task 4: pemeriksaan_ralan (exam start) → mutasi_berkas.diterima (file received)
+     *   Task 5: mutasi_berkas.kembali (file returned) → reg_periksa.stts=Sudah → pemeriksaan_ralan
+     *   Task 6: resep_obat (prescription created)
+     *   Task 7: resep_obat.tgl_penyerahan (prescription dispensed)
      *
      * @return array[] Each row contains nobooking, no_rawat, task3..task99 timestamps, sent_taskids
      */
@@ -142,21 +146,40 @@ SQL;
 SELECT
     r.nobooking,
     r.no_rawat,
-    -- Task 3: File sent to polyclinic
-    (SELECT mb.dikirim
-     FROM mutasi_berkas mb
-     WHERE mb.no_rawat = r.no_rawat AND mb.dikirim <> '0000-00-00 00:00:00'
-     LIMIT 1) AS task3_waktu,
-    -- Task 4: File received at polyclinic
-    (SELECT mb.diterima
-     FROM mutasi_berkas mb
-     WHERE mb.no_rawat = r.no_rawat AND mb.diterima <> '0000-00-00 00:00:00'
-     LIMIT 1) AS task4_waktu,
-    -- Task 5: Outpatient exam completed
-    (SELECT CONCAT(pr.tgl_perawatan, ' ', pr.jam_rawat)
-     FROM pemeriksaan_ralan pr
-     WHERE pr.no_rawat = r.no_rawat
-     LIMIT 1) AS task5_waktu,
+    -- Task 3: Check-in validation time (ERM) → File sent to polyclinic (Original)
+    COALESCE(
+        NULLIF(r.validasi, ''),
+        (SELECT mb.dikirim
+         FROM mutasi_berkas mb
+         WHERE mb.no_rawat = r.no_rawat AND mb.dikirim <> '0000-00-00 00:00:00'
+         LIMIT 1)
+    ) AS task3_waktu,
+    -- Task 4: Exam start (ERM) → File received at polyclinic (Original)
+    COALESCE(
+        (SELECT CONCAT(pr.tgl_perawatan, ' ', pr.jam_rawat)
+         FROM pemeriksaan_ralan pr
+         WHERE pr.no_rawat = r.no_rawat
+         LIMIT 1),
+        (SELECT mb.diterima
+         FROM mutasi_berkas mb
+         WHERE mb.no_rawat = r.no_rawat AND mb.diterima <> '0000-00-00 00:00:00'
+         LIMIT 1)
+    ) AS task4_waktu,
+    -- Task 5: File returned (ERM) → Visit completed (ERM) → Exam record (Original)
+    COALESCE(
+        (SELECT IF(mb.kembali = '0000-00-00 00:00:00', NULL, mb.kembali)
+         FROM mutasi_berkas mb
+         WHERE mb.no_rawat = r.no_rawat
+         LIMIT 1),
+        (SELECT NOW()
+         FROM reg_periksa rp
+         WHERE rp.no_rawat = r.no_rawat AND rp.stts = 'Sudah'
+         LIMIT 1),
+        (SELECT CONCAT(pr.tgl_perawatan, ' ', pr.jam_rawat)
+         FROM pemeriksaan_ralan pr
+         WHERE pr.no_rawat = r.no_rawat
+         LIMIT 1)
+    ) AS task5_waktu,
     -- Farmasi: Prescription number (for /antrean/farmasi/add)
     (SELECT ro.no_resep
      FROM resep_obat ro
@@ -186,7 +209,7 @@ SELECT
      FROM referensi_mobilejkn_bpjs_taskid t
      WHERE t.no_rawat = r.no_rawat) AS sent_taskids
 FROM referensi_mobilejkn_bpjs r
-WHERE r.statuskirim = 'Sudah'
+WHERE r.status = 'Checkin'
   AND r.tanggalperiksa BETWEEN :date_from AND :date_to
 ORDER BY r.tanggalperiksa
 SQL;
@@ -201,8 +224,13 @@ SQL;
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * Fetch Non-JKN patients with schedule and BPJS mappings in a single query.
+     * Fetch Non-JKN patients with schedule, BPJS mappings, and task data.
      * Eliminates the inner N+1 for jadwal, dokter mapping, poli mapping.
+     *
+     * Task sources use cascading merge (ERM → Original) matching JKN behavior:
+     *   Task 3: Calculated MAX(reg_time, schedule_start) → mutasi_berkas.dikirim
+     *   Task 4: pemeriksaan_ralan → mutasi_berkas.diterima
+     *   Task 5: mutasi_berkas.kembali → stts=Sudah → pemeriksaan_ralan
      *
      * @param string $hari Indonesian day name (e.g. "SENIN")
      */
@@ -214,22 +242,40 @@ SQL;
     ): array {
         $sql = <<<'SQL'
 SELECT
-    rp.no_reg, rp.no_rawat, rp.tgl_registrasi,
+    rp.no_reg, rp.no_rawat, rp.tgl_registrasi, rp.jam_reg,
     rp.kd_dokter, d.nm_dokter,
     rp.kd_poli, pol.nm_poli,
     rp.stts_daftar, rp.no_rkm_medis, rp.kd_pj,
     j.jam_mulai, j.jam_selesai, j.kuota,
     md.kd_dokter_bpjs,
     mp.kd_poli_bpjs,
-    -- Task trigger data (same subqueries as JKN)
-    (SELECT mb.dikirim FROM mutasi_berkas mb
-     WHERE mb.no_rawat = rp.no_rawat AND mb.dikirim <> '0000-00-00 00:00:00'
-     LIMIT 1) AS task3_waktu,
-    (SELECT mb.diterima FROM mutasi_berkas mb
-     WHERE mb.no_rawat = rp.no_rawat AND mb.diterima <> '0000-00-00 00:00:00'
-     LIMIT 1) AS task4_waktu,
-    (SELECT CONCAT(pr.tgl_perawatan, ' ', pr.jam_rawat) FROM pemeriksaan_ralan pr
-     WHERE pr.no_rawat = rp.no_rawat LIMIT 1) AS task5_waktu,
+    -- Task 3: Calculated registration/schedule time → File sent (cascading)
+    COALESCE(
+        (SELECT IF(
+            CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) > CONCAT(rp.tgl_registrasi, ' ', j.jam_mulai),
+            CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg),
+            CONCAT(rp.tgl_registrasi, ' ', j.jam_mulai)
+        )),
+        (SELECT mb.dikirim FROM mutasi_berkas mb
+         WHERE mb.no_rawat = rp.no_rawat AND mb.dikirim <> '0000-00-00 00:00:00'
+         LIMIT 1)
+    ) AS task3_waktu,
+    -- Task 4: Exam start → File received (cascading)
+    COALESCE(
+        (SELECT CONCAT(pr.tgl_perawatan, ' ', pr.jam_rawat) FROM pemeriksaan_ralan pr
+         WHERE pr.no_rawat = rp.no_rawat LIMIT 1),
+        (SELECT IF(mb.diterima = '0000-00-00 00:00:00', NULL, mb.diterima) FROM mutasi_berkas mb
+         WHERE mb.no_rawat = rp.no_rawat LIMIT 1)
+    ) AS task4_waktu,
+    -- Task 5: File returned → Visit completed → Exam record (cascading)
+    COALESCE(
+        (SELECT IF(mb.kembali = '0000-00-00 00:00:00', NULL, mb.kembali) FROM mutasi_berkas mb
+         WHERE mb.no_rawat = rp.no_rawat LIMIT 1),
+        (SELECT NOW() FROM reg_periksa rp2
+         WHERE rp2.no_rawat = rp.no_rawat AND rp2.stts = 'Sudah' LIMIT 1),
+        (SELECT CONCAT(pr.tgl_perawatan, ' ', pr.jam_rawat) FROM pemeriksaan_ralan pr
+         WHERE pr.no_rawat = rp.no_rawat LIMIT 1)
+    ) AS task5_waktu,
     (SELECT ro.no_resep FROM resep_obat ro
      WHERE ro.no_rawat = rp.no_rawat LIMIT 1) AS no_resep,
     (SELECT CONCAT(ro.tgl_perawatan, ' ', ro.jam) FROM resep_obat ro

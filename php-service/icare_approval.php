@@ -93,8 +93,10 @@ date_default_timezone_set($env['TIMEZONE'] ?? 'Asia/Jakarta');
 
 // ─── Logger ───────────────────────────────────────────────────────────────
 $logDir = $env['LOG_DIR'] ?? 'logs';
-$log = new Logger($logDir, 'icare', $env['LOG_LEVEL'] ?? 'INFO', $isVerbose);
-$log->cleanOldLogs($logDir, 'icare', (int)($env['LOG_RETENTION_DAYS'] ?? 30));
+$logLevel = $isVerbose ? 'DEBUG' : strtoupper($env['LOG_LEVEL'] ?? 'INFO');
+$log = new Logger($logDir, 'icare', $logLevel, $isVerbose);
+$retentionDays = (int)($env['LOG_RETENTION_DAYS'] ?? 30);
+$log->cleanOldLogs($retentionDays);
 
 // ─── Banner ───────────────────────────────────────────────────────────────
 $log->info('══════════════════════════════════════════════════════════════');
@@ -174,9 +176,9 @@ $api = new BPJSICareApi(
     $log
 );
 
-$browser = new HeadlessApproval($log, $logDir . '/tmp');
-$cache   = new PatientCache($logDir);
-$cache->cleanOld((int)($env['LOG_RETENTION_DAYS'] ?? 30));
+$browser = new HeadlessApproval($log, $log->getLogDir() . '/tmp');
+$cache   = new PatientCache($log->getLogDir());
+$cache->cleanOld($retentionDays);
 
 // ─── Process each patient ─────────────────────────────────────────────────
 $log->info('──────────────────────────────────────────────────────────────');

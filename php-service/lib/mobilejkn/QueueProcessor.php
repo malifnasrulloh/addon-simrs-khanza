@@ -347,7 +347,11 @@ class QueueProcessor
 
     /**
      * Build task update API requests for a single patient.
-     * Checks each task's trigger data and skips already-sent tasks.
+     *
+     * Enforces STRICT SEQUENTIAL ORDER (BPJS compliance, ERM behavior):
+     *   Task 3 → Task 4 → Task 5 → Task 6 → Task 7
+     * Each task can only be sent if the previous task was already sent.
+     * Task 99 (cancellation) is independent — it can fire at any point.
      *
      * @param string   $kodebooking  Booking code (nobooking for JKN, no_rawat for Non-JKN)
      * @param string   $noRawat      Visit registration number
@@ -359,32 +363,56 @@ class QueueProcessor
     {
         $requests = [];
 
-        // Define task-to-field mapping: [taskId => fieldName, ...]
-        $taskMap = [
-            '3'  => 'task3_waktu',   // File sent to polyclinic
-            '4'  => 'task4_waktu',   // File received at polyclinic
-            '5'  => 'task5_waktu',   // Outpatient exam completed
-            '6'  => 'task6_waktu',   // Prescription created
-            '7'  => 'task7_waktu',   // Prescription dispensed
+        // Define sequential task chain: [taskId => [fieldName, prerequisiteTaskId]]
+        // prerequisite = null means no dependency (first task in chain)
+        $taskChain = [
+            '3'  => ['field' => 'task3_waktu',  'requires' => null],   // Check-in / File sent
+            '4'  => ['field' => 'task4_waktu',  'requires' => '3'],    // Service start
+            '5'  => ['field' => 'task5_waktu',  'requires' => '4'],    // Service complete
+            '6'  => ['field' => 'task6_waktu',  'requires' => '5'],    // Prescription created
+            '7'  => ['field' => 'task7_waktu',  'requires' => '6'],    // Prescription dispensed
         ];
 
-        foreach ($taskMap as $taskId => $field) {
-            $taskId   = (string) $taskId;
-            $waktuStr = $patientData[$field] ?? '';
+        // Track newly-queued tasks in this cycle (for chain progression within a single run)
+        $queuedThisCycle = [];
+
+        foreach ($taskChain as $taskId => $config) {
+            $taskId      = (string) $taskId;
+            $field       = $config['field'];
+            $prerequisite = $config['requires'];
+            $waktuStr    = $patientData[$field] ?? '';
 
             // Skip if no trigger data available
-            if (empty($waktuStr) || str_starts_with($waktuStr, '0000')) continue;
+            if (empty($waktuStr) || str_starts_with($waktuStr, '0000')) {
+                // If this task hasn't been sent and has no data, stop the chain
+                // (subsequent tasks depend on this one)
+                if (!in_array($taskId, $sentTasks, true)) {
+                    $this->log->debug("[TASK] TaskID {$taskId} for {$noRawat}: no trigger data, chain paused.");
+                    break;
+                }
+                continue;
+            }
 
             // Skip if already sent successfully
             if (in_array($taskId, $sentTasks, true)) {
-                $this->skipCount++;
                 continue;
+            }
+
+            // Enforce sequential dependency: prerequisite must be sent OR queued this cycle
+            if ($prerequisite !== null
+                && !in_array($prerequisite, $sentTasks, true)
+                && !in_array($prerequisite, $queuedThisCycle, true)
+            ) {
+                $this->log->debug("[TASK] TaskID {$taskId} for {$noRawat}: prerequisite task {$prerequisite} not yet sent, chain paused.");
+                break;
             }
 
             // Try inserting task record (idempotency guard)
             if (!$this->db->insertTaskId($noRawat, $taskId, $waktuStr)) {
                 $this->log->debug("[TASK] TaskID {$taskId} already recorded for {$noRawat}");
                 $this->skipCount++;
+                // Treat as "sent" for chain progression
+                $queuedThisCycle[] = $taskId;
                 continue;
             }
 
@@ -402,9 +430,11 @@ class QueueProcessor
                 '_taskId'  => $taskId,
                 '_noRawat' => $noRawat,
             ];
+
+            $queuedThisCycle[] = $taskId;
         }
 
-        // Task 99: Visit cancelled (special — triggered by stts='Batal')
+        // Task 99: Visit cancelled (independent — not part of sequential chain)
         $isCancelled = $patientData['is_cancelled'] ?? null;
         if ($isCancelled === 'Batal' && !in_array('99', $sentTasks, true)) {
             $nowStr = date('Y-m-d H:i:s');
