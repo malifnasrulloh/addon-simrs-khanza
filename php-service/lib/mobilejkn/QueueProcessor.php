@@ -168,7 +168,7 @@ class QueueProcessor
         // Cancellations are processed sequentially (they have a two-step flow)
         foreach ($cancellations as $c) {
             $nb = $c['nobooking'];
-            $noRawat = $c['no_rawat'];
+            $noRawat = $c['no_rawat_batal'];
 
             // Step 1: POST /antrean/batal
             $result = $this->api->batalAntrean($nb, $c['keterangan'] ?? 'Dibatalkan');
