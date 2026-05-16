@@ -236,6 +236,9 @@ class QueueProcessor
         }
         $this->log->info("[BLOCK 3] Processing {$total} JKN patient(s)...");
 
+        // Sync local DB task status with BPJS API directly
+        $this->syncTasksWithBpjs($patients, 'BLOCK 3');
+
         // Collect all task update requests across all patients
         $allRequests = [];
 
@@ -316,6 +319,19 @@ class QueueProcessor
         foreach ($addRequests as $req) {
             $id      = $req['id'];
             $result  = $addResults[$id] ?? ['success' => false];
+            $p       = $req['_patient'];
+            $noRawat = $p['no_rawat'];
+
+            $addResultsMap[$noRawat] = $result;
+        }
+
+        // Sync local DB task status with BPJS API directly for successful additions
+        $this->syncTasksWithBpjs($patients, 'BLOCK 4');
+
+        $kodebooking = '';
+        foreach ($addRequests as $req) {
+            $id      = $req['id'];
+            $result  = $addResultsMap[$req['_patient']['no_rawat']] ?? ['success' => false];
             $p       = $req['_patient'];
             $noRawat = $p['no_rawat'];
 
@@ -608,6 +624,121 @@ class QueueProcessor
             'kuotanonjkn'      => $kuota,
             'keterangan'       => 'Peserta harap 30 menit lebih awal guna pencatatan administrasi.',
         ];
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Sync Task Status with BPJS API
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Fetch actual task list from BPJS API and synchronize local DB.
+     * Updates the $patients array in-place with the accurate sent_taskids.
+     */
+    private function syncTasksWithBpjs(array &$patients, string $blockLabel): void
+    {
+        $this->log->info("[{$blockLabel}] Synchronizing local task status with BPJS API...");
+        
+        $requests = [];
+        // Extract all kodebookings (JKN uses nobooking, Non-JKN uses no_rawat)
+        foreach ($patients as $idx => $p) {
+            $kodebooking = isset($p['nobooking']) && !empty($p['nobooking']) && str_starts_with($blockLabel, 'BLOCK 3') ? $p['nobooking'] : $p['no_rawat'];
+            $requests[] = [
+                'id'       => "sync_{$idx}",
+                'endpoint' => '/antrean/getlisttask',
+                'payload'  => ['kodebooking' => $kodebooking],
+                '_idx'     => $idx,
+                '_kodebooking' => $kodebooking,
+            ];
+        }
+
+        if (empty($requests)) return;
+
+        $results = $this->api->executeBatch($requests);
+
+        foreach ($requests as $req) {
+            $idx    = $req['_idx'];
+            $p      = $patients[$idx];
+            $noRawat = $p['no_rawat'];
+            $result = $results[$req['id']] ?? null;
+
+            if (!$result || !$result['success']) {
+                $this->log->warning("[{$blockLabel}] Sync failed for {$req['_kodebooking']}: " . ($result['message'] ?? 'Unknown error') . " — skipping sync, will retry next cycle");
+                continue; // Skip sync, retain local DB view to avoid data loss on connection issues
+            }
+
+            // Extract BPJS task IDs
+            $bpjsTaskIds = [];
+            // The decrypted payload is usually a JSON array directly: [ {"taskid": 3, ...}, ... ]
+            $data = $result['data'] ?? [];
+            $list = [];
+
+            if (is_array($data)) {
+                if (isset($data['list']) && is_array($data['list'])) {
+                    $list = $data['list'];
+                } else {
+                    // Sequential array or empty
+                    $list = $data;
+                }
+            }
+
+            foreach ($list as $taskItem) {
+                if (is_array($taskItem) && isset($taskItem['taskid'])) {
+                    $bpjsTaskIds[] = (string) $taskItem['taskid'];
+                }
+            }
+            
+            // Extract Local DB task IDs
+            $dbTaskIds = $this->parseSentTaskIds($p['sent_taskids'] ?? '');
+
+            // Find differences
+            $toDelete = array_diff($dbTaskIds, $bpjsTaskIds);
+            $toInsert = array_diff($bpjsTaskIds, $dbTaskIds);
+
+            // 1. Delete from DB if not in BPJS
+            foreach ($toDelete as $taskId) {
+                if ($taskId === '99') continue; // Optional: Keep local 99 if you don't want to resend cancel
+                
+                $this->log->info("[SYNC] {$noRawat} TaskID {$taskId} in DB but not in BPJS. Deleting locally to resend.");
+                $this->db->deleteTaskId($noRawat, $taskId);
+                
+                // Update local array
+                $key = array_search($taskId, $dbTaskIds, true);
+                if ($key !== false) {
+                    unset($dbTaskIds[$key]);
+                }
+            }
+
+            // 2. Insert to DB if in BPJS but not in DB
+            foreach ($toInsert as $taskId) {
+                $this->log->info("[SYNC] {$noRawat} TaskID {$taskId} in BPJS but not in DB. Inserting locally.");
+                
+                // Find wakturs from BPJS response
+                $waktuRs = '';
+                foreach ($list as $taskItem) {
+                    if ((string)($taskItem['taskid'] ?? '') === $taskId) {
+                        $waktuRs = $taskItem['wakturs'] ?? '';
+                        break;
+                    }
+                }
+                
+                if (empty($waktuRs)) {
+                    $waktuRs = date('Y-m-d H:i:s'); // Fallback
+                } else {
+                    // Convert BPJS WIB format "16-03-2021 11:32:49 WIB" to "Y-m-d H:i:s"
+                    $waktuRs = preg_replace('/ WIB$/', '', $waktuRs);
+                    $dateObj = DateTime::createFromFormat('d-m-Y H:i:s', $waktuRs);
+                    if ($dateObj) {
+                        $waktuRs = $dateObj->format('Y-m-d H:i:s');
+                    }
+                }
+
+                $this->db->insertTaskId($noRawat, $taskId, $waktuRs);
+                $dbTaskIds[] = $taskId;
+            }
+
+            // Update patient data by reference
+            $patients[$idx]['sent_taskids'] = implode(',', $dbTaskIds);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════

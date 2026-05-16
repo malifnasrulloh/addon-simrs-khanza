@@ -13,6 +13,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/../LZString.php';
+
 class BpjsAntreanClient
 {
     private string $consId;
@@ -147,10 +149,11 @@ class BpjsAntreanClient
 
         // Build and add handles
         foreach ($chunk as $req) {
-            $id       = $req['id'];
-            $url      = $this->baseUrl . $req['endpoint'];
-            $body     = json_encode($req['payload'], JSON_UNESCAPED_UNICODE);
-            $headers  = $this->generateHeaders();
+            $id        = $req['id'];
+            $url       = $this->baseUrl . $req['endpoint'];
+            $body      = json_encode($req['payload'], JSON_UNESCAPED_UNICODE);
+            $timestamp = time();
+            $headers   = $this->generateHeaders($timestamp);
 
             $ch = curl_init();
             curl_setopt_array($ch, [
@@ -166,7 +169,10 @@ class BpjsAntreanClient
                 CURLOPT_USERAGENT      => self::USER_AGENT,
             ]);
 
-            $handles[$id] = $ch;
+            $handles[$id] = [
+                'ch'        => $ch,
+                'timestamp' => $timestamp,
+            ];
             curl_multi_add_handle($mh, $ch);
 
             $this->log->debug("[HTTP] Queued POST {$url} | Body: " . substr($body, 0, 300));
@@ -187,7 +193,10 @@ class BpjsAntreanClient
         } while ($running > 0);
 
         // Collect results
-        foreach ($handles as $id => $ch) {
+        foreach ($handles as $id => $handleData) {
+            $ch        = $handleData['ch'];
+            $timestamp = $handleData['timestamp'];
+            
             $response = curl_multi_getcontent($ch);
             $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
             $error    = curl_error($ch);
@@ -196,7 +205,7 @@ class BpjsAntreanClient
                 $this->log->error("[HTTP] {$id}: cURL error: {$error}");
                 $results[$id] = ['success' => false, 'code' => '0', 'message' => "cURL error: {$error}"];
             } else {
-                $results[$id] = $this->parseApiResponse($id, $response, $httpCode);
+                $results[$id] = $this->parseApiResponse($id, $response, $httpCode, $timestamp);
             }
 
             curl_multi_remove_handle($mh, $ch);
@@ -213,9 +222,10 @@ class BpjsAntreanClient
 
     private function post(string $endpoint, array $payload): array
     {
-        $url     = $this->baseUrl . $endpoint;
-        $body    = json_encode($payload, JSON_UNESCAPED_UNICODE);
-        $headers = $this->generateHeaders();
+        $url       = $this->baseUrl . $endpoint;
+        $body      = json_encode($payload, JSON_UNESCAPED_UNICODE);
+        $timestamp = time();
+        $headers   = $this->generateHeaders($timestamp);
 
         $this->log->debug("[HTTP] POST {$url}");
         $this->log->debug("[HTTP] Body: {$body}");
@@ -249,7 +259,7 @@ class BpjsAntreanClient
             return ['success' => false, 'code' => '0', 'message' => "cURL error: {$error}"];
         }
 
-        return $this->parseApiResponse($endpoint, $response, $httpCode);
+        return $this->parseApiResponse($endpoint, $response, $httpCode, $timestamp);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -259,9 +269,9 @@ class BpjsAntreanClient
     /**
      * Generate BPJS API headers with HMAC-SHA256 signature.
      */
-    private function generateHeaders(): array
+    private function generateHeaders(?int $timestamp = null): array
     {
-        $timestamp = time();
+        $timestamp = $timestamp ?? time();
         $data      = $this->consId . '&' . $timestamp;
         $signature = base64_encode(hash_hmac('sha256', $data, $this->secretKey, true));
 
@@ -276,29 +286,91 @@ class BpjsAntreanClient
     }
 
     /**
-     * Parse BPJS API JSON response into a standardized result.
+     * Parse BPJS API JSON response into a standardized result and decrypt payload if encrypted.
      */
-    private function parseApiResponse(string $label, string $body, int $httpCode): array
+    private function parseApiResponse(string $label, string $body, int $httpCode, int $timestamp): array
     {
         $this->log->debug("[HTTP] {$label}: HTTP {$httpCode} | Body: " . substr($body, 0, 500));
 
         $json = json_decode($body, true);
         if (json_last_error() !== JSON_ERROR_NONE) {
             $this->log->error("[HTTP] {$label}: Invalid JSON: " . substr($body, 0, 300));
-            return ['success' => false, 'code' => (string) $httpCode, 'message' => 'Invalid JSON response'];
+            return ['success' => false, 'code' => (string) $httpCode, 'message' => 'Invalid JSON response', 'data' => []];
         }
 
         $code    = (string) ($json['metadata']['code'] ?? $json['metaData']['code'] ?? '');
         $message = (string) ($json['metadata']['message'] ?? $json['metaData']['message'] ?? 'Unknown');
 
-        $isSuccess = in_array($code, ['200', '208'], true) || $message === 'Ok';
+        $isSuccess = in_array($code, ['200', '208'], true) || $message === 'Ok' || $message === 'OK';
 
+        $data = [];
         if ($isSuccess) {
             $this->log->info("[BPJS] {$label}: {$code} — {$message}");
+            
+            // Handle AES decryption for list endpoints or anything returning encrypted 'response'
+            $responseField = $json['response'] ?? null;
+            if (is_string($responseField) && !empty($responseField)) {
+                try {
+                    $decrypted = $this->decrypt($responseField, $timestamp);
+                    $decoded   = json_decode($decrypted, true);
+                    $data      = is_array($decoded) ? $decoded : [];
+                    $this->log->debug("[BPJS] {$label} Decrypted data successfully.");
+                } catch (\Throwable $e) {
+                    $this->log->error("[BPJS] {$label} Decryption failed: " . $e->getMessage());
+                    $message = "Decryption failed: " . $e->getMessage();
+                    $isSuccess = false;
+                }
+            } elseif (is_array($responseField)) {
+                $data = $responseField; // Raw JSON without encryption
+            }
         } else {
             $this->log->warning("[BPJS] {$label}: {$code} — {$message}");
         }
 
-        return ['success' => $isSuccess, 'code' => $code, 'message' => $message];
+        return [
+            'success' => $isSuccess,
+            'code'    => $code,
+            'message' => $message,
+            'data'    => $data,
+        ];
+    }
+
+    /**
+     * Decrypt BPJS API response using AES-256-CBC + LZString.
+     *
+     * @param string $cipherText Base64-encoded encrypted data
+     * @param int    $timestamp  The timestamp used in the API request header
+     * @return string Decompressed plaintext
+     * @throws \RuntimeException
+     */
+    public function decrypt(string $cipherText, int $timestamp): string
+    {
+        $keySource = $this->consId . $this->secretKey . $timestamp;
+        $hashKey   = hash('sha256', $keySource, true); // 32 bytes
+        $hashIv    = substr($hashKey, 0, 16);           // first 16 bytes
+
+        $decoded = base64_decode($cipherText, true);
+        if ($decoded === false) {
+            throw new \RuntimeException('Invalid base64 in cipher text');
+        }
+
+        $decrypted = openssl_decrypt(
+            $decoded,
+            'aes-256-cbc',
+            $hashKey,
+            OPENSSL_RAW_DATA,
+            $hashIv
+        );
+
+        if ($decrypted === false) {
+            throw new \RuntimeException('AES decryption failed: ' . openssl_error_string());
+        }
+
+        $decompressed = LZString::decompressFromEncodedURIComponent($decrypted);
+        if ($decompressed === null) {
+            throw new \RuntimeException('LZString decompression returned null');
+        }
+
+        return $decompressed;
     }
 }
