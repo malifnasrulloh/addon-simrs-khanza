@@ -48,6 +48,59 @@ class MobileJknDatabase
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // Block 0: Global Sync
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Fetch all JKN and Non-JKN patients for the given date range that have been registered.
+     * Only JKN patients with statuskirim='Sudah' and all Non-JKN patients are considered.
+     */
+    public function fetchAllPatientsForSync(string $dateFrom, string $dateTo, string $kodeBpjsPayer): array
+    {
+        $sql = <<<'SQL'
+SELECT 
+    r.nobooking, 
+    r.no_rawat, 
+    (SELECT GROUP_CONCAT(DISTINCT t.taskid ORDER BY t.taskid) FROM referensi_mobilejkn_bpjs_taskid t WHERE t.no_rawat = r.no_rawat) AS sent_taskids
+FROM referensi_mobilejkn_bpjs r
+WHERE r.tanggalperiksa BETWEEN :date_from_jkn AND :date_to_jkn
+  AND r.statuskirim = 'Sudah'
+
+UNION ALL
+
+SELECT 
+    rp.no_rawat AS nobooking, 
+    rp.no_rawat, 
+    (SELECT GROUP_CONCAT(DISTINCT t.taskid ORDER BY t.taskid) FROM referensi_mobilejkn_bpjs_taskid t WHERE t.no_rawat = rp.no_rawat) AS sent_taskids
+FROM reg_periksa rp
+INNER JOIN dokter d ON rp.kd_dokter = d.kd_dokter
+INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
+LEFT JOIN maping_dokter_dpjpvclaim md ON md.kd_dokter = rp.kd_dokter
+LEFT JOIN maping_poli_bpjs mp ON mp.kd_poli_rs = rp.kd_poli
+WHERE rp.tgl_registrasi BETWEEN :date_from_njkn AND :date_to_njkn
+  AND rp.kd_pj <> :kd_bpjs
+  AND md.kd_dokter_bpjs IS NOT NULL AND md.kd_dokter_bpjs <> ''
+  AND mp.kd_poli_bpjs IS NOT NULL AND mp.kd_poli_bpjs <> ''
+  AND rp.no_rawat NOT IN (
+      SELECT rmb.no_rawat FROM referensi_mobilejkn_bpjs rmb
+      WHERE rmb.tanggalperiksa BETWEEN :date_from_sub AND :date_to_sub
+  )
+SQL;
+        $this->log->debug("[SQL] fetchAllPatientsForSync: {$dateFrom} → {$dateTo}");
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute([
+            'date_from_jkn'  => $dateFrom,
+            'date_to_jkn'    => $dateTo,
+            'date_from_njkn' => $dateFrom,
+            'date_to_njkn'   => $dateTo,
+            'kd_bpjs'        => $kodeBpjsPayer,
+            'date_from_sub'  => $dateFrom,
+            'date_to_sub'    => $dateTo,
+        ]);
+        return $stmt->fetchAll();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // Block 1: Unsent JKN Bookings (statuskirim = 'Belum')
     // ═══════════════════════════════════════════════════════════════════════
 

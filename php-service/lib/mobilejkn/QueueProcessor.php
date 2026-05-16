@@ -58,6 +58,9 @@ class QueueProcessor
         $today    = $this->config->todayDate();
         $lookback = $this->config->lookbackDate();
 
+        // Block 0: Global DB Sync with BPJS
+        $this->processGlobalSync($lookback, $today);
+
         // Block 1: New JKN bookings
         $this->processNewJknBookings($lookback, $today);
 
@@ -79,6 +82,36 @@ class QueueProcessor
             'fail'    => $this->failCount,
             'skip'    => $this->skipCount,
         ];
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Block 0: Global Sync
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private function processGlobalSync(string $dateFrom, string $dateTo): void
+    {
+        $this->log->info("──────────────────────────────────────────────────────────────");
+        $this->log->info("[BLOCK 0] Global Task Synchronization...");
+
+        try {
+            $kodeBpjs = $this->db->fetchBpjsPayerCode();
+            $patients = $this->db->fetchAllPatientsForSync($dateFrom, $dateTo, $kodeBpjs);
+        } catch (\PDOException $e) {
+            $this->log->error("[BLOCK 0] DB query failed: " . $e->getMessage());
+            $this->failCount++;
+            return;
+        }
+
+        $total = count($patients);
+        if ($total === 0) {
+            $this->log->info("[BLOCK 0] No patients found for sync.");
+            return;
+        }
+
+        $this->log->info("[BLOCK 0] Found {$total} patient(s) to verify against BPJS.");
+        
+        // This will modify the DB directly. We don't need the $patients array back for anything else in this block.
+        $this->syncTasksWithBpjs($patients, 'BLOCK 0');
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -236,9 +269,6 @@ class QueueProcessor
         }
         $this->log->info("[BLOCK 3] Processing {$total} JKN patient(s)...");
 
-        // Sync local DB task status with BPJS API directly
-        $this->syncTasksWithBpjs($patients, 'BLOCK 3');
-
         // Collect all task update requests across all patients
         $allRequests = [];
 
@@ -324,9 +354,6 @@ class QueueProcessor
 
             $addResultsMap[$noRawat] = $result;
         }
-
-        // Sync local DB task status with BPJS API directly for successful additions
-        $this->syncTasksWithBpjs($patients, 'BLOCK 4');
 
         $kodebooking = '';
         foreach ($addRequests as $req) {
@@ -639,9 +666,9 @@ class QueueProcessor
         $this->log->info("[{$blockLabel}] Synchronizing local task status with BPJS API...");
         
         $requests = [];
-        // Extract all kodebookings (JKN uses nobooking, Non-JKN uses no_rawat)
+        // Extract all kodebookings (Unified query returns nobooking as kodebooking for all)
         foreach ($patients as $idx => $p) {
-            $kodebooking = isset($p['nobooking']) && !empty($p['nobooking']) && str_starts_with($blockLabel, 'BLOCK 3') ? $p['nobooking'] : $p['no_rawat'];
+            $kodebooking = $p['nobooking'] ?? $p['no_rawat'];
             $requests[] = [
                 'id'       => "sync_{$idx}",
                 'endpoint' => '/antrean/getlisttask',
