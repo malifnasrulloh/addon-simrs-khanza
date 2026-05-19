@@ -191,14 +191,19 @@ SQL;
      *   Task 6: resep_obat (prescription created)
      *   Task 7: resep_obat.tgl_penyerahan (prescription dispensed)
      *
-     * @return array[] Each row contains nobooking, no_rawat, task3..task99 timestamps, sent_taskids
+     * @return array[] Each row contains nobooking, no_rawat, task3..task99 timestamps, sent_taskids, jam_mulai, jam_selesai
      */
-    public function fetchJknPatientsWithTaskData(string $dateFrom, string $dateTo): array
+    public function fetchJknPatientsWithTaskData(string $dateFrom, string $dateTo, string $hari): array
     {
         $sql = <<<'SQL'
 SELECT
     r.nobooking,
     r.no_rawat,
+    rp.tgl_registrasi,
+    rp.kd_poli,
+    -- Working hours from jadwal (for waktu validation)
+    j.jam_mulai,
+    j.jam_selesai,
     -- Task 3: Check-in validation time (ERM) → File sent to polyclinic (Original)
     COALESCE(
         NULLIF(r.validasi, ''),
@@ -225,8 +230,8 @@ SELECT
          WHERE mb.no_rawat = r.no_rawat
          LIMIT 1),
         (SELECT NOW()
-         FROM reg_periksa rp
-         WHERE rp.no_rawat = r.no_rawat AND rp.stts = 'Sudah'
+         FROM reg_periksa rp2
+         WHERE rp2.no_rawat = r.no_rawat AND rp2.stts = 'Sudah'
          LIMIT 1),
         (SELECT CONCAT(pr.tgl_perawatan, ' ', pr.jam_rawat)
          FROM pemeriksaan_ralan pr
@@ -253,22 +258,26 @@ SELECT
        AND CONCAT(ro.tgl_penyerahan, ' ', ro.jam_penyerahan) <> '0000-00-00 00:00:00'
      LIMIT 1) AS task7_waktu,
     -- Task 99: Visit cancelled?
-    (SELECT rp.stts
-     FROM reg_periksa rp
-     WHERE rp.no_rawat = r.no_rawat AND rp.stts = 'Batal'
+    (SELECT rp3.stts
+     FROM reg_periksa rp3
+     WHERE rp3.no_rawat = r.no_rawat AND rp3.stts = 'Batal'
      LIMIT 1) AS is_cancelled,
-    -- Already-sent task IDs (for skip/retry logic)
-    (SELECT GROUP_CONCAT(DISTINCT t.taskid ORDER BY t.taskid)
+    -- Already-sent task IDs and their actual sent timestamps (for monotonic validation)
+    (SELECT GROUP_CONCAT(CONCAT(t.taskid, ':', t.waktu) ORDER BY t.taskid SEPARATOR ',')
      FROM referensi_mobilejkn_bpjs_taskid t
-     WHERE t.no_rawat = r.no_rawat) AS sent_taskids
+     WHERE t.no_rawat = r.no_rawat) AS sent_tasks_data
 FROM referensi_mobilejkn_bpjs r
+INNER JOIN reg_periksa rp ON rp.no_rawat = r.no_rawat
+LEFT JOIN jadwal j ON j.kd_poli = rp.kd_poli
+                   AND j.kd_dokter = rp.kd_dokter
+                   AND j.hari_kerja = :hari
 WHERE r.status = 'Checkin'
   AND r.tanggalperiksa BETWEEN :date_from AND :date_to
 ORDER BY r.tanggalperiksa
 SQL;
-        $this->log->debug("[SQL] fetchJknPatientsWithTaskData: {$dateFrom} → {$dateTo}");
+        $this->log->debug("[SQL] fetchJknPatientsWithTaskData: {$dateFrom} → {$dateTo}, hari={$hari}");
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['date_from' => $dateFrom, 'date_to' => $dateTo]);
+        $stmt->execute(['date_from' => $dateFrom, 'date_to' => $dateTo, 'hari' => $hari]);
         return $stmt->fetchAll();
     }
 
@@ -340,8 +349,10 @@ SELECT
      LIMIT 1) AS task7_waktu,
     (SELECT rp2.stts FROM reg_periksa rp2
      WHERE rp2.no_rawat = rp.no_rawat AND rp2.stts = 'Batal' LIMIT 1) AS is_cancelled,
-    (SELECT GROUP_CONCAT(DISTINCT t.taskid ORDER BY t.taskid) FROM referensi_mobilejkn_bpjs_taskid t
-     WHERE t.no_rawat = rp.no_rawat) AS sent_taskids
+    -- Already-sent task IDs and their actual sent timestamps (for monotonic validation)
+    (SELECT GROUP_CONCAT(CONCAT(t.taskid, ':', t.waktu) ORDER BY t.taskid SEPARATOR ',')
+     FROM referensi_mobilejkn_bpjs_taskid t
+     WHERE t.no_rawat = rp.no_rawat) AS sent_tasks_data
 FROM reg_periksa rp
 INNER JOIN dokter d ON rp.kd_dokter = d.kd_dokter
 INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
@@ -399,9 +410,71 @@ SQL;
         return $stmt->execute(['no_rawat' => $noRawat, 'taskid' => $taskId]);
     }
 
+    /**
+     * Delete ALL task ID records for a patient (used in out-of-sequence recovery).
+     */
+    public function deleteAllTaskIdsForPatient(string $noRawat): bool
+    {
+        $sql = "DELETE FROM referensi_mobilejkn_bpjs_taskid WHERE no_rawat = :no_rawat";
+        $stmt = $this->pdo->prepare($sql);
+        return $stmt->execute(['no_rawat' => $noRawat]);
+    }
+
+    /**
+     * Reset a JKN booking's statuskirim back to 'Belum' so Block 1 will re-add it on the next cycle.
+     * Used in out-of-sequence recovery after /antrean/batal is confirmed accepted.
+     */
+    public function resetBookingStatusToUnsent(string $nobooking): bool
+    {
+        $sql = "UPDATE referensi_mobilejkn_bpjs SET statuskirim = 'Belum' WHERE nobooking = :nobooking";
+        $stmt = $this->pdo->prepare($sql);
+        return $stmt->execute(['nobooking' => $nobooking]);
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Lookup Helpers
     // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Query the historical min/max elapsed time (in milliseconds) between two task IDs
+     * for a specific polyclinic, based on already-sent task records from the same poli.
+     *
+     * Used to generate a statistically realistic random inference offset for task 4/5
+     * when mutasi_berkas data is missing. Outliers are filtered (< 1 min or > 8 hours).
+     *
+     * @return array ['min_gap_ms' => int, 'max_gap_ms' => int]
+     *               Falls back to sensible defaults if insufficient data.
+     */
+    public function fetchTaskTransitionGapMs(string $kdPoli, string $fromTaskId, string $toTaskId): array
+    {
+        $sql = <<<'SQL'
+SELECT
+    COALESCE(MIN(TIMESTAMPDIFF(SECOND, t_from.waktu, t_to.waktu)), 600)  * 1000 AS min_gap_ms,
+    COALESCE(MAX(TIMESTAMPDIFF(SECOND, t_from.waktu, t_to.waktu)), 2700) * 1000 AS max_gap_ms
+FROM referensi_mobilejkn_bpjs_taskid t_from
+JOIN referensi_mobilejkn_bpjs_taskid t_to ON t_from.no_rawat = t_to.no_rawat
+JOIN reg_periksa rp ON rp.no_rawat = t_from.no_rawat
+WHERE t_from.taskid = :from_task
+  AND t_to.taskid   = :to_task
+  AND rp.kd_poli    = :kd_poli
+  AND t_from.waktu  > '2000-01-01 00:00:00'
+  AND t_to.waktu    > '2000-01-01 00:00:00'
+  AND TIMESTAMPDIFF(SECOND, t_from.waktu, t_to.waktu) BETWEEN 60 AND 28800
+SQL;
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute([
+            'from_task' => $fromTaskId,
+            'to_task'   => $toTaskId,
+            'kd_poli'   => $kdPoli,
+        ]);
+        $row = $stmt->fetch();
+
+        // Fallback defaults: 10 min → 45 min
+        return [
+            'min_gap_ms' => (int)($row['min_gap_ms'] ?? 600_000),
+            'max_gap_ms' => (int)($row['max_gap_ms'] ?? 2_700_000),
+        ];
+    }
 
     /**
      * Get the BPJS payer code from password_asuransi table.
