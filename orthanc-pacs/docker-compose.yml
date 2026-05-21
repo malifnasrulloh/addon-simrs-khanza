@@ -18,7 +18,7 @@ services:
       retries: 5
 
   orthanc:
-    image: orthancteam/orthanc:24.12.2-full
+    image: orthancteam/orthanc:26.4.2-full
     restart: unless-stopped
     ports:
       - "${ORTHANC_DICOM_PORT:-4242}:4242"
@@ -78,7 +78,7 @@ services:
     depends_on:
       - orthanc
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/"]
+      test: ["CMD-SHELL", "curl -so /dev/null -w '%{http_code}' http://localhost:8080/ | grep -qE '^(200|401)$'"]
       interval: 30s
       timeout: 5s
       retries: 3
