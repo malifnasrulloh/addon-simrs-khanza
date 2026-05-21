@@ -25,6 +25,7 @@ class MobileJknConfig
     public readonly int    $batchSize;
     public readonly int    $lookbackDays;
     public readonly bool   $includeNonJkn;
+    public readonly bool   $skipFarmasiNoResep;
 
     // ─── Database ──────────────────────────────────────────────────────────
     public readonly string $dbHost;
@@ -78,9 +79,10 @@ class MobileJknConfig
         }
 
         // ── Runtime tuning ──────────────────────────────────────────────
-        $this->batchSize     = max(1, (int) $this->get('MOBILEJKN_BATCH_SIZE', '4'));
-        $this->lookbackDays  = max(1, (int) $this->get('MOBILEJKN_LOOKBACK_DAYS', '6'));
-        $this->includeNonJkn = filter_var($this->get('MOBILEJKN_INCLUDE_NON_JKN', 'true'), FILTER_VALIDATE_BOOLEAN);
+        $this->batchSize          = max(1, (int) $this->get('MOBILEJKN_BATCH_SIZE', '4'));
+        $this->lookbackDays       = max(1, (int) $this->get('MOBILEJKN_LOOKBACK_DAYS', '6'));
+        $this->includeNonJkn      = filter_var($this->get('MOBILEJKN_INCLUDE_NON_JKN', 'true'), FILTER_VALIDATE_BOOLEAN);
+        $this->skipFarmasiNoResep = filter_var($this->get('MOBILEJKN_SKIP_FARMASI_NO_RESEP', 'false'), FILTER_VALIDATE_BOOLEAN);
 
         // ── Logging ─────────────────────────────────────────────────────
         $this->logDir           = $this->get('LOG_DIR', 'logs');

@@ -9,3 +9,6 @@ logs/*.log
 .vscode/
 *.swp
 *.swo
+
+# Secret
+ws-antreanbpjs.html

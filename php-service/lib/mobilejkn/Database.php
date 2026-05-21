@@ -1,14 +1,9 @@
 <?php
-
 /**
- * Database - PDO wrapper with optimized queries for Mobile JKN Sync.
+ * Database — PDO wrapper for Mobile JKN Sync. Matches Java robot queries exactly.
  *
- * All queries use parameterized prepared statements (no SQL injection).
- * N+1 queries eliminated via batch LEFT JOINs and correlated subqueries.
- *
- * @author  malifnasrulloh (converted from Java by Antigravity)
+ * @author malifnasrulloh (converted from Java by Antigravity)
  */
-
 declare(strict_types=1);
 
 class MobileJknDatabase
@@ -16,88 +11,34 @@ class MobileJknDatabase
     private PDO $pdo;
     private Logger $log;
 
+    // Indonesian day-of-week map (ISO-8601: 1=Monday, 7=Sunday)
+    private const HARI_MAP = [1=>'SENIN',2=>'SELASA',3=>'RABU',4=>'KAMIS',5=>'JUMAT',6=>'SABTU',7=>'AKHAD'];
+
     public function __construct(MobileJknConfig $config, Logger $log)
     {
         $this->log = $log;
-
-        $dsn = sprintf(
-            'mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
-            $config->dbHost,
-            $config->dbPort,
-            $config->dbName
-        );
-
+        $dsn = sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
+            $config->dbHost, $config->dbPort, $config->dbName);
         $this->log->info("[DB] Connecting to {$config->dbHost}:{$config->dbPort}/{$config->dbName}...");
-
         $this->pdo = new PDO($dsn, $config->dbUser, $config->dbPass, [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES   => false,
             PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci",
         ]);
-
         $this->log->info("[DB] Connection established.");
     }
 
-    /**
-     * Close the PDO connection.
-     */
-    public function close(): void
-    {
-        unset($this->pdo);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Block 0: Global Sync
-    // ═══════════════════════════════════════════════════════════════════════
+    public function close(): void { unset($this->pdo); }
 
     /**
-     * Fetch all JKN and Non-JKN patients for the given date range that have been registered.
-     * Only JKN patients with statuskirim='Sudah' and all Non-JKN patients are considered.
+     * Get Indonesian day name for a given date string.
+     * Java robot calculates hCari per patient's tgl_registrasi, not today.
      */
-    public function fetchAllPatientsForSync(string $dateFrom, string $dateTo, string $kodeBpjsPayer): array
+    public function hariForDate(string $date): string
     {
-        $sql = <<<'SQL'
-SELECT 
-    r.nobooking, 
-    r.no_rawat, 
-    (SELECT GROUP_CONCAT(DISTINCT t.taskid ORDER BY t.taskid) FROM referensi_mobilejkn_bpjs_taskid t WHERE t.no_rawat = r.no_rawat) AS sent_taskids
-FROM referensi_mobilejkn_bpjs r
-WHERE r.tanggalperiksa BETWEEN :date_from_jkn AND :date_to_jkn
-  AND r.statuskirim = 'Sudah'
-
-UNION ALL
-
-SELECT 
-    rp.no_rawat AS nobooking, 
-    rp.no_rawat, 
-    (SELECT GROUP_CONCAT(DISTINCT t.taskid ORDER BY t.taskid) FROM referensi_mobilejkn_bpjs_taskid t WHERE t.no_rawat = rp.no_rawat) AS sent_taskids
-FROM reg_periksa rp
-INNER JOIN dokter d ON rp.kd_dokter = d.kd_dokter
-INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
-LEFT JOIN maping_dokter_dpjpvclaim md ON md.kd_dokter = rp.kd_dokter
-LEFT JOIN maping_poli_bpjs mp ON mp.kd_poli_rs = rp.kd_poli
-WHERE rp.tgl_registrasi BETWEEN :date_from_njkn AND :date_to_njkn
-  AND rp.kd_pj <> :kd_bpjs
-  AND md.kd_dokter_bpjs IS NOT NULL AND md.kd_dokter_bpjs <> ''
-  AND mp.kd_poli_bpjs IS NOT NULL AND mp.kd_poli_bpjs <> ''
-  AND rp.no_rawat NOT IN (
-      SELECT rmb.no_rawat FROM referensi_mobilejkn_bpjs rmb
-      WHERE rmb.tanggalperiksa BETWEEN :date_from_sub AND :date_to_sub
-  )
-SQL;
-        $this->log->debug("[SQL] fetchAllPatientsForSync: {$dateFrom} → {$dateTo}");
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute([
-            'date_from_jkn'  => $dateFrom,
-            'date_to_jkn'    => $dateTo,
-            'date_from_njkn' => $dateFrom,
-            'date_to_njkn'   => $dateTo,
-            'kd_bpjs'        => $kodeBpjsPayer,
-            'date_from_sub'  => $dateFrom,
-            'date_to_sub'    => $dateTo,
-        ]);
-        return $stmt->fetchAll();
+        $dow = (int) date('N', strtotime($date)); // 1=Mon, 7=Sun
+        return self::HARI_MAP[$dow] ?? 'SENIN';
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -106,8 +47,7 @@ SQL;
 
     /**
      * Fetch JKN bookings not yet sent to BPJS.
-     *
-     * @return array[] List of booking rows
+     * Matches Java ANTROL-ROBOT.JAVA lines 73–86.
      */
     public function fetchUnsentJknBookings(string $dateFrom, string $dateTo): array
     {
@@ -129,46 +69,34 @@ WHERE r.statuskirim = 'Belum'
   AND r.tanggalperiksa BETWEEN :date_from AND :date_to
 ORDER BY r.tanggalperiksa
 SQL;
-        $this->log->debug("[SQL] fetchUnsentJknBookings: {$dateFrom} → {$dateTo}");
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute(['date_from' => $dateFrom, 'date_to' => $dateTo]);
         return $stmt->fetchAll();
     }
 
-    /**
-     * Mark a JKN booking as sent.
-     */
     public function markBookingAsSent(string $nobooking): bool
     {
-        $sql = "UPDATE referensi_mobilejkn_bpjs SET statuskirim = 'Sudah' WHERE nobooking = :nobooking";
+        $sql = "UPDATE referensi_mobilejkn_bpjs SET statuskirim = 'Sudah' WHERE nobooking = :nb";
         $stmt = $this->pdo->prepare($sql);
-        return $stmt->execute(['nobooking' => $nobooking]);
+        return $stmt->execute(['nb' => $nobooking]);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Block 2: Pending Cancellations
     // ═══════════════════════════════════════════════════════════════════════
 
-    /**
-     * Fetch unsent cancellation records.
-     */
     public function fetchPendingCancellations(string $dateFrom, string $dateTo): array
     {
         $sql = <<<'SQL'
-SELECT *
-FROM referensi_mobilejkn_bpjs_batal
+SELECT * FROM referensi_mobilejkn_bpjs_batal
 WHERE statuskirim = 'Belum'
-  AND tanggalbatal BETWEEN :date_from AND :date_to
+  AND date_format(tanggalbatal,'%Y-%m-%d') BETWEEN :df AND :dt
 SQL;
-        $this->log->debug("[SQL] fetchPendingCancellations: {$dateFrom} → {$dateTo}");
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['date_from' => $dateFrom, 'date_to' => $dateTo]);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
         return $stmt->fetchAll();
     }
 
-    /**
-     * Mark a cancellation record as sent.
-     */
     public function markCancellationAsSent(string $nomorreferensi): bool
     {
         $sql = "UPDATE referensi_mobilejkn_bpjs_batal SET statuskirim = 'Sudah' WHERE nomorreferensi = :ref";
@@ -177,258 +105,147 @@ SQL;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Block 3: JKN Patients with Task Data (N+1 eliminated)
+    // Block 3: JKN Patients with statuskirim='Sudah' — task chain processing
+    // Matches Java ANTROL-ROBOT.JAVA lines 227–239 (main JKN query)
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * Fetch checked-in JKN bookings with ALL task trigger data in a single query.
-     * Eliminates the N+1 problem: instead of 6 queries per patient, 1 query total.
-     *
-     * Task sources use cascading merge (ERM → Original) for maximum delivery success:
-     *   Task 3: validasi (check-in time) → mutasi_berkas.dikirim (file sent)
-     *   Task 4: pemeriksaan_ralan (exam start) → mutasi_berkas.diterima (file received)
-     *   Task 5: mutasi_berkas.kembali (file returned) → reg_periksa.stts=Sudah → pemeriksaan_ralan
-     *   Task 6: resep_obat (prescription created)
-     *   Task 7: resep_obat.tgl_penyerahan (prescription dispensed)
-     *
-     * @return array[] Each row contains nobooking, no_rawat, task3..task99 timestamps, sent_taskids, jam_mulai, jam_selesai
+     * Fetch checked-in JKN patients for task chain processing.
+     * Returns patients with their current task state from referensi_mobilejkn_bpjs_taskid.
+     * The task chain logic (3→4→5→farmasi→6→7) is handled in QueueProcessor.
      */
-    public function fetchJknPatientsWithTaskData(string $dateFrom, string $dateTo, string $hari): array
+    public function fetchJknPatientsForTasks(string $dateFrom, string $dateTo): array
     {
         $sql = <<<'SQL'
 SELECT
-    r.nobooking,
-    r.no_rawat,
-    rp.tgl_registrasi,
-    rp.kd_poli,
-    -- Working hours from jadwal (for waktu validation)
-    j.jam_mulai,
-    j.jam_selesai,
-    -- Task 3: Check-in validation time (ERM) → File sent to polyclinic (Original)
-    COALESCE(
-        NULLIF(r.validasi, ''),
-        (SELECT mb.dikirim
-         FROM mutasi_berkas mb
-         WHERE mb.no_rawat = r.no_rawat AND mb.dikirim <> '0000-00-00 00:00:00'
-         LIMIT 1)
-    ) AS task3_waktu,
-    -- Task 4: Exam start (ERM) → File received at polyclinic (Original)
-    COALESCE(
-        (SELECT CONCAT(pr.tgl_perawatan, ' ', pr.jam_rawat)
-         FROM pemeriksaan_ralan pr
-         WHERE pr.no_rawat = r.no_rawat
-         LIMIT 1),
-        (SELECT mb.diterima
-         FROM mutasi_berkas mb
-         WHERE mb.no_rawat = r.no_rawat AND mb.diterima <> '0000-00-00 00:00:00'
-         LIMIT 1)
-    ) AS task4_waktu,
-    -- Task 5: File returned (ERM) → Visit completed (ERM) → Exam record (Original)
-    COALESCE(
-        (SELECT IF(mb.kembali = '0000-00-00 00:00:00', NULL, mb.kembali)
-         FROM mutasi_berkas mb
-         WHERE mb.no_rawat = r.no_rawat
-         LIMIT 1),
-        (SELECT NOW()
-         FROM reg_periksa rp2
-         WHERE rp2.no_rawat = r.no_rawat AND rp2.stts = 'Sudah'
-         LIMIT 1),
-        (SELECT CONCAT(pr.tgl_perawatan, ' ', pr.jam_rawat)
-         FROM pemeriksaan_ralan pr
-         WHERE pr.no_rawat = r.no_rawat
-         LIMIT 1)
-    ) AS task5_waktu,
-    -- Farmasi: Prescription number (for /antrean/farmasi/add)
-    (SELECT ro.no_resep
-     FROM resep_obat ro
-     WHERE ro.no_rawat = r.no_rawat
-     LIMIT 1) AS no_resep,
-    -- Task 6: Prescription created (outpatient only)
-    (SELECT CONCAT(ro.tgl_perawatan, ' ', ro.jam)
-     FROM resep_obat ro
-     WHERE ro.no_rawat = r.no_rawat
-       AND ro.tgl_perawatan <> '0000-00-00'
-       AND ro.status = 'ralan'
-     LIMIT 1) AS task6_waktu,
-    -- Task 7: Prescription dispensed
-    (SELECT CONCAT(ro.tgl_penyerahan, ' ', ro.jam_penyerahan)
-     FROM resep_obat ro
-     WHERE ro.no_rawat = r.no_rawat
-       AND ro.status = 'ralan'
-       AND CONCAT(ro.tgl_penyerahan, ' ', ro.jam_penyerahan) <> '0000-00-00 00:00:00'
-     LIMIT 1) AS task7_waktu,
-    -- Task 99: Visit cancelled?
-    (SELECT rp3.stts
-     FROM reg_periksa rp3
-     WHERE rp3.no_rawat = r.no_rawat AND rp3.stts = 'Batal'
-     LIMIT 1) AS is_cancelled,
-    -- Already-sent task IDs and their actual sent timestamps (for monotonic validation)
-    (SELECT GROUP_CONCAT(CONCAT(t.taskid, ':', t.waktu) ORDER BY t.taskid SEPARATOR ',')
-     FROM referensi_mobilejkn_bpjs_taskid t
-     WHERE t.no_rawat = r.no_rawat) AS sent_tasks_data
+    r.nobooking, r.no_rawat,
+    rp.tgl_registrasi, rp.jam_reg, rp.kd_dokter, rp.kd_poli, rp.stts
 FROM referensi_mobilejkn_bpjs r
 INNER JOIN reg_periksa rp ON rp.no_rawat = r.no_rawat
-LEFT JOIN jadwal j ON j.kd_poli = rp.kd_poli
-                   AND j.kd_dokter = rp.kd_dokter
-                   AND j.hari_kerja = :hari
-WHERE r.status = 'Checkin'
-  AND r.tanggalperiksa BETWEEN :date_from AND :date_to
+INNER JOIN dokter d ON rp.kd_dokter = d.kd_dokter
+INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
+WHERE r.statuskirim = 'Sudah'
+  AND r.tanggalperiksa BETWEEN :df AND :dt
 ORDER BY r.tanggalperiksa
 SQL;
-        $this->log->debug("[SQL] fetchJknPatientsWithTaskData: {$dateFrom} → {$dateTo}, hari={$hari}");
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['date_from' => $dateFrom, 'date_to' => $dateTo, 'hari' => $hari]);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
         return $stmt->fetchAll();
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Block 4: Non-JKN Patients (with schedule + BPJS mapping, N+1 eliminated)
+    // Block 4: Missing On-Site Patients (ALL patients not in referensi table)
+    // Matches Java ANTROL-ROBOT.JAVA lines 696–701 exactly:
+    //   NO kd_pj filter, NO status_lanjut filter, NO IGDK filter
+    //   Java fetches ALL, then checks per-patient in loop
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * Fetch Non-JKN patients with schedule, BPJS mappings, and task data.
-     * Eliminates the inner N+1 for jadwal, dokter mapping, poli mapping.
-     *
-     * Task sources use cascading merge (ERM → Original) matching JKN behavior:
-     *   Task 3: Calculated MAX(reg_time, schedule_start) → mutasi_berkas.dikirim
-     *   Task 4: pemeriksaan_ralan → mutasi_berkas.diterima
-     *   Task 5: mutasi_berkas.kembali → stts=Sudah → pemeriksaan_ralan
-     *
-     * @param string $hari Indonesian day name (e.g. "SENIN")
+     * Fetch ALL patients registered but missing from referensi_mobilejkn_bpjs.
+     * Matches Java robot query exactly — no payer filter.
+     * The kd_pj check (BPJ vs non-BPJ) happens per-patient in QueueProcessor.
      */
-    public function fetchNonJknPatientsWithTaskData(
-        string $dateFrom,
-        string $dateTo,
-        string $hari,
-        string $kodeBpjsPayer
-    ): array {
+    public function fetchMissingOnsitePatients(string $dateFrom, string $dateTo): array
+    {
         $sql = <<<'SQL'
 SELECT
     rp.no_reg, rp.no_rawat, rp.tgl_registrasi, rp.jam_reg,
     rp.kd_dokter, d.nm_dokter,
     rp.kd_poli, pol.nm_poli,
-    rp.stts_daftar, rp.no_rkm_medis, rp.kd_pj,
-    j.jam_mulai, j.jam_selesai, j.kuota,
-    md.kd_dokter_bpjs,
-    mp.kd_poli_bpjs,
-    -- Task 3: Calculated registration/schedule time → File sent (cascading)
-    COALESCE(
-        (SELECT IF(
-            CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) > CONCAT(rp.tgl_registrasi, ' ', j.jam_mulai),
-            CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg),
-            CONCAT(rp.tgl_registrasi, ' ', j.jam_mulai)
-        )),
-        (SELECT mb.dikirim FROM mutasi_berkas mb
-         WHERE mb.no_rawat = rp.no_rawat AND mb.dikirim <> '0000-00-00 00:00:00'
-         LIMIT 1)
-    ) AS task3_waktu,
-    -- Task 4: Exam start → File received (cascading)
-    COALESCE(
-        (SELECT CONCAT(pr.tgl_perawatan, ' ', pr.jam_rawat) FROM pemeriksaan_ralan pr
-         WHERE pr.no_rawat = rp.no_rawat LIMIT 1),
-        (SELECT IF(mb.diterima = '0000-00-00 00:00:00', NULL, mb.diterima) FROM mutasi_berkas mb
-         WHERE mb.no_rawat = rp.no_rawat LIMIT 1)
-    ) AS task4_waktu,
-    -- Task 5: File returned → Visit completed → Exam record (cascading)
-    COALESCE(
-        (SELECT IF(mb.kembali = '0000-00-00 00:00:00', NULL, mb.kembali) FROM mutasi_berkas mb
-         WHERE mb.no_rawat = rp.no_rawat LIMIT 1),
-        (SELECT NOW() FROM reg_periksa rp2
-         WHERE rp2.no_rawat = rp.no_rawat AND rp2.stts = 'Sudah' LIMIT 1),
-        (SELECT CONCAT(pr.tgl_perawatan, ' ', pr.jam_rawat) FROM pemeriksaan_ralan pr
-         WHERE pr.no_rawat = rp.no_rawat LIMIT 1)
-    ) AS task5_waktu,
-    (SELECT ro.no_resep FROM resep_obat ro
-     WHERE ro.no_rawat = rp.no_rawat LIMIT 1) AS no_resep,
-    (SELECT CONCAT(ro.tgl_perawatan, ' ', ro.jam) FROM resep_obat ro
-     WHERE ro.no_rawat = rp.no_rawat AND ro.tgl_perawatan <> '0000-00-00' AND ro.status = 'ralan'
-     LIMIT 1) AS task6_waktu,
-    (SELECT CONCAT(ro.tgl_penyerahan, ' ', ro.jam_penyerahan) FROM resep_obat ro
-     WHERE ro.no_rawat = rp.no_rawat AND ro.status = 'ralan'
-       AND CONCAT(ro.tgl_penyerahan, ' ', ro.jam_penyerahan) <> '0000-00-00 00:00:00'
-     LIMIT 1) AS task7_waktu,
-    (SELECT rp2.stts FROM reg_periksa rp2
-     WHERE rp2.no_rawat = rp.no_rawat AND rp2.stts = 'Batal' LIMIT 1) AS is_cancelled,
-    -- Already-sent task IDs and their actual sent timestamps (for monotonic validation)
-    (SELECT GROUP_CONCAT(CONCAT(t.taskid, ':', t.waktu) ORDER BY t.taskid SEPARATOR ',')
-     FROM referensi_mobilejkn_bpjs_taskid t
-     WHERE t.no_rawat = rp.no_rawat) AS sent_tasks_data
+    rp.stts_daftar, rp.no_rkm_medis, rp.kd_pj, rp.stts,
+    p.no_ktp, p.no_peserta, p.no_tlp
 FROM reg_periksa rp
 INNER JOIN dokter d ON rp.kd_dokter = d.kd_dokter
 INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
-INNER JOIN jadwal j ON j.hari_kerja = :hari AND j.kd_dokter = rp.kd_dokter AND j.kd_poli = rp.kd_poli
-LEFT JOIN maping_dokter_dpjpvclaim md ON md.kd_dokter = rp.kd_dokter
-LEFT JOIN maping_poli_bpjs mp ON mp.kd_poli_rs = rp.kd_poli
-WHERE rp.tgl_registrasi BETWEEN :date_from AND :date_to
-  AND rp.kd_pj <> :kd_bpjs
-  AND md.kd_dokter_bpjs IS NOT NULL AND md.kd_dokter_bpjs <> ''
-  AND mp.kd_poli_bpjs IS NOT NULL AND mp.kd_poli_bpjs <> ''
+INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+WHERE rp.tgl_registrasi BETWEEN :df AND :dt
   AND rp.no_rawat NOT IN (
       SELECT rmb.no_rawat FROM referensi_mobilejkn_bpjs rmb
-      WHERE rmb.tanggalperiksa BETWEEN :date_from2 AND :date_to2
+      WHERE rmb.tanggalperiksa BETWEEN :df2 AND :dt2
   )
 ORDER BY CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg)
 SQL;
-        $this->log->debug("[SQL] fetchNonJknPatientsWithTaskData: {$dateFrom} → {$dateTo}, hari={$hari}");
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute([
-            'hari'       => $hari,
-            'date_from'  => $dateFrom,
-            'date_to'    => $dateTo,
-            'kd_bpjs'    => $kodeBpjsPayer,
-            'date_from2' => $dateFrom,
-            'date_to2'   => $dateTo,
-        ]);
+        $stmt->execute(['df'=>$dateFrom,'dt'=>$dateTo,'df2'=>$dateFrom,'dt2'=>$dateTo]);
         return $stmt->fetchAll();
     }
 
+    /**
+     * Fetch jadwal (schedule) for a doctor+poli+day combination.
+     * Matches Java ANTROL-ROBOT.JAVA line 736.
+     */
+    public function fetchJadwal(string $hari, string $kdDokter, string $kdPoli): ?array
+    {
+        $sql = "SELECT * FROM jadwal WHERE hari_kerja=:h AND kd_dokter=:d AND kd_poli=:p LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['h' => $hari, 'd' => $kdDokter, 'p' => $kdPoli]);
+        return $stmt->fetch() ?: null;
+    }
+
+    /**
+     * Fetch SEP reference number for a patient.
+     * Java: noskdp first, fallback to no_rujukan.
+     */
+    public function fetchNomorReferensi(string $noRawat): string
+    {
+        $sql = "SELECT noskdp, no_rujukan FROM bridging_sep WHERE no_rawat = :nr ORDER BY noskdp DESC LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch();
+        if (!$row) return '';
+        $noskdp = trim($row['noskdp'] ?? '');
+        return $noskdp !== '' ? $noskdp : ($row['no_rujukan'] ?? '');
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
-    // Task ID CRUD
+    // Task ID State — per-patient task tracking
+    // Matches Java: referensi_mobilejkn_bpjs_taskid table
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * Insert a task ID record. Uses INSERT IGNORE for idempotency.
+     * Load all task states for a patient.
+     * Java ANTROL-ROBOT.JAVA lines 246–274: query taskid + SUBSTRING(waktu,1,19)
      *
-     * @return bool True if a new row was inserted (task not yet sent),
-     *              false if it already existed (task already sent successfully).
+     * @return array ['3'=>'Sudah', '4'=>'', ...] + ['waktu_3'=>'2025-...', ...]
+     */
+    public function loadTaskState(string $noRawat): array
+    {
+        $state = ['3'=>'','4'=>'','5'=>'','6'=>'','7'=>'','99'=>''];
+
+        $sql = "SELECT taskid, SUBSTRING(waktu, 1, 19) as waktu FROM referensi_mobilejkn_bpjs_taskid WHERE no_rawat = :nr";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+
+        while ($row = $stmt->fetch()) {
+            $tid = (string) $row['taskid'];
+            $state[$tid] = 'Sudah';
+            $state["waktu_{$tid}"] = $row['waktu'];
+        }
+
+        return $state;
+    }
+
+    /**
+     * Insert task ID. Uses INSERT IGNORE for idempotency (Java: menyimpantf2).
+     * @return bool True if new row inserted, false if already existed.
      */
     public function insertTaskId(string $noRawat, string $taskId, string $waktu): bool
     {
-        $sql = "INSERT IGNORE INTO referensi_mobilejkn_bpjs_taskid (no_rawat, taskid, waktu) VALUES (:no_rawat, :taskid, :waktu)";
+        $sql = "INSERT IGNORE INTO referensi_mobilejkn_bpjs_taskid (no_rawat, taskid, waktu) VALUES (:nr, :tid, :w)";
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['no_rawat' => $noRawat, 'taskid' => $taskId, 'waktu' => $waktu]);
+        $stmt->execute(['nr' => $noRawat, 'tid' => $taskId, 'w' => $waktu]);
         return $stmt->rowCount() > 0;
     }
 
     /**
-     * Delete a task ID record (rollback on API failure, allows retry next cycle).
+     * Delete task ID on API failure (rollback for retry).
+     * Java: Sequel.queryu2("delete from referensi_mobilejkn_bpjs_taskid where taskid='X' and no_rawat='...'")
      */
     public function deleteTaskId(string $noRawat, string $taskId): bool
     {
-        $sql = "DELETE FROM referensi_mobilejkn_bpjs_taskid WHERE no_rawat = :no_rawat AND taskid = :taskid";
+        $sql = "DELETE FROM referensi_mobilejkn_bpjs_taskid WHERE no_rawat = :nr AND taskid = :tid";
         $stmt = $this->pdo->prepare($sql);
-        return $stmt->execute(['no_rawat' => $noRawat, 'taskid' => $taskId]);
-    }
-
-    /**
-     * Delete ALL task ID records for a patient (used in out-of-sequence recovery).
-     */
-    public function deleteAllTaskIdsForPatient(string $noRawat): bool
-    {
-        $sql = "DELETE FROM referensi_mobilejkn_bpjs_taskid WHERE no_rawat = :no_rawat";
-        $stmt = $this->pdo->prepare($sql);
-        return $stmt->execute(['no_rawat' => $noRawat]);
-    }
-
-    /**
-     * Reset a JKN booking's statuskirim back to 'Belum' so Block 1 will re-add it on the next cycle.
-     * Used in out-of-sequence recovery after /antrean/batal is confirmed accepted.
-     */
-    public function resetBookingStatusToUnsent(string $nobooking): bool
-    {
-        $sql = "UPDATE referensi_mobilejkn_bpjs SET statuskirim = 'Belum' WHERE nobooking = :nobooking";
-        $stmt = $this->pdo->prepare($sql);
-        return $stmt->execute(['nobooking' => $nobooking]);
+        return $stmt->execute(['nr' => $noRawat, 'tid' => $taskId]);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -436,68 +253,182 @@ SQL;
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * Query the historical min/max elapsed time (in milliseconds) between two task IDs
-     * for a specific polyclinic, based on already-sent task records from the same poli.
-     *
-     * Used to generate a statistically realistic random inference offset for task 4/5
-     * when mutasi_berkas data is missing. Outliers are filtered (< 1 min or > 8 hours).
-     *
-     * @return array ['min_gap_ms' => int, 'max_gap_ms' => int]
-     *               Falls back to sensible defaults if insufficient data.
-     */
-    public function fetchTaskTransitionGapMs(string $kdPoli, string $fromTaskId, string $toTaskId): array
-    {
-        $sql = <<<'SQL'
-SELECT
-    COALESCE(MIN(TIMESTAMPDIFF(SECOND, t_from.waktu, t_to.waktu)), 600)  * 1000 AS min_gap_ms,
-    COALESCE(MAX(TIMESTAMPDIFF(SECOND, t_from.waktu, t_to.waktu)), 2700) * 1000 AS max_gap_ms
-FROM referensi_mobilejkn_bpjs_taskid t_from
-JOIN referensi_mobilejkn_bpjs_taskid t_to ON t_from.no_rawat = t_to.no_rawat
-JOIN reg_periksa rp ON rp.no_rawat = t_from.no_rawat
-WHERE t_from.taskid = :from_task
-  AND t_to.taskid   = :to_task
-  AND rp.kd_poli    = :kd_poli
-  AND t_from.waktu  > '2000-01-01 00:00:00'
-  AND t_to.waktu    > '2000-01-01 00:00:00'
-  AND TIMESTAMPDIFF(SECOND, t_from.waktu, t_to.waktu) BETWEEN 60 AND 28800
-SQL;
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute([
-            'from_task' => $fromTaskId,
-            'to_task'   => $toTaskId,
-            'kd_poli'   => $kdPoli,
-        ]);
-        $row = $stmt->fetch();
-
-        // Fallback defaults: 10 min → 45 min
-        return [
-            'min_gap_ms' => (int)($row['min_gap_ms'] ?? 600_000),
-            'max_gap_ms' => (int)($row['max_gap_ms'] ?? 2_700_000),
-        ];
-    }
-
-    /**
-     * Get the BPJS payer code from password_asuransi table.
+     * Get the BPJS payer code. Returns 'BPJ' (hardcoded as confirmed from DB).
      */
     public function fetchBpjsPayerCode(): string
     {
-        $sql = "SELECT kd_pj FROM password_asuransi LIMIT 1";
-        $stmt = $this->pdo->query($sql);
-        $row = $stmt->fetch();
-        return $row['kd_pj'] ?? '';
+        return 'BPJ';
     }
 
     /**
-     * Check if a prescription is racikan (compounded) or non-racikan.
+     * Per-patient BPJS doctor mapping lookup.
+     * Matches Java robot: Sequel.cariIsi("select maping_dokter_dpjpvclaim.kd_dokter_bpjs ...")
+     */
+    public function fetchDokterBpjs(string $kdDokter): string
+    {
+        $sql = "SELECT kd_dokter_bpjs FROM maping_dokter_dpjpvclaim WHERE kd_dokter = :kd LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['kd' => $kdDokter]);
+        $row = $stmt->fetch();
+        return $row['kd_dokter_bpjs'] ?? '';
+    }
+
+    /**
+     * Per-patient BPJS polyclinic mapping lookup.
+     * Matches Java robot: Sequel.cariIsi("select maping_poli_bpjs.kd_poli_bpjs ...")
+     */
+    public function fetchPoliBpjs(string $kdPoli): string
+    {
+        $sql = "SELECT kd_poli_bpjs FROM maping_poli_bpjs WHERE kd_poli_rs = :kd LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['kd' => $kdPoli]);
+        $row = $stmt->fetch();
+        return $row['kd_poli_bpjs'] ?? '';
+    }
+
+    /**
+     * Get task 3 waktu:
+     *  1. Try mutasi_berkas.dikirim (real check-in file transfer time)
+     *  2. Fallback: use jam_reg (actual registration time — unique per patient)
      *
-     * @return string "Racikan" or "Non Racikan"
+     * This is the NON-JKN task 3 source and also the fallback for JKN.
+     */
+    public function resolveTask3Waktu(string $noRawat, string $tglRegistrasi, string $jamMulai): string
+    {
+        // Step 1: Try mutasi_berkas.dikirim (Java ANTROL-ROBOT.JAVA line 751)
+        $sql = "SELECT dikirim FROM mutasi_berkas WHERE no_rawat = :nr AND dikirim <> '0000-00-00 00:00:00' LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch();
+        $dikirim = $row['dikirim'] ?? '';
+        if (!empty($dikirim) && !str_starts_with($dikirim, '0000')) {
+            return $dikirim;
+        }
+
+        // Step 2: Fallback — use jam_reg (actual registration time)
+        // Each patient has a unique jam_reg, no artificial polyclinic-open grouping
+        $sql2 = "SELECT CONCAT(:tgl, ' ', jam_reg) as waktu FROM reg_periksa WHERE no_rawat = :nr";
+        $stmt = $this->pdo->prepare($sql2);
+        $stmt->execute(['tgl' => $tglRegistrasi, 'nr' => $noRawat]);
+        $row = $stmt->fetch();
+        return $row['waktu'] ?? '';
+    }
+
+    /**
+     * Get task 3 waktu for JKN patients.
+     * Try validasi first (Mobile JKN check-in), then fallback to resolveTask3Waktu.
+     */
+    public function resolveTask3WaktuJkn(string $noRawat, string $tglRegistrasi, string $jamMulai): string
+    {
+        // Try validasi first (JKN patients that checked in via Mobile JKN app)
+        $sql = "SELECT validasi FROM referensi_mobilejkn_bpjs WHERE no_rawat = :nr AND validasi IS NOT NULL AND validasi <> '0000-00-00 00:00:00' LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch();
+        $validasi = $row['validasi'] ?? '';
+        if (!empty($validasi) && !str_starts_with($validasi, '0000')) {
+            return $validasi;
+        }
+        // Fallback to mutasi_berkas.dikirim → jam_reg/jam_mulai
+        return $this->resolveTask3Waktu($noRawat, $tglRegistrasi, $jamMulai);
+    }
+
+    /**
+     * Get task 4 waktu from mutasi_berkas.diterima.
+     * Java log line 58: "select mutasi_berkas.diterima..."
+     */
+    public function resolveTask4Waktu(string $noRawat): string
+    {
+        $sql = "SELECT diterima FROM mutasi_berkas WHERE no_rawat = :nr AND diterima <> '0000-00-00 00:00:00' LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch();
+        return $row['diterima'] ?? '';
+    }
+
+    /**
+     * Get task 5 waktu from pemeriksaan_ralan.
+     * Java log line 68: "select concat(pemeriksaan_ralan.tgl_perawatan,' ',pemeriksaan_ralan.jam_rawat)..."
+     */
+    public function resolveTask5Waktu(string $noRawat): string
+    {
+        $sql = "SELECT CONCAT(tgl_perawatan, ' ', jam_rawat) as waktu FROM pemeriksaan_ralan WHERE no_rawat = :nr LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch();
+        return $row['waktu'] ?? '';
+    }
+
+    /**
+     * Get task 6 waktu from resep_obat (prescription created).
+     * Java log line 98: "select concat(resep_obat.tgl_perawatan,' ',resep_obat.jam)..."
+     */
+    public function resolveTask6Waktu(string $noRawat): string
+    {
+        $sql = "SELECT CONCAT(tgl_perawatan, ' ', jam) as waktu FROM resep_obat WHERE tgl_perawatan <> '0000-00-00' AND status = 'ralan' AND no_rawat = :nr LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch();
+        return $row['waktu'] ?? '';
+    }
+
+    /**
+     * Get task 7 waktu from resep_obat (prescription dispensed).
+     * Java log line 103: "select concat(resep_obat.tgl_penyerahan,' ',resep_obat.jam_penyerahan)..."
+     */
+    public function resolveTask7Waktu(string $noRawat): string
+    {
+        $sql = "SELECT CONCAT(tgl_penyerahan, ' ', jam_penyerahan) as waktu FROM resep_obat WHERE status = 'ralan' AND no_rawat = :nr AND CONCAT(tgl_penyerahan, ' ', jam_penyerahan) <> '0000-00-00 00:00:00' LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch();
+        return $row['waktu'] ?? '';
+    }
+
+    /**
+     * Get resep_obat.no_resep for a patient.
+     * Java: Sequel.cariIsi("select resep_obat.no_resep from resep_obat where no_rawat=?")
+     */
+    public function fetchNoResep(string $noRawat): string
+    {
+        $sql = "SELECT no_resep FROM resep_obat WHERE no_rawat = :nr LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch();
+        return $row['no_resep'] ?? '';
+    }
+
+    /**
+     * Check if a prescription is racikan (compounded).
+     * Java: Sequel.cariInteger("select count(*) from resep_dokter_racikan where no_resep=?") > 0
+     */
+    public function isRacikan(string $noResep): bool
+    {
+        $sql = "SELECT COUNT(*) AS cnt FROM resep_dokter_racikan WHERE no_resep = :nr";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noResep]);
+        $row = $stmt->fetch();
+        return ((int)($row['cnt'] ?? 0)) > 0;
+    }
+
+    /**
+     * Get resep type string for API payload.
      */
     public function fetchResepType(string $noResep): string
     {
-        $sql = "SELECT COUNT(*) AS cnt FROM resep_dokter_racikan WHERE no_resep = :no_resep";
+        return $this->isRacikan($noResep) ? 'Racikan' : 'Non Racikan';
+    }
+
+    /**
+     * Check if patient is cancelled.
+     * Java log line 108: "select now() from reg_periksa where stts='Batal' and no_rawat=?"
+     */
+    public function isCancelled(string $noRawat): bool
+    {
+        $sql = "SELECT 1 FROM reg_periksa WHERE stts = 'Batal' AND no_rawat = :nr LIMIT 1";
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['no_resep' => $noResep]);
-        $row = $stmt->fetch();
-        return ((int)($row['cnt'] ?? 0)) > 0 ? 'Racikan' : 'Non Racikan';
+        $stmt->execute(['nr' => $noRawat]);
+        return $stmt->fetch() !== false;
     }
 }
+

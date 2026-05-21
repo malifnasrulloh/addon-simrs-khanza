@@ -76,14 +76,16 @@ class BpjsAntreanClient
     /**
      * POST /antrean/updatewaktu — Update task timestamp.
      *
-     * @param int $waktu Epoch milliseconds
+     * @param int    $waktu      Epoch milliseconds
+     * @param string $jenisresep 'Tidak ada'|'Racikan'|'Non racikan' (per BPJS spec)
      */
-    public function updateWaktu(string $kodebooking, string $taskId, int $waktu): array
+    public function updateWaktu(string $kodebooking, string $taskId, int $waktu, string $jenisresep = 'Tidak ada'): array
     {
         return $this->post('/antrean/updatewaktu', [
             'kodebooking' => $kodebooking,
-            'taskid'      => $taskId,
-            'waktu'       => $waktu,
+            'taskid'      => (string) $taskId,
+            'waktu'       => (string) $waktu,
+            'jenisresep'  => $jenisresep,
         ]);
     }
 
@@ -276,9 +278,9 @@ class BpjsAntreanClient
         $signature = base64_encode(hash_hmac('sha256', $data, $this->secretKey, true));
 
         return [
-            'X-cons-id: '   . $this->consId,
-            'X-timestamp: ' . $timestamp,
-            'X-signature: ' . $signature,
+            'x-cons-id: '   . $this->consId,
+            'x-timestamp: ' . $timestamp,
+            'x-signature: ' . $signature,
             'user_key: '    . $this->userKey,
             'Content-Type: application/json',
             'Accept: */*',
