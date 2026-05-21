@@ -1,0 +1,26 @@
+{
+  "Name" : "Orthanc PACS",
+  "StorageDirectory" : "/var/lib/orthanc/db",
+  "IndexDirectory" : "/var/lib/orthanc/db",
+  "DicomAet" : "ORTHANC",
+  "DicomPort" : 4242,
+  "HttpPort" : 8042,
+
+  "AuthenticationEnabled" : true,
+  "RegisteredUsers" : {},
+  "RemoteAccessAllowed" : true,
+
+  "DicomModalities" : {
+  },
+
+  "Worklists" : {
+    "Enable" : true,
+    "Database" : "/var/lib/orthanc/worklists",
+    "FilterQueryArguments" : false
+  },
+
+  "Plugins" : [
+    "/usr/share/orthanc/plugins",
+    "/usr/local/share/orthanc/plugins"
+  ]
+}

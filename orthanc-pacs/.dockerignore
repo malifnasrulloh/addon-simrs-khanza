@@ -1,0 +1,7 @@
+.env
+.env.example
+.git
+.gitignore
+*.md
+mwl/Icon
+docker-compose*.yml

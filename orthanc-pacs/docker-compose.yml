@@ -1,0 +1,97 @@
+services:
+  orthanc-db:
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${MARIADB_DATABASE}
+      MARIADB_USER: ${MARIADB_USER}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    networks:
+      - pacs-backend
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  orthanc:
+    image: orthancteam/orthanc:24.12.2-full
+    restart: unless-stopped
+    ports:
+      - "${ORTHANC_DICOM_PORT:-4242}:4242"
+      - "${ORTHANC_HTTP_PORT:-8042}:8042"
+    environment:
+      # --- Orthanc Core ---
+      ORTHANC__NAME: "Orthanc PACS"
+      ORTHANC__DICOM_AET: ${ORTHANC_AET:-ORTHANC}
+      ORTHANC__AUTHENTICATION_ENABLED: "true"
+      ORTHANC__REGISTERED_USERS: '{"${ORTHANC_WEB_USER:-admin}":"${ORTHANC_WEB_PASS:-changeme}"}'
+
+      # --- MySQL Plugin ---
+      ORTHANC__MYSQL__ENABLE: "true"
+      ORTHANC__MYSQL__HOST: orthanc-db
+      ORTHANC__MYSQL__DATABASE: ${MARIADB_DATABASE}
+      ORTHANC__MYSQL__USERNAME: ${MARIADB_USER}
+      ORTHANC__MYSQL__PASSWORD: ${MARIADB_PASSWORD}
+      ORTHANC__MYSQL__LOCK: "false"
+
+      # --- Plugins ---
+      MYSQL_SERVER_INDEX_PLUGIN_ENABLED: "true"
+      ORTHANC_EXPLORER_2_ENABLED: "true"
+      DICOM_WEB_PLUGIN_ENABLED: "true"
+      WORKLISTS_PLUGIN_ENABLED: "true"
+    depends_on:
+      orthanc-db:
+        condition: service_healthy
+    volumes:
+      - orthanc-storage:/var/lib/orthanc/db
+      - orthanc-worklists:/var/lib/orthanc/worklists
+      - ./orthanc-config:/etc/orthanc:ro
+    networks:
+      - pacs-backend
+      - pacs-frontend
+
+  simrs-mwl:
+    build:
+      context: ./mwl
+    restart: unless-stopped
+    ports:
+      - "${MWL_DASHBOARD_PORT:-8081}:8080"
+    volumes:
+      - orthanc-worklists:/var/lib/orthanc/worklists/
+    environment:
+      TZ: ${TZ:-Asia/Jakarta}
+      SIMRS_DB_HOST: ${SIMRS_DB_HOST}
+      SIMRS_DB_PORT: ${SIMRS_DB_PORT:-3306}
+      SIMRS_DB_USER: ${SIMRS_DB_USER}
+      SIMRS_DB_PASS: ${SIMRS_DB_PASS}
+      SIMRS_DB_NAME: ${SIMRS_DB_NAME}
+      MWL_SYNC_INTERVAL: ${MWL_SYNC_INTERVAL:-10}
+      MWL_DASHBOARD_REFRESH_SEC: ${MWL_DASHBOARD_REFRESH_SEC:-300}
+      MWL_STALE_DAYS: ${MWL_STALE_DAYS:-2}
+      MWL_WEB_USER: ${MWL_WEB_USER:-admin}
+      MWL_WEB_PASS: ${MWL_WEB_PASS:-changeme}
+      DICOM_UID_ROOT: ${DICOM_UID_ROOT:-2.25}
+    depends_on:
+      - orthanc
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - pacs-frontend
+
+networks:
+  pacs-backend:
+    internal: true
+  pacs-frontend:
+
+volumes:
+  mariadb-data:
+  orthanc-storage:
+  orthanc-worklists:

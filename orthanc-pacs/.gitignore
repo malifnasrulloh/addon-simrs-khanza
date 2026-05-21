@@ -1,0 +1,14 @@
+# Secrets
+.env
+
+# OS artifacts
+mwl/Icon
+.DS_Store
+
+# DICOM worklist files
+*.wl
+*.dump
+/var/lib/orthanc/worklists/*
+
+# Docker
+docker-compose.override.yml
