@@ -288,3 +288,139 @@ php-service/
 | `0` | All operations completed successfully |
 | `1` | Fatal error (config, DB connection, etc.) |
 | `2` | Partial failure (some API calls failed) |
+
+---
+
+# Satu Sehat Encounter Sync Service (PHP)
+
+PHP CLI script to automatically synchronize patient Encounter data with the BPJS Satu Sehat API.
+It orchestrates transitioning patient statuses (`arrived` -> `in-progress` -> `finished`) securely.
+
+## Features
+
+- **Automated Workflow**: Handles State transitions implicitly via Cron Jobs, replacing the manual GUI process.
+- **Robust Local Tracker**: Utilizes SQLite `logs/satusehat_state.sqlite` to track patient status, eliminating duplicated external HTTP operations and shielding your MySQL Database schemas.
+- **Smart Validation**: Skips NIK validations seamlessly and fetches missing Practitioner/Patient IHS Identifiers remotely while saving to database to prevent unneeded repeated query requests!
+
+## Quick Start
+
+```bash
+# 1. Provide your config in `.env` 
+nano .env # Add SATUSEHAT_* vars
+
+# 2. Run
+php satusehat_encounter_sync.php
+```
+
+## Cron Setup
+
+```bash
+*/5 * * * * cd /path/to/php-service && php satusehat_encounter_sync.php >> /dev/null 2>&1
+```
+
+---
+
+# Satu Sehat Episode of Care Sync Service (PHP)
+
+PHP CLI script to automatically synchronize patient Episode of Care (EOC) data with the BPJS Satu Sehat API.
+It safely maps ICD-10 diagnosis codes (e.g., ANC or TB-SO) to their FHIR types and dynamically transitions them from `active` to `finished` statuses.
+
+## Features
+
+- **Dynamic ICD-10 Mapping**: Identifies Episode of Care types (like TB-SO or ANC) natively by filtering `diagnosa_pasien` ICD codes. Easily extensible in `EpisodeOfCareType.php`.
+- **Smart Duplicate Fallback Algorithm**: If Satu Sehat returns a 400 or 409 "duplicate" collision, it gracefully searches existing episodes natively. It leverages a rigorous multi-tier filtering structure (status checks, strict Identifier value validation, and chronological sorting) to absolutely ensure it resolves the correct `id_episode_of_care`.
+- **Dual-Phase Lifecycle**: 
+   - **Phase 1**: Auto-POST active visits upon admission/diagnoses.
+   - **Phase 2**: Auto-PUT finished updates immediately after checkout (billing).
+
+## Quick Start
+
+```bash
+# 1. Run (reuses same SATUSEHAT_* vars in .env)
+php satusehat_episodeofcare_sync.php --verbose
+```
+
+## Cron Setup
+
+```bash
+*/5 * * * * cd /path/to/php-service && php satusehat_episodeofcare_sync.php >> /dev/null 2>&1
+```
+
+---
+
+# Satu Sehat Condition Sync Service (PHP)
+
+PHP CLI script to automatically synchronize patient Condition (Diagnosis) data with the BPJS Satu Sehat API.
+It links patient diagnoses seamlessly to their respective `Encounter` and `Patient` records.
+
+## Features
+
+- **Automated POST & PUT**: Seamlessly creates new Condition records or updates existing ones based on changes in the SIMRS database.
+- **Smart Duplicate Fallback Algorithm**: If Satu Sehat returns a 400 or 409 "duplicate" collision, it gracefully searches existing Condition records for the patient and encounter natively. It then checks the active ICD-10 code and successfully links the `id_condition`.
+- **Integrated Lookups**: Safely retrieves Patient IHS IDs via cache or live lookups before executing the POST.
+
+## Quick Start
+
+```bash
+# 1. Run (reuses same SATUSEHAT_* vars in .env)
+php satusehat_condition_sync.php --verbose
+```
+
+## Cron Setup
+
+```bash
+*/5 * * * * cd /path/to/php-service && php satusehat_condition_sync.php >> /dev/null 2>&1
+```
+
+---
+
+# Satu Sehat Observation-TTV Sync Service (PHP)
+
+PHP CLI script to automatically synchronize patient Vital Signs (Observation-TTV) data with the BPJS Satu Sehat API.
+It safely consolidates 10 different types of observations into a single optimized background process.
+
+## Features
+
+- **Consolidated Architecture**: Avoids code duplication by utilizing a dynamic dictionary pattern to handle `suhu_tubuh`, `respirasi`, `nadi`, `spo2`, `gcs`, `kesadaran`, `tensi`, `tinggi`, `berat`, and `lingkar_perut` in a single pass.
+- **Ralan and Ranap Support**: Automatically merges and checks both outpatient (`pemeriksaan_ralan`) and inpatient (`pemeriksaan_ranap`) records simultaneously.
+- **Complex Payloads**: Automatically adapts the FHIR payload structure (e.g., standard `valueQuantity` for Temperature, `valueString` for GCS, `valueCodeableConcept` mapping for Consciousness, and nested `component` structures for Systolic/Diastolic Blood Pressure).
+- **Smart Duplicate Fallback Algorithm**: Gracefully manages 400/409 duplicate errors natively by executing localized FHIR searches to adopt existing `id_observation` strings safely.
+
+## Quick Start
+
+```bash
+# 1. Run (reuses same SATUSEHAT_* vars in .env)
+php satusehat_observationttv_sync.php --verbose
+```
+
+## Cron Setup
+
+```bash
+*/5 * * * * cd /path/to/php-service && php satusehat_observationttv_sync.php >> /dev/null 2>&1
+```
+
+---
+
+# Satu Sehat Procedure Sync Service (PHP)
+
+PHP CLI script to automatically synchronize patient Procedure data with the BPJS Satu Sehat API.
+It links patient procedures (ICD-9-CM codes) seamlessly to their respective `Encounter` and `Patient` records.
+
+## Features
+
+- **Automated POST & PUT**: Seamlessly creates new Procedure records or updates existing ones based on changes in the SIMRS database.
+- **Smart Duplicate Fallback Algorithm**: If Satu Sehat returns a 400 or 409 "duplicate" collision, it gracefully searches existing Procedure records for the patient and encounter natively. It then checks the active ICD-9 code and successfully links the `id_procedure`.
+- **Integrated Lookups**: Safely retrieves Patient IHS IDs via cache or live lookups before executing the POST.
+
+## Quick Start
+
+```bash
+# 1. Run (reuses same SATUSEHAT_* vars in .env)
+php satusehat_procedure_sync.php --verbose
+```
+
+## Cron Setup
+
+```bash
+*/5 * * * * cd /path/to/php-service && php satusehat_procedure_sync.php >> /dev/null 2>&1
+```
