@@ -76,6 +76,13 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for Immunization state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS immunization_state (
+            composite_key VARCHAR(100) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -772,6 +779,183 @@ class SatuSehatDatabase
             'jam' => $jamRawat,
             'st'  => $statusRawat,
             'id'  => $idAllergy
+        ]);
+    }
+
+    // ─── IMMUNIZATION STATE TRACKING ─────────────────────────────────────────────
+
+    public function getImmunizationLocalState(string $noRawat, string $tglPerawatan, string $jam, string $kodeBrng, string $noBatch, string $noFaktur): ?string
+    {
+        $compositeKey = md5($noRawat . '_' . $tglPerawatan . '_' . $jam . '_' . $kodeBrng . '_' . $noBatch . '_' . $noFaktur);
+        $stmt = $this->sqlite->prepare("SELECT status FROM immunization_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateImmunizationLocalState(string $noRawat, string $tglPerawatan, string $jam, string $kodeBrng, string $noBatch, string $noFaktur, string $status): void
+    {
+        $compositeKey = md5($noRawat . '_' . $tglPerawatan . '_' . $jam . '_' . $kodeBrng . '_' . $noBatch . '_' . $noFaktur);
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO immunization_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    // ─── IMMUNIZATION MYSQL OPERATIONS ───────────────────────────────────────────
+
+    public function fetchPendingImmunizationActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT * FROM (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, pasien.nm_pasien, pasien.no_ktp,
+                    rp.stts, rp.status_lanjut, sse.id_encounter, smv.vaksin_code, smv.vaksin_system,
+                    smv.kode_brng, smv.vaksin_display, smv.route_code, smv.route_system,
+                    smv.route_display, smv.dose_quantity_code, smv.dose_quantity_system,
+                    smv.dose_quantity_unit, dpo.no_batch, dpo.tgl_perawatan, dpo.jam,
+                    dpo.jml, IFNULL(ap.aturan,'') AS aturan, sml.id_lokasi_satusehat, pol.nm_poli, pg.nama, pg.no_ktp AS ktppraktisi,
+                    IFNULL(ssi.id_immunization,'') AS id_immunization, dpo.no_faktur, IFNULL(db.tgl_kadaluarsa,'') AS tgl_kadaluarsa,
+                    'Ralan' AS status_rawat
+                FROM reg_periksa rp
+                INNER JOIN pasien ON rp.no_rkm_medis = pasien.no_rkm_medis 
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                INNER JOIN detail_pemberian_obat dpo ON dpo.no_rawat = rp.no_rawat 
+                INNER JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng 
+                LEFT JOIN aturan_pakai ap ON ap.tgl_perawatan = dpo.tgl_perawatan AND ap.jam = dpo.jam AND 
+                    ap.no_rawat = dpo.no_rawat AND ap.kode_brng = dpo.kode_brng 
+                INNER JOIN satu_sehat_mapping_lokasi_ralan sml ON sml.kd_poli = rp.kd_poli 
+                INNER JOIN poliklinik pol ON pol.kd_poli = sml.kd_poli 
+                INNER JOIN pegawai pg ON rp.kd_dokter = pg.nik 
+                INNER JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat 
+                LEFT JOIN data_batch db ON db.no_batch = dpo.no_batch AND db.kode_brng = dpo.kode_brng AND db.no_faktur = dpo.no_faktur 
+                LEFT JOIN satu_sehat_immunization ssi ON ssi.no_rawat = dpo.no_rawat AND ssi.tgl_perawatan = dpo.tgl_perawatan AND 
+                    ssi.jam = dpo.jam AND ssi.kode_brng = dpo.kode_brng AND 
+                    ssi.no_batch = dpo.no_batch AND ssi.no_faktur = dpo.no_faktur 
+                WHERE dpo.no_batch <> '' 
+                  AND nj.tanggal BETWEEN :df AND :dt
+                  AND (ssi.id_immunization IS NULL OR ssi.id_immunization = '')
+
+                UNION ALL
+
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, pasien.nm_pasien, pasien.no_ktp,
+                    rp.stts, rp.status_lanjut, sse.id_encounter, smv.vaksin_code, smv.vaksin_system,
+                    smv.kode_brng, smv.vaksin_display, smv.route_code, smv.route_system,
+                    smv.route_display, smv.dose_quantity_code, smv.dose_quantity_system,
+                    smv.dose_quantity_unit, dpo.no_batch, dpo.tgl_perawatan, dpo.jam,
+                    dpo.jml, IFNULL(ap.aturan,'') AS aturan, sml.id_lokasi_satusehat, pol.nm_poli, pg.nama, pg.no_ktp AS ktppraktisi,
+                    IFNULL(ssi.id_immunization,'') AS id_immunization, dpo.no_faktur, IFNULL(db.tgl_kadaluarsa,'') AS tgl_kadaluarsa,
+                    'Ranap' AS status_rawat
+                FROM reg_periksa rp
+                INNER JOIN pasien ON rp.no_rkm_medis = pasien.no_rkm_medis 
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                INNER JOIN detail_pemberian_obat dpo ON dpo.no_rawat = rp.no_rawat 
+                INNER JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng 
+                LEFT JOIN aturan_pakai ap ON ap.tgl_perawatan = dpo.tgl_perawatan AND ap.jam = dpo.jam AND 
+                    ap.no_rawat = dpo.no_rawat AND ap.kode_brng = dpo.kode_brng 
+                INNER JOIN satu_sehat_mapping_lokasi_ralan sml ON sml.kd_poli = rp.kd_poli 
+                INNER JOIN poliklinik pol ON pol.kd_poli = sml.kd_poli 
+                INNER JOIN pegawai pg ON rp.kd_dokter = pg.nik 
+                INNER JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat 
+                LEFT JOIN data_batch db ON db.no_batch = dpo.no_batch AND db.kode_brng = dpo.kode_brng AND db.no_faktur = dpo.no_faktur 
+                LEFT JOIN satu_sehat_immunization ssi ON ssi.no_rawat = dpo.no_rawat AND ssi.tgl_perawatan = dpo.tgl_perawatan AND 
+                    ssi.jam = dpo.jam AND ssi.kode_brng = dpo.kode_brng AND 
+                    ssi.no_batch = dpo.no_batch AND ssi.no_faktur = dpo.no_faktur 
+                WHERE dpo.no_batch <> '' 
+                  AND ni.tanggal BETWEEN :df2 AND :dt2
+                  AND (ssi.id_immunization IS NULL OR ssi.id_immunization = '')
+            ) AS combined
+            ORDER BY tgl_perawatan, jam
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function fetchPendingImmunizationUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT * FROM (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, pasien.nm_pasien, pasien.no_ktp,
+                    rp.stts, rp.status_lanjut, sse.id_encounter, smv.vaksin_code, smv.vaksin_system,
+                    smv.kode_brng, smv.vaksin_display, smv.route_code, smv.route_system,
+                    smv.route_display, smv.dose_quantity_code, smv.dose_quantity_system,
+                    smv.dose_quantity_unit, dpo.no_batch, dpo.tgl_perawatan, dpo.jam,
+                    dpo.jml, IFNULL(ap.aturan,'') AS aturan, sml.id_lokasi_satusehat, pol.nm_poli, pg.nama, pg.no_ktp AS ktppraktisi,
+                    ssi.id_immunization, dpo.no_faktur, IFNULL(db.tgl_kadaluarsa,'') AS tgl_kadaluarsa,
+                    'Ralan' AS status_rawat
+                FROM reg_periksa rp
+                INNER JOIN pasien ON rp.no_rkm_medis = pasien.no_rkm_medis 
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                INNER JOIN detail_pemberian_obat dpo ON dpo.no_rawat = rp.no_rawat 
+                INNER JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng 
+                LEFT JOIN aturan_pakai ap ON ap.tgl_perawatan = dpo.tgl_perawatan AND ap.jam = dpo.jam AND 
+                    ap.no_rawat = dpo.no_rawat AND ap.kode_brng = dpo.kode_brng 
+                INNER JOIN satu_sehat_mapping_lokasi_ralan sml ON sml.kd_poli = rp.kd_poli 
+                INNER JOIN poliklinik pol ON pol.kd_poli = sml.kd_poli 
+                INNER JOIN pegawai pg ON rp.kd_dokter = pg.nik 
+                INNER JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat 
+                LEFT JOIN data_batch db ON db.no_batch = dpo.no_batch AND db.kode_brng = dpo.kode_brng AND db.no_faktur = dpo.no_faktur 
+                INNER JOIN satu_sehat_immunization ssi ON ssi.no_rawat = dpo.no_rawat AND ssi.tgl_perawatan = dpo.tgl_perawatan AND 
+                    ssi.jam = dpo.jam AND ssi.kode_brng = dpo.kode_brng AND 
+                    ssi.no_batch = dpo.no_batch AND ssi.no_faktur = dpo.no_faktur 
+                WHERE dpo.no_batch <> '' 
+                  AND nj.tanggal BETWEEN :df AND :dt
+
+                UNION ALL
+
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, pasien.nm_pasien, pasien.no_ktp,
+                    rp.stts, rp.status_lanjut, sse.id_encounter, smv.vaksin_code, smv.vaksin_system,
+                    smv.kode_brng, smv.vaksin_display, smv.route_code, smv.route_system,
+                    smv.route_display, smv.dose_quantity_code, smv.dose_quantity_system,
+                    smv.dose_quantity_unit, dpo.no_batch, dpo.tgl_perawatan, dpo.jam,
+                    dpo.jml, IFNULL(ap.aturan,'') AS aturan, sml.id_lokasi_satusehat, pol.nm_poli, pg.nama, pg.no_ktp AS ktppraktisi,
+                    ssi.id_immunization, dpo.no_faktur, IFNULL(db.tgl_kadaluarsa,'') AS tgl_kadaluarsa,
+                    'Ranap' AS status_rawat
+                FROM reg_periksa rp
+                INNER JOIN pasien ON rp.no_rkm_medis = pasien.no_rkm_medis 
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                INNER JOIN detail_pemberian_obat dpo ON dpo.no_rawat = rp.no_rawat 
+                INNER JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng 
+                LEFT JOIN aturan_pakai ap ON ap.tgl_perawatan = dpo.tgl_perawatan AND ap.jam = dpo.jam AND 
+                    ap.no_rawat = dpo.no_rawat AND ap.kode_brng = dpo.kode_brng 
+                INNER JOIN satu_sehat_mapping_lokasi_ralan sml ON sml.kd_poli = rp.kd_poli 
+                INNER JOIN poliklinik pol ON pol.kd_poli = sml.kd_poli 
+                INNER JOIN pegawai pg ON rp.kd_dokter = pg.nik 
+                INNER JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat 
+                LEFT JOIN data_batch db ON db.no_batch = dpo.no_batch AND db.kode_brng = dpo.kode_brng AND db.no_faktur = dpo.no_faktur 
+                INNER JOIN satu_sehat_immunization ssi ON ssi.no_rawat = dpo.no_rawat AND ssi.tgl_perawatan = dpo.tgl_perawatan AND 
+                    ssi.jam = dpo.jam AND ssi.kode_brng = dpo.kode_brng AND 
+                    ssi.no_batch = dpo.no_batch AND ssi.no_faktur = dpo.no_faktur 
+                WHERE dpo.no_batch <> '' 
+                  AND ni.tanggal BETWEEN :df2 AND :dt2
+            ) AS combined
+            ORDER BY tgl_perawatan, jam
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function saveImmunization(string $noRawat, string $tglPerawatan, string $jam, string $kodeBrng, string $noBatch, string $noFaktur, string $idImmunization): bool
+    {
+        $sql = "INSERT INTO satu_sehat_immunization (no_rawat, tgl_perawatan, jam, kode_brng, no_batch, no_faktur, id_immunization) 
+                VALUES (:nr, :tgl, :jam, :kode_brng, :no_batch, :no_faktur, :id) 
+                ON DUPLICATE KEY UPDATE id_immunization = :id";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'nr'        => $noRawat,
+            'tgl'       => $tglPerawatan,
+            'jam'       => $jam,
+            'kode_brng' => $kodeBrng,
+            'no_batch'  => $noBatch,
+            'no_faktur' => $noFaktur,
+            'id'        => $idImmunization
         ]);
     }
 }

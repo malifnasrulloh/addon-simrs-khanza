@@ -2,7 +2,8 @@
 .env
 
 # Logs
-logs/*.log
+logs/
+*.sqlite
 
 # IDE
 .idea/

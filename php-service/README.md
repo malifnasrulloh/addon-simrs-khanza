@@ -451,3 +451,31 @@ php satusehat_allergyintolerance_sync.php --verbose
 */5 * * * * cd /path/to/php-service && php satusehat_allergyintolerance_sync.php >> /dev/null 2>&1
 ```
 
+---
+
+# Satu Sehat Immunization Sync Service (PHP)
+
+PHP CLI script to automatically synchronize patient Immunization (vaccination) data with the Satu Sehat API.
+It maps detailed vaccination administration details (like batch number, route, dose quantity, and clinic location) to FHIR `Immunization` resources.
+
+## Features
+
+- **Automated POST & PUT**: Creates new Immunization records or updates existing ones across both outpatient (`nota_jalan` / `detail_pemberian_obat`) and inpatient (`nota_inap` / `detail_pemberian_obat`) records.
+- **Dose Extraction**: Automatically extracts the numerical dose number from prescription instructions (`aturan` field) and maps it to FHIR `protocolApplied.doseNumberPositiveInt`.
+- **Smart Duplicate Fallback**: Gracefully manages duplicate errors by executing a search on patient & encounter IDs to adopt existing immunization resource IDs.
+- **Batch Expiration Tracking**: Fetches and includes expiration dates directly from the inventory database (`data_batch.tgl_kadaluarsa`).
+
+## Quick Start
+
+```bash
+# 1. Run
+php satusehat_immunization_sync.php --verbose
+```
+
+## Cron Setup
+
+```bash
+*/5 * * * * cd /path/to/php-service && php satusehat_immunization_sync.php >> /dev/null 2>&1
+```
+
+

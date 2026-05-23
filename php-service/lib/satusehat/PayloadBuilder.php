@@ -575,4 +575,130 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    /**
+     * Build Immunization payload.
+     *
+     * @param array  $imm           Immunization/Vaccination data row
+     * @param string $idPasien      IHS Patient ID
+     * @param string $idDokter      IHS Practitioner ID
+     * @param string $idImmunization Existing Immunization ID (if updating)
+     * @return array
+     */
+    public static function immunization(
+        array $imm,
+        string $idPasien,
+        string $idDokter,
+        string $idImmunization = ''
+    ): array {
+        // Occurrence time
+        $occurrenceDateTime = $imm['tgl_perawatan'] . 'T' . $imm['jam'] . '+07:00';
+        
+        // Expiration date (only if valid)
+        $expirationDate = null;
+        if (!empty($imm['tgl_kadaluarsa']) && $imm['tgl_kadaluarsa'] !== '0000-00-00' && strpos($imm['tgl_kadaluarsa'], '0000') === false) {
+            $expirationDate = substr($imm['tgl_kadaluarsa'], 0, 10);
+        }
+
+        // Parse dose number from 'aturan' (e.g. "Dosis 1", "Dosis 2", etc.)
+        $doseStr = strtolower($imm['aturan']);
+        $doseStr = str_replace(['dosis', ' '], '', $doseStr);
+        
+        $validDose = false;
+        if (is_numeric($doseStr)) {
+            $d = intval($doseStr);
+            if ($d > 0) {
+                $validDose = true;
+            }
+        }
+        
+        if (!$validDose) {
+            $doseStr = '1';
+        }
+
+        $payload = [
+            'resourceType' => 'Immunization',
+            'status' => 'completed',
+            'vaccineCode' => [
+                'coding' => [
+                    [
+                        'system' => $imm['vaksin_system'],
+                        'code' => $imm['vaksin_code'],
+                        'display' => $imm['vaksin_display']
+                    ]
+                ]
+            ],
+            'patient' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $imm['id_encounter']
+            ],
+            'occurrenceDateTime' => $occurrenceDateTime,
+            'recorded' => $occurrenceDateTime,
+            'primarySource' => true,
+            'location' => [
+                'reference' => 'Location/' . $imm['id_lokasi_satusehat'],
+                'display' => $imm['nm_poli']
+            ],
+            'lotNumber' => $imm['no_batch'],
+            'route' => [
+                'coding' => [
+                    [
+                        'system' => $imm['route_system'],
+                        'code' => $imm['route_code'],
+                        'display' => $imm['route_display']
+                    ]
+                ]
+            ],
+            'doseQuantity' => [
+                'value' => (float)$imm['jml'],
+                'unit' => $imm['dose_quantity_unit'],
+                'system' => $imm['dose_quantity_system'],
+                'code' => $imm['dose_quantity_code']
+            ],
+            'performer' => [
+                [
+                    'function' => [
+                        'coding' => [
+                            [
+                                'system' => 'http://terminology.hl7.org/CodeSystem/v2-0443',
+                                'code' => 'AP',
+                                'display' => 'Administering Provider'
+                            ]
+                        ]
+                    ],
+                    'actor' => [
+                        'reference' => 'Practitioner/' . $idDokter
+                    ]
+                ]
+            ],
+            'reasonCode' => [
+                [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/immunization-reason',
+                            'code' => 'IM-Program',
+                            'display' => 'Imunisasi Program'
+                        ]
+                    ]
+                ]
+            ],
+            'protocolApplied' => [
+                [
+                    'doseNumberPositiveInt' => intval($doseStr)
+                ]
+            ]
+        ];
+
+        if ($expirationDate) {
+            $payload['expirationDate'] = $expirationDate;
+        }
+
+        if (!empty($idImmunization)) {
+            $payload['id'] = $idImmunization;
+        }
+
+        return $payload;
+    }
 }
