@@ -1062,4 +1062,132 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    /**
+     * Build MedicationStatement payload.
+     *
+     * @param string      $orgId                  Satu Sehat Organization ID
+     * @param array       $p                      MedicationStatement data row
+     * @param string      $idPasien               IHS Patient ID
+     * @param string|null $idMedicationStatement  Existing MedicationStatement ID (if updating)
+     * @return array
+     */
+    public static function medicationStatement(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        ?string $idMedicationStatement = null
+    ): array {
+        // Parse signa aturan pakai
+        $signa1 = 1.0;
+        $signa2 = 1.0;
+        $aturan = $p['aturan_pakai'] ?? '';
+        $parts = explode('x', strtolower($aturan));
+        if (isset($parts[0])) {
+            $val = preg_replace('/[^0-9.]/', '', $parts[0]);
+            if (is_numeric($val)) {
+                $signa1 = (float)$val;
+            }
+        }
+        if (isset($parts[1])) {
+            $val = preg_replace('/[^0-9.]/', '', $parts[1]);
+            if (is_numeric($val)) {
+                $signa2 = (float)$val;
+            }
+        }
+
+        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
+        $dateAsserted = str_replace(' ', 'T', $p['tgl_penyerahan'] . ' ' . $p['jam_penyerahan']) . '+07:00';
+
+        // Identifiers:
+        // System: http://sys-ids.kemkes.go.id/medicationstatement/{orgId}
+        // Value non-racikan: {no_resep}-{kode_brng}
+        // Value racikan: {no_resep}-{kode_brng}-{no_racik}
+        $isRacikan = (bool)$p['is_racikan'];
+        $noRacik = $p['no_racik'] ?? '';
+        
+        $valIdentifier = $p['no_resep'] . '-' . $p['kode_brng'];
+        if ($isRacikan && $noRacik !== '') {
+            $valIdentifier .= '-' . $noRacik;
+        }
+
+        $payload = [
+            'resourceType' => 'MedicationStatement',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/medicationstatement/' . $orgId,
+                    'use'    => 'official',
+                    'value'  => $valIdentifier
+                ]
+            ],
+            'status' => 'completed',
+            'category' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/CodeSystem/medication-statement-category',
+                        'code'    => strtolower($p['status_lanjut']) === 'ranap' ? 'inpatient' : 'outpatient',
+                        'display' => strtolower($p['status_lanjut']) === 'ranap' ? 'Inpatient' : 'Outpatient'
+                    ]
+                ]
+            ],
+            'medicationReference' => [
+                'reference' => 'Medication/' . $p['id_medication'],
+                'display'   => $p['obat_display']
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'dosage' => [
+                [
+                    'text'   => $aturan,
+                    'timing' => [
+                        'repeat' => [
+                            'frequency'  => (int)$signa2,
+                            'period'     => 1,
+                            'periodUnit' => 'd'
+                        ]
+                    ],
+                    'route' => [
+                        'coding' => [
+                            [
+                                'system'  => $p['route_system'],
+                                'code'    => $p['route_code'],
+                                'display' => $p['route_display']
+                            ]
+                        ]
+                    ],
+                    'doseAndRate' => [
+                        [
+                            'doseQuantity' => [
+                                'value'  => $signa1,
+                                'unit'   => $p['denominator_code'],
+                                'system' => $p['denominator_system'],
+                                'code'   => $p['denominator_code']
+                            ]
+                        ]
+                    ]
+                ]
+            ],
+            'dateAsserted' => $dateAsserted,
+            'informationSource' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'context' => [
+                'reference' => 'Encounter/' . $p['id_encounter']
+            ],
+            'note' => [
+                [
+                    'text' => 'Pasien sudah memahami aturan pakai yang dijelaskan oleh petugas & Obat sudah diserahkan ke pasien'
+                ]
+            ]
+        ];
+
+        if ($idMedicationStatement) {
+            $payload['id'] = $idMedicationStatement;
+        }
+
+        return $payload;
+    }
 }

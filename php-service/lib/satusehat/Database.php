@@ -104,6 +104,13 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for MedicationStatement state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS medicationstatement_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -1453,5 +1460,284 @@ class SatuSehatDatabase
             'nf' => $noFaktur,
             'id' => $idMedicationDispense
         ]);
+    }
+
+    // ─── MEDICATION STATEMENT STATE TRACKING ────────────────────────────────────
+
+    public function getMedicationStatementLocalState(
+        string $noResep, 
+        string $kodeBrng, 
+        string $noRacik
+    ): ?string {
+        $key = "{$noResep}|{$kodeBrng}|{$noRacik}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM medicationstatement_state WHERE composite_key = :key");
+        $stmt->execute(['key' => $key]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateMedicationStatementLocalState(
+        string $noResep, 
+        string $kodeBrng, 
+        string $noRacik, 
+        string $status
+    ): void {
+        $key = "{$noResep}|{$kodeBrng}|{$noRacik}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO medicationstatement_state (composite_key, status, updated_at) 
+            VALUES (:key, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['key' => $key, 'st' => $status]);
+    }
+
+    // ─── MEDICATION STATEMENT MYSQL OPERATIONS ──────────────────────────────────
+
+    /**
+     * Fetch pending MedicationStatement records cross Ralan and Ranap, racikan and non-racikan.
+     */
+    public function fetchPendingMedicationStatementActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    rd.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_penyerahan, ro.jam_penyerahan, rd.jml, ssm.id_medication,
+                    rd.aturan_pakai, rd.no_resep, IFNULL(ssms.id_medicationstatement, '') as id_medicationstatement,
+                    '' as no_racik, 'Ralan' as status_lanjut, 0 as is_racikan
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rd.kode_brng
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                LEFT JOIN satu_sehat_medicationstatement ssms ON ssms.no_resep = rd.no_resep AND ssms.kode_brng = rd.kode_brng
+                WHERE rp.status_lanjut = 'Ralan' AND ro.tgl_penyerahan <> '0000-00-00' AND rp.tgl_registrasi BETWEEN :df1 AND :dt1
+                  AND (ssms.id_medicationstatement IS NULL OR ssms.id_medicationstatement = '')
+            )
+            UNION ALL
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    rd.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_penyerahan, ro.jam_penyerahan, rd.jml, ssm.id_medication,
+                    rd.aturan_pakai, rd.no_resep, IFNULL(ssms.id_medicationstatement, '') as id_medicationstatement,
+                    '' as no_racik, 'Ranap' as status_lanjut, 0 as is_racikan
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rd.kode_brng
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                LEFT JOIN satu_sehat_medicationstatement ssms ON ssms.no_resep = rd.no_resep AND ssms.kode_brng = rd.kode_brng
+                WHERE rp.status_lanjut = 'Ranap' AND ro.tgl_penyerahan <> '0000-00-00' AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+                  AND (ssms.id_medicationstatement IS NULL OR ssms.id_medicationstatement = '')
+            )
+            UNION ALL
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    rrd.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_penyerahan, ro.jam_penyerahan, rrd.jml, ssm.id_medication,
+                    rr.aturan_pakai, rr.no_resep, IFNULL(ssmsr.id_medicationstatement, '') as id_medicationstatement,
+                    rrd.no_racik, 'Ralan' as status_lanjut, 1 as is_racikan
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN resep_dokter_racikan rr ON rr.no_resep = ro.no_resep
+                INNER JOIN resep_dokter_racikan_detail rrd ON rrd.no_resep = rr.no_resep AND rrd.no_racik = rr.no_racik
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rrd.kode_brng
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                LEFT JOIN satu_sehat_medicationstatement_racikan ssmsr ON ssmsr.no_resep = rrd.no_resep 
+                  AND ssmsr.kode_brng = rrd.kode_brng AND ssmsr.no_racik = rrd.no_racik
+                WHERE rp.status_lanjut = 'Ralan' AND ro.tgl_penyerahan <> '0000-00-00' AND rp.tgl_registrasi BETWEEN :df3 AND :dt3
+                  AND (ssmsr.id_medicationstatement IS NULL OR ssmsr.id_medicationstatement = '')
+            )
+            UNION ALL
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    rrd.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_penyerahan, ro.jam_penyerahan, rrd.jml, ssm.id_medication,
+                    rr.aturan_pakai, rr.no_resep, IFNULL(ssmsr.id_medicationstatement, '') as id_medicationstatement,
+                    rrd.no_racik, 'Ranap' as status_lanjut, 1 as is_racikan
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN resep_dokter_racikan rr ON rr.no_resep = ro.no_resep
+                INNER JOIN resep_dokter_racikan_detail rrd ON rrd.no_resep = rr.no_resep AND rrd.no_racik = rr.no_racik
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rrd.kode_brng
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                LEFT JOIN satu_sehat_medicationstatement_racikan ssmsr ON ssmsr.no_resep = rrd.no_resep 
+                  AND ssmsr.kode_brng = rrd.kode_brng AND ssmsr.no_racik = rrd.no_racik
+                WHERE rp.status_lanjut = 'Ranap' AND ro.tgl_penyerahan <> '0000-00-00' AND rp.tgl_registrasi BETWEEN :df4 AND :dt4
+                  AND (ssmsr.id_medicationstatement IS NULL OR ssmsr.id_medicationstatement = '')
+            )
+            ORDER BY tgl_registrasi ASC, jam_reg ASC
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute([
+            'df1' => $dateFrom, 'dt1' => $dateTo,
+            'df2' => $dateFrom, 'dt2' => $dateTo,
+            'df3' => $dateFrom, 'dt3' => $dateTo,
+            'df4' => $dateFrom, 'dt4' => $dateTo
+        ]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Fetch existing MedicationStatement records cross Ralan and Ranap, racikan and non-racikan (for updates).
+     */
+    public function fetchPendingMedicationStatementUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    rd.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_penyerahan, ro.jam_penyerahan, rd.jml, ssm.id_medication,
+                    rd.aturan_pakai, rd.no_resep, ssms.id_medicationstatement,
+                    '' as no_racik, 'Ralan' as status_lanjut, 0 as is_racikan
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rd.kode_brng
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                INNER JOIN satu_sehat_medicationstatement ssms ON ssms.no_resep = rd.no_resep AND ssms.kode_brng = rd.kode_brng
+                WHERE rp.status_lanjut = 'Ralan' AND ro.tgl_penyerahan <> '0000-00-00' AND rp.tgl_registrasi BETWEEN :df1 AND :dt1
+            )
+            UNION ALL
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    rd.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_penyerahan, ro.jam_penyerahan, rd.jml, ssm.id_medication,
+                    rd.aturan_pakai, rd.no_resep, ssms.id_medicationstatement,
+                    '' as no_racik, 'Ranap' as status_lanjut, 0 as is_racikan
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rd.kode_brng
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                INNER JOIN satu_sehat_medicationstatement ssms ON ssms.no_resep = rd.no_resep AND ssms.kode_brng = rd.kode_brng
+                WHERE rp.status_lanjut = 'Ranap' AND ro.tgl_penyerahan <> '0000-00-00' AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+            )
+            UNION ALL
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    rrd.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_penyerahan, ro.jam_penyerahan, rrd.jml, ssm.id_medication,
+                    rr.aturan_pakai, rr.no_resep, ssmsr.id_medicationstatement,
+                    rrd.no_racik, 'Ralan' as status_lanjut, 1 as is_racikan
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN resep_dokter_racikan rr ON rr.no_resep = ro.no_resep
+                INNER JOIN resep_dokter_racikan_detail rrd ON rrd.no_resep = rr.no_resep AND rrd.no_racik = rr.no_racik
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rrd.kode_brng
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                INNER JOIN satu_sehat_medicationstatement_racikan ssmsr ON ssmsr.no_resep = rrd.no_resep 
+                  AND ssmsr.kode_brng = rrd.kode_brng AND ssmsr.no_racik = rrd.no_racik
+                WHERE rp.status_lanjut = 'Ralan' AND ro.tgl_penyerahan <> '0000-00-00' AND rp.tgl_registrasi BETWEEN :df3 AND :dt3
+            )
+            UNION ALL
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    rrd.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_penyerahan, ro.jam_penyerahan, rrd.jml, ssm.id_medication,
+                    rr.aturan_pakai, rr.no_resep, ssmsr.id_medicationstatement,
+                    rrd.no_racik, 'Ranap' as status_lanjut, 1 as is_racikan
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN resep_dokter_racikan rr ON rr.no_resep = ro.no_resep
+                INNER JOIN resep_dokter_racikan_detail rrd ON rrd.no_resep = rr.no_resep AND rrd.no_racik = rr.no_racik
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rrd.kode_brng
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                INNER JOIN satu_sehat_medicationstatement_racikan ssmsr ON ssmsr.no_resep = rrd.no_resep 
+                  AND ssmsr.kode_brng = rrd.kode_brng AND ssmsr.no_racik = rrd.no_racik
+                WHERE rp.status_lanjut = 'Ranap' AND ro.tgl_penyerahan <> '0000-00-00' AND rp.tgl_registrasi BETWEEN :df4 AND :dt4
+            )
+            ORDER BY tgl_registrasi ASC, jam_reg ASC
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute([
+            'df1' => $dateFrom, 'dt1' => $dateTo,
+            'df2' => $dateFrom, 'dt2' => $dateTo,
+            'df3' => $dateFrom, 'dt3' => $dateTo,
+            'df4' => $dateFrom, 'dt4' => $dateTo
+        ]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Save the returned Satu Sehat MedicationStatement ID back to MySQL (handling both racikan and non-racikan).
+     */
+    public function saveMedicationStatement(
+        string $noResep, 
+        string $kodeBrng, 
+        string $noRacik, 
+        string $idMedicationStatement, 
+        bool $isRacikan
+    ): bool {
+        if ($isRacikan) {
+            $sql = "INSERT INTO satu_sehat_medicationstatement_racikan (no_resep, kode_brng, no_racik, id_medicationstatement) 
+                    VALUES (:nr, :kb, :nrc, :id) 
+                    ON DUPLICATE KEY UPDATE id_medicationstatement = :id";
+            $stmt = $this->mysql->prepare($sql);
+            return $stmt->execute([
+                'nr'  => $noResep,
+                'kb'  => $kodeBrng,
+                'nrc' => $noRacik,
+                'id'  => $idMedicationStatement
+            ]);
+        } else {
+            $sql = "INSERT INTO satu_sehat_medicationstatement (no_resep, kode_brng, id_medicationstatement) 
+                    VALUES (:nr, :kb, :id) 
+                    ON DUPLICATE KEY UPDATE id_medicationstatement = :id";
+            $stmt = $this->mysql->prepare($sql);
+            return $stmt->execute([
+                'nr' => $noResep,
+                'kb' => $kodeBrng,
+                'id' => $idMedicationStatement
+            ]);
+        }
     }
 }
