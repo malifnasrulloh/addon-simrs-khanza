@@ -701,4 +701,68 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    /**
+     * Build Medication payload.
+     *
+     * @param string      $orgId         Satu Sehat Organization ID
+     * @param array       $p             Medication data row
+     * @param string|null $idMedication  Existing Medication ID (if updating)
+     * @return array
+     */
+    public static function medication(string $orgId, array $p, ?string $idMedication = null): array
+    {
+        $payload = [
+            'resourceType' => 'Medication',
+            'meta' => [
+                'profile' => ['https://fhir.kemkes.go.id/r4/StructureDefinition/Medication']
+            ],
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/medication/' . $orgId,
+                    'use'    => 'official',
+                    'value'  => $p['kode_brng']
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => $p['obat_system'],
+                        'code'    => $p['obat_code'],
+                        'display' => $p['obat_display']
+                    ]
+                ]
+            ],
+            'status' => $p['status'] === '0' ? 'inactive' : 'active',
+            'form' => [
+                'coding' => [
+                    [
+                        'system'  => $p['form_system'],
+                        'code'    => $p['form_code'],
+                        'display' => $p['form_display']
+                    ]
+                ]
+            ],
+            'extension' => [
+                [
+                    'url' => 'https://fhir.kemkes.go.id/r4/StructureDefinition/MedicationType',
+                    'valueCodeableConcept' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://terminology.kemkes.go.id/CodeSystem/medication-type',
+                                'code'    => 'NC',
+                                'display' => 'Non-compound'
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ];
+
+        if ($idMedication) {
+            $payload['id'] = $idMedication;
+        }
+
+        return $payload;
+    }
 }

@@ -478,4 +478,33 @@ php satusehat_immunization_sync.php --verbose
 */5 * * * * cd /path/to/php-service && php satusehat_immunization_sync.php >> /dev/null 2>&1
 ```
 
+---
+
+# Satu Sehat Medication Sync Service (PHP)
+
+PHP CLI script to automatically synchronize drug/medication master inventory mapping data with the Satu Sehat API.
+It maps hospital-mapped drug items from the `satu_sehat_mapping_obat` and `databarang` tables into standard FHIR `Medication` resource profiles.
+
+## Features
+
+- **Inventory-wide POST & PUT**: Resolves and syncs all local drug items that are mapped for Satu Sehat. Automatically POSTs new medications and updates status for already-synced ones using PUT.
+- **NC Extension (Non-Compound)**: Automatically includes the mandatory StructureDefinition extension identifying the medications as non-compound drugs.
+- **Resilient Duplicate Resolution**: Gracefully catches duplicate registration conflicts by looking up `http://sys-ids.kemkes.go.id/medication/{orgId}|{kode_brng}` on Satu Sehat to automatically adopt and heal the local database's Medication ID mapping.
+
+## Quick Start
+
+```bash
+# 1. Run in verbose mode to view synchronization logs
+php satusehat_medication_sync.php --verbose
+```
+
+## Cron Setup
+
+Master-data changes occur infrequently compared to patient transactions. Running the synchronization hourly is highly recommended:
+
+```bash
+0 * * * * cd /path/to/php-service && php satusehat_medication_sync.php >> /dev/null 2>&1
+```
+
+
 

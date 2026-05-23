@@ -83,6 +83,13 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for Medication state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS medication_state (
+            kode_brng VARCHAR(50) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -956,6 +963,82 @@ class SatuSehatDatabase
             'no_batch'  => $noBatch,
             'no_faktur' => $noFaktur,
             'id'        => $idImmunization
+        ]);
+    }
+
+    // ─── MEDICATION STATE TRACKING ──────────────────────────────────────────────
+
+    public function getMedicationLocalState(string $kodeBrng): ?string
+    {
+        $stmt = $this->sqlite->prepare("SELECT status FROM medication_state WHERE kode_brng = :kb");
+        $stmt->execute(['kb' => $kodeBrng]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateMedicationLocalState(string $kodeBrng, string $status): void
+    {
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO medication_state (kode_brng, status, updated_at) 
+            VALUES (:kb, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(kode_brng) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['kb' => $kodeBrng, 'st' => $status]);
+    }
+
+    // ─── MEDICATION MYSQL OPERATIONS ────────────────────────────────────────────
+
+    /**
+     * Fetch pending medications that do not have an id_medication yet.
+     */
+    public function fetchPendingMedicationActive(): array
+    {
+        $sql = "
+            SELECT 
+                ssmo.obat_code, ssmo.obat_system, db.status,
+                ssmo.kode_brng, ssmo.obat_display, ssmo.form_code,
+                ssmo.form_system, ssmo.form_display, 
+                IFNULL(ssm.id_medication, '') as id_medication
+            FROM satu_sehat_mapping_obat ssmo
+            INNER JOIN databarang db ON ssmo.kode_brng = db.kode_brng
+            LEFT JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+            WHERE ssm.id_medication IS NULL OR ssm.id_medication = ''
+        ";
+        $stmt = $this->mysql->query($sql);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Fetch all medications that already have an id_medication (for update verification).
+     */
+    public function fetchPendingMedicationUpdate(): array
+    {
+        $sql = "
+            SELECT 
+                ssmo.obat_code, ssmo.obat_system, db.status,
+                ssmo.kode_brng, ssmo.obat_display, ssmo.form_code,
+                ssmo.form_system, ssmo.form_display, 
+                ssm.id_medication
+            FROM satu_sehat_mapping_obat ssmo
+            INNER JOIN databarang db ON ssmo.kode_brng = db.kode_brng
+            INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+        ";
+        $stmt = $this->mysql->query($sql);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Save the returned Satu Sehat Medication ID back to MySQL.
+     */
+    public function saveMedication(string $kodeBrng, string $idMedication): bool
+    {
+        $sql = "INSERT INTO satu_sehat_medication (kode_brng, id_medication) 
+                VALUES (:kb, :id) 
+                ON DUPLICATE KEY UPDATE id_medication = :id";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'kb' => $kodeBrng,
+            'id' => $idMedication
         ]);
     }
 }
