@@ -287,14 +287,11 @@ SQL;
 
     /**
      * Get task 3 waktu:
-     *  1. Try mutasi_berkas.dikirim (real check-in file transfer time)
-     *  2. Fallback: use jam_reg (actual registration time — unique per patient)
-     *
-     * This is the NON-JKN task 3 source and also the fallback for JKN.
+     * Strictly uses mutasi_berkas.dikirim (real check-in file transfer time).
+     * If not checked in, returns an empty string to pause task chain execution.
      */
     public function resolveTask3Waktu(string $noRawat, string $tglRegistrasi, string $jamMulai): string
     {
-        // Step 1: Try mutasi_berkas.dikirim (Java ANTROL-ROBOT.JAVA line 751)
         $sql = "SELECT dikirim FROM mutasi_berkas WHERE no_rawat = :nr AND dikirim <> '0000-00-00 00:00:00' LIMIT 1";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute(['nr' => $noRawat]);
@@ -303,59 +300,16 @@ SQL;
         if (!empty($dikirim) && !str_starts_with($dikirim, '0000')) {
             return $dikirim;
         }
-
-        // Step 2: Fallback — use jam_reg (actual registration time)
-        // Each patient has a unique jam_reg, no artificial polyclinic-open grouping
-        $sql2 = "SELECT CONCAT(:tgl, ' ', jam_reg) as waktu FROM reg_periksa WHERE no_rawat = :nr";
-        $stmt = $this->pdo->prepare($sql2);
-        $stmt->execute(['tgl' => $tglRegistrasi, 'nr' => $noRawat]);
-        $row = $stmt->fetch();
-        return $row['waktu'] ?? '';
+        return '';
     }
 
     /**
      * Get task 3 waktu for JKN patients.
-     * Enforces check-in gates (digital check-in, physical mutasi_berkas, or SEP bridging presence).
-     * If no check-in is detected, returns an empty string to pause task chain execution.
+     * Exclusively uses mutasi_berkas.dikirim to align with Java robot's strict physical check-in gate.
      */
     public function resolveTask3WaktuJkn(string $noRawat, string $tglRegistrasi, string $jamMulai): string
     {
-        // 1. Digital check-in via Mobile JKN app
-        $sql = "SELECT validasi, status FROM referensi_mobilejkn_bpjs WHERE no_rawat = :nr LIMIT 1";
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['nr' => $noRawat]);
-        $row = $stmt->fetch();
-        $validasi = $row['validasi'] ?? '';
-        $status   = $row['status'] ?? '';
-        if ($status === 'Checkin' && !empty($validasi) && !str_starts_with($validasi, '0000')) {
-            return $validasi;
-        }
-
-        // 2. Physical check-in at counter (medical record file sent)
-        $sql2 = "SELECT dikirim FROM mutasi_berkas WHERE no_rawat = :nr AND dikirim <> '0000-00-00 00:00:00' LIMIT 1";
-        $stmt2 = $this->pdo->prepare($sql2);
-        $stmt2->execute(['nr' => $noRawat]);
-        $row2 = $stmt2->fetch();
-        $dikirim = $row2['dikirim'] ?? '';
-        if (!empty($dikirim) && !str_starts_with($dikirim, '0000')) {
-            return $dikirim;
-        }
-
-        // 3. Bridging SEP check (proves registration has been processed)
-        $sql3 = "SELECT tglsep FROM bridging_sep WHERE no_rawat = :nr LIMIT 1";
-        $stmt3 = $this->pdo->prepare($sql3);
-        $stmt3->execute(['nr' => $noRawat]);
-        if ($stmt3->fetch() !== false) {
-            // Fallback to reg_periksa.jam_reg as we are sure patient is registered/checked-in
-            $sql4 = "SELECT CONCAT(:tgl, ' ', jam_reg) as waktu FROM reg_periksa WHERE no_rawat = :nr";
-            $stmt4 = $this->pdo->prepare($sql4);
-            $stmt4->execute(['tgl' => $tglRegistrasi, 'nr' => $noRawat]);
-            $row4 = $stmt4->fetch();
-            return $row4['waktu'] ?? '';
-        }
-
-        // Neither digital nor physical check-in detected yet
-        return '';
+        return $this->resolveTask3Waktu($noRawat, $tglRegistrasi, $jamMulai);
     }
 
     /**
