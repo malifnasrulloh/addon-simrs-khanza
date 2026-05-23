@@ -28,14 +28,20 @@ if ($tz = getenv('TZ')) {
     date_default_timezone_set($tz);
 }
 
-define('WL_DIR',               '/var/lib/orthanc/worklists/');
-define('DUMP2DCM',             '/usr/bin/dump2dcm');
-define('TMP_DIR',              '/tmp/mwl_dump/');
-define('AET_JSON',             __DIR__ . '/modality_aet.json');
+define('WL_DIR',                '/var/lib/orthanc/worklists/');
+define('DUMP2DCM',              '/usr/bin/dump2dcm');
+define('TMP_DIR',               '/tmp/mwl_dump/');
+define('MODALITY_MAP_JSON',     __DIR__ . '/modality_mapping.json');
 define('DASHBOARD_REFRESH_SEC', (int)(getenv('MWL_DASHBOARD_REFRESH_SEC') ?: getenv('MWL_RELOAD_SEC') ?: 300));
-define('STALE_DAYS',           (int)(getenv('MWL_STALE_DAYS') ?: 2));
-define('DEFAULT_AET',          'ORTHANC');
-define('DICOM_UID_ROOT',       getenv('DICOM_UID_ROOT') ?: '2.25');
+define('STALE_DAYS',            (int)(getenv('MWL_STALE_DAYS') ?: 2));
+define('DEFAULT_AET',           'ORTHANC');
+define('DICOM_UID_ROOT',        getenv('DICOM_UID_ROOT') ?: '2.25');
+define('INSTITUTION_NAME',      getenv('MWL_INSTITUTION_NAME') ?: '');
+
+// MWL SOP Class UID (Modality Worklist Information Model - FIND)
+define('MWL_SOP_CLASS_UID',     '1.2.840.10008.5.1.4.31');
+// Explicit VR Little Endian Transfer Syntax
+define('EXPLICIT_VR_LE',        '1.2.840.10008.1.2.1');
 
 // ============================================================
 // Authentication (Web Mode Only)
@@ -69,10 +75,6 @@ if (!is_dir(TMP_DIR)) {
  * Uses the configurable OID root (default: 2.25 per DICOM PS3.5 Annex B)
  * combined with date and a CRC32 hash to ensure uniqueness while remaining
  * idempotent for the same input seed.
- *
- * @param string $seed Unique identifier (e.g., order number + procedure code)
- * @param string $date Date string (YYYY-MM-DD)
- * @return string DICOM-compliant UID (max 64 characters)
  */
 function generateStudyUid(string $seed, string $date): string {
     $root     = DICOM_UID_ROOT;
@@ -80,15 +82,14 @@ function generateStudyUid(string $seed, string $date): string {
     $hashPart = sprintf('%010u', abs(crc32($seed)));
     $uid      = "{$root}.{$datePart}.{$hashPart}";
 
-    // DICOM UIDs must not exceed 64 characters
     return substr($uid, 0, 64);
 }
 
 /**
  * Map Indonesian sex code to DICOM Patient Sex (PS3.3 C.7.1.1).
  */
-function mapSex(string $jk): string {
-    return match (strtoupper(trim($jk))) {
+function mapSex(?string $jk): string {
+    return match (strtoupper(trim($jk ?? ''))) {
         'L'     => 'M',
         'P'     => 'F',
         default => 'O',
@@ -97,16 +98,127 @@ function mapSex(string $jk): string {
 
 /**
  * Sanitize a string to ASCII-only for DICOM compliance.
+ * Returns empty string for null/empty input.
  */
-function dicomSanitize(string $value, int $maxLen = 64): string {
-    $ascii = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', strtoupper($value));
-    return substr($ascii, 0, $maxLen);
+function dicomSanitize(?string $value, int $maxLen = 64): string {
+    if ($value === null || trim($value) === '' || trim($value) === '-') {
+        return '';
+    }
+    $ascii = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', strtoupper(trim($value)));
+    return substr($ascii ?: '', 0, $maxLen);
+}
+
+/**
+ * Format a date value to DICOM DA format (YYYYMMDD).
+ * Returns empty string for null/empty/invalid dates.
+ */
+function dicomDate(?string $date): string {
+    if (empty($date) || $date === '0000-00-00') {
+        return '';
+    }
+    return str_replace('-', '', $date);
+}
+
+/**
+ * Format a time value to DICOM TM format (HHMMSS, exactly 6 digits).
+ * Handles edge cases: null, empty, midnight (00:00:00).
+ */
+function dicomTime(?string $time): string {
+    if (empty($time) || $time === '00:00:00') {
+        return '000000';
+    }
+    $clean = str_replace(':', '', $time);
+    // Pad to ensure at least 6 digits (HHMMSS)
+    $clean = str_pad($clean, 6, '0');
+    return substr($clean, 0, 6);
+}
+
+/**
+ * Load the consolidated modality configuration from modality_mapping.json.
+ *
+ * Returns an array with two keys:
+ *   - 'procedures'  : kd_jenis_prw => ['modality' => 'XR', 'aet' => 'CR_STATION' (optional)]
+ *   - 'default_aet'  : modality_code => AE Title (e.g., 'CR' => 'CR_STATION')
+ */
+function loadModalityConfig(): array {
+    $config = ['procedures' => [], 'default_aet' => []];
+
+    if (!file_exists(MODALITY_MAP_JSON)) {
+        return $config;
+    }
+    $data = json_decode(file_get_contents(MODALITY_MAP_JSON), true);
+    if (!is_array($data)) {
+        return $config;
+    }
+
+    // Load default AET per modality
+    if (!empty($data['default_aet']) && is_array($data['default_aet'])) {
+        $config['default_aet'] = $data['default_aet'];
+    }
+
+    // Load procedure-to-modality mapping
+    if (!empty($data['mapping']) && is_array($data['mapping'])) {
+        foreach ($data['mapping'] as $entry) {
+            if (!empty($entry['kd_jenis_prw']) && !empty($entry['modality'])) {
+                $config['procedures'][$entry['kd_jenis_prw']] = [
+                    'modality' => strtoupper($entry['modality']),
+                    'aet'      => $entry['aet'] ?? null,
+                ];
+            }
+        }
+    }
+
+    return $config;
+}
+
+/**
+ * Detect DICOM modality for a procedure.
+ *
+ * Resolution order:
+ *   1. Exact match from modality_mapping.json (by kd_jenis_prw)
+ *   2. Explicit parenthesized code in procedure name, e.g. "(CR)"
+ *   3. Keyword-based detection from procedure name
+ *   4. Default: CR (conventional radiography)
+ */
+function detectModality(string $kdJenisPrw, string $procedureName, array $procedureMap): string {
+    // 1. Exact match from mapping file (most reliable)
+    if (isset($procedureMap[$kdJenisPrw])) {
+        return $procedureMap[$kdJenisPrw]['modality'];
+    }
+
+    // 2. Check for explicit modality code in parentheses: "THORAX AP (CR)"
+    if (preg_match('/\(([A-Z]{2,3})\)\s*$/', $procedureName, $m)) {
+        return strtoupper($m[1]);
+    }
+
+    $upper = strtoupper($procedureName);
+
+    // 3. Keyword-based detection
+    if (str_starts_with($upper, 'USG ') || str_starts_with($upper, 'ULTRASO')) {
+        return 'US';
+    }
+    if (str_starts_with($upper, 'CT ') || str_contains($upper, 'CT SCAN')) {
+        return 'CT';
+    }
+    if (str_starts_with($upper, 'MRI') || str_contains($upper, 'MAGNETIC')) {
+        return 'MR';
+    }
+    if (str_contains($upper, 'MAMMAE') || str_contains($upper, 'MAMMOGRA') || str_contains($upper, 'MAMMA ')) {
+        return 'MG';
+    }
+    if (str_contains($upper, 'PANORAMI') || str_contains($upper, 'CEPHA')) {
+        return 'DX';
+    }
+    if (str_contains($upper, 'FLUOROSC')) {
+        return 'RF';
+    }
+
+    // 4. Default: CR for conventional radiography
+    return 'CR';
 }
 
 /**
  * Remove stale worklist files older than STALE_DAYS.
- *
- * @return int Number of files removed
  */
 function cleanStaleWorklists(): int {
     $count     = 0;
@@ -132,7 +244,14 @@ function cleanStaleWorklists(): int {
 /**
  * Query SIMRS Khanza for radiology orders and generate DICOM MWL files.
  *
- * @return array|null Results array with logs, stats, and timestamp; null on DB error.
+ * Produces a complete DICOM dump including:
+ * - File Meta Information (Group 0002)
+ * - Patient Module (Group 0010)
+ * - General Study Module (Group 0008/0020)
+ * - Requested Procedure Module (Group 0032/0040)
+ * - Scheduled Procedure Step Sequence (0040,0100)
+ *
+ * @return array|null Results with logs, stats, and timestamp; null on DB error.
  */
 function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $dbPass, string $dbName): ?array {
     // --- Database Connection ---
@@ -154,19 +273,19 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
     // --- Stale Cleanup ---
     $stats['cleaned'] = cleanStaleWorklists();
 
-    // --- Load Modality AET Map ---
-    $modalityMap = [];
-    if (file_exists(AET_JSON)) {
-        $modalityMap = json_decode(file_get_contents(AET_JSON), true) ?? [];
-    }
+    // --- Load Modality Configuration ---
+    $modalityConfig = loadModalityConfig();
 
     // --- Query Radiology Orders ---
+    // Matches the original SIMRS Khanza query structure with penjab JOIN
     $sql = "SELECT p.noorder, p.no_rawat, r.no_rkm_medis, ps.nm_pasien,
                    ps.tgl_lahir, ps.jk,
                    j.kd_jenis_prw, j.nm_perawatan,
-                   p.tgl_permintaan, p.jam_permintaan,
+                   p.tgl_permintaan,
+                   IF(p.jam_permintaan='00:00:00', '', p.jam_permintaan) AS jam_permintaan,
                    p.dokter_perujuk, d.nm_dokter,
-                   pl.nm_poli, p.diagnosa_klinis
+                   pl.nm_poli, p.diagnosa_klinis,
+                   r.kd_pj, pj.png_jawab
             FROM permintaan_radiologi p
             INNER JOIN reg_periksa r ON p.no_rawat = r.no_rawat
             INNER JOIN pasien ps ON r.no_rkm_medis = ps.no_rkm_medis
@@ -174,6 +293,7 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
             INNER JOIN jns_perawatan_radiologi j ON j.kd_jenis_prw = pr.kd_jenis_prw
             INNER JOIN dokter d ON p.dokter_perujuk = d.kd_dokter
             INNER JOIN poliklinik pl ON r.kd_poli = pl.kd_poli
+            INNER JOIN penjab pj ON r.kd_pj = pj.kd_pj
             WHERE p.tgl_permintaan >= CURDATE() - INTERVAL 1 DAY
             ORDER BY p.tgl_permintaan DESC, p.jam_permintaan DESC";
 
@@ -181,37 +301,60 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
 
     while ($row = $stmt->fetch()) {
         // --- File Identifiers ---
-        $fileId   = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $row['noorder'] . '_' . $row['kd_jenis_prw']);
-        $wlFile   = WL_DIR . $fileId . '.wl';
-        $dumpFile = TMP_DIR . $fileId . '.dump';
+        // Match original: strip "PR" prefix, concatenate noorder + kd_jenis_prw
+        $noorder  = str_replace('PR', '', $row['noorder'] . $row['kd_jenis_prw']);
+        $noorder  = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $noorder);
+        $wlFile   = WL_DIR . $noorder . '.wl';
+        $dumpFile = TMP_DIR . $noorder . '.dump';
 
         if (file_exists($wlFile)) {
             $stats['skip']++;
-            $logs[] = ['status' => 'skip', 'noorder' => $row['noorder'], 'pasien' => $row['nm_pasien'], 'pesan' => 'Existing'];
+            $logs[] = [
+                'status'  => 'skip',
+                'noorder' => $row['noorder'],
+                'pasien'  => $row['nm_pasien'],
+                'pesan'   => 'File .wl sudah ada, dilewati',
+            ];
             continue;
         }
 
-        // --- Modality Detection ---
-        $modality = 'OT';
-        if (preg_match('/\(([A-Z]{2,3})\)\s*$/', $row['nm_perawatan'], $m)) {
-            $modality = strtoupper($m[1]);
-        }
-        $stationAet = $modalityMap[$modality]['aet'] ?? DEFAULT_AET;
+        // --- Modality & Station AET Resolution ---
+        $modality   = detectModality($row['kd_jenis_prw'], $row['nm_perawatan'], $modalityConfig['procedures']);
+        $stationAet = $modalityConfig['procedures'][$row['kd_jenis_prw']]['aet']  // 1. Per-procedure AET
+                   ?? $modalityConfig['default_aet'][$modality]                    // 2. Per-modality default AET
+                   ?? DEFAULT_AET;                                                 // 3. Global fallback
 
         // --- Prepare DICOM Values ---
         $nmPasien    = dicomSanitize($row['nm_pasien']);
         $nmDokter    = dicomSanitize($row['nm_dokter']);
-        $accession   = substr($row['noorder'], 0, 16);
-        $studyUid    = generateStudyUid($row['noorder'] . '|' . $row['kd_jenis_prw'], $row['tgl_permintaan']);
-        $spsDate     = str_replace('-', '', $row['tgl_permintaan']);
-        $spsTime     = str_replace(':', '', $row['jam_permintaan']);
-        $birthDate   = !empty($row['tgl_lahir']) ? str_replace('-', '', $row['tgl_lahir']) : '';
+        $nmPerawatan = dicomSanitize($row['nm_perawatan']);
+        $nmPoli      = dicomSanitize($row['nm_poli']);
+        $diagnosa    = dicomSanitize($row['diagnosa_klinis']);
+        $birthDate   = dicomDate($row['tgl_lahir'] ?? '');
         $patientSex  = mapSex($row['jk'] ?? '');
-        $procDesc    = dicomSanitize($row['nm_perawatan']);
-        $spsId       = substr($fileId, 0, 16);
+        $studyUid    = generateStudyUid($noorder, $row['tgl_permintaan']);
+        $tglDicom    = dicomDate($row['tgl_permintaan']);
+        $jamDicom    = dicomTime($row['jam_permintaan'] ?? '');
 
-        // --- Build DICOM Dump (Full MWL-compliant) ---
-        $dump  = "";
+        // --- Build DICOM Dump ---
+        // File Meta Information (Group 0002) — required for valid DICOM files
+        $dump  = "# Dicom-File-Meta\n\n";
+        $dump .= "(0002,0000) UL 0\n";
+        $dump .= "(0002,0001) OB 00\\01\n";
+        $dump .= "(0002,0002) UI [" . MWL_SOP_CLASS_UID . "]\n";
+        $dump .= "(0002,0003) UI [{$studyUid}]\n";
+        $dump .= "(0002,0010) UI [" . EXPLICIT_VR_LE . "]\n";
+
+        $dump .= "\n# Dicom-Data-Set\n\n";
+
+        // Specific Character Set — tells DICOM readers this is ASCII
+        $dump .= "(0008,0005) CS [ISO_IR 6]\n";
+
+        // Accession Number — matches original: uses noorder as accession
+        $dump .= "(0008,0050) SH [{$noorder}]\n";
+
+        // Referring Physician's Name
+        $dump .= "(0008,0090) PN [{$nmDokter}]\n";
 
         // Patient Module
         $dump .= "(0010,0010) PN [{$nmPasien}]\n";
@@ -219,39 +362,55 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $dump .= "(0010,0030) DA [{$birthDate}]\n";
         $dump .= "(0010,0040) CS [{$patientSex}]\n";
 
-        // General Study Module
+        // Study Instance UID
         $dump .= "(0020,000d) UI [{$studyUid}]\n";
-        $dump .= "(0008,0050) SH [{$accession}]\n";
-        $dump .= "(0008,0090) PN [{$nmDokter}]\n";
 
-        // Requested Procedure Module
-        $dump .= "(0032,1060) LO [{$procDesc}]\n";
-        $dump .= "(0040,1001) SH [{$accession}]\n";
+        // Requested Procedure Description
+        $dump .= "(0032,1060) LO [{$nmPerawatan}]\n";
 
-        // Scheduled Procedure Step Sequence
+        // Requested Procedure ID — matches original: uses noorder
+        $dump .= "(0040,1001) SH [{$noorder}]\n";
+
+        // Reason for Requested Procedure — clinical diagnosis
+        $dump .= "(0040,1002) LO [{$diagnosa}]\n";
+
+        // Scheduled Procedure Step Sequence (0040,0100)
         $dump .= "(0040,0100) SQ\n";
-        $dump .= "(fffe,e000) na\n";
+        $dump .= "(fffe,e000) -\n";
         $dump .= "(0008,0060) CS [{$modality}]\n";
         $dump .= "(0040,0001) AE [{$stationAet}]\n";
-        $dump .= "(0040,0002) DA [{$spsDate}]\n";
-        $dump .= "(0040,0003) TM [{$spsTime}]\n";
-        $dump .= "(0040,0007) LO [{$procDesc}]\n";
-        $dump .= "(0040,0009) SH [{$spsId}]\n";
-        $dump .= "(fffe,e00d) na\n";
-        $dump .= "(fffe,e0dd) na\n";
+        $dump .= "(0040,0002) DA [{$tglDicom}]\n";
+        $dump .= "(0040,0003) TM [{$jamDicom}]\n";
+        $dump .= "(0040,0006) PN [{$nmDokter}]\n";
+        $dump .= "(0040,0007) LO [{$nmPerawatan}]\n";
+        $dump .= "(0040,0009) SH [{$noorder}]\n";
+        $dump .= "(0040,0010) SH [{$nmPoli}]\n";
+        $dump .= "(fffe,e00d) -\n";
+        $dump .= "(fffe,e0dd) -\n";
 
         // --- Convert to DICOM ---
         file_put_contents($dumpFile, $dump);
-        $cmd    = DUMP2DCM . " " . escapeshellarg($dumpFile) . " " . escapeshellarg($wlFile) . " 2>&1";
+        $cmd    = 'LD_LIBRARY_PATH=/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu '
+                . DUMP2DCM . ' ' . escapeshellarg($dumpFile) . ' ' . escapeshellarg($wlFile) . ' 2>&1';
         $output = shell_exec($cmd);
 
         if (file_exists($wlFile)) {
             $stats['ok']++;
-            $logs[] = ['status' => 'ok', 'noorder' => $row['noorder'], 'pasien' => $row['nm_pasien'], 'pesan' => $modality];
+            $logs[] = [
+                'status'  => 'ok',
+                'noorder' => $row['noorder'],
+                'pasien'  => $row['nm_pasien'],
+                'pesan'   => "Modality: {$modality} | AET: {$stationAet}",
+            ];
         } else {
             $stats['fail']++;
             error_log("MWL dump2dcm failed [{$row['noorder']}]: {$output}");
-            $logs[] = ['status' => 'fail', 'noorder' => $row['noorder'], 'pasien' => $row['nm_pasien'], 'pesan' => 'DCM Error'];
+            $logs[] = [
+                'status'  => 'fail',
+                'noorder' => $row['noorder'],
+                'pasien'  => $row['nm_pasien'],
+                'pesan'   => 'dump2dcm error: ' . trim($output ?? ''),
+            ];
         }
 
         if (file_exists($dumpFile)) {
@@ -310,16 +469,8 @@ $data = generate_mwl($dbHost, $dbPort, $dbUser, $dbPass, $dbName);
             padding: 24px;
             line-height: 1.6;
         }
-        h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            margin-bottom: 6px;
-        }
-        .subtitle {
-            color: var(--muted);
-            font-size: 0.85rem;
-            margin-bottom: 20px;
-        }
+        h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 6px; }
+        .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
         .stats {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -333,10 +484,7 @@ $data = generate_mwl($dbHost, $dbPort, $dbUser, $dbPass, $dbName);
             padding: 16px;
             text-align: center;
         }
-        .stat-card .value {
-            font-size: 2rem;
-            font-weight: 700;
-        }
+        .stat-card .value { font-size: 2rem; font-weight: 700; }
         .stat-card .label {
             font-size: 0.75rem;
             color: var(--muted);
@@ -347,6 +495,7 @@ $data = generate_mwl($dbHost, $dbPort, $dbUser, $dbPass, $dbName);
         .stat-skip .value { color: var(--skip); }
         .stat-fail .value { color: var(--fail); }
         .stat-clean .value { color: var(--accent); }
+        .stat-total .value { color: #3b82f6; }
         table {
             width: 100%;
             border-collapse: collapse;
@@ -371,6 +520,7 @@ $data = generate_mwl($dbHost, $dbPort, $dbUser, $dbPass, $dbName);
             font-size: 0.9rem;
         }
         tr:last-child td { border-bottom: none; }
+        tr:hover td { background: rgba(108, 138, 255, 0.04); }
         .badge {
             display: inline-block;
             padding: 2px 10px;
@@ -392,58 +542,77 @@ $data = generate_mwl($dbHost, $dbPort, $dbUser, $dbPass, $dbName);
         .footer a { color: var(--accent); text-decoration: none; }
         .footer a:hover { text-decoration: underline; }
         .empty { text-align: center; padding: 40px; color: var(--muted); }
+        .countdown { color: var(--muted); font-size: 0.75rem; margin-top: 10px; text-align: right; }
     </style>
 </head>
 <body>
     <h1>📡 MWL Dashboard</h1>
     <p class="subtitle">
-        Last sync: <?= htmlspecialchars($data['waktu'] ?? '-') ?>
-        &nbsp;·&nbsp; Auto-refresh: <?= DASHBOARD_REFRESH_SEC ?>s
+        Diproses pada: <?= htmlspecialchars($data['waktu'] ?? '-') ?>
+        &nbsp;·&nbsp; Auto-reload setiap <?= (int)(DASHBOARD_REFRESH_SEC / 60) ?> menit
     </p>
 
     <div class="stats">
+        <div class="stat-card stat-total">
+            <div class="value"><?= count($data['logs'] ?? []) ?></div>
+            <div class="label">Total Diproses</div>
+        </div>
         <div class="stat-card stat-ok">
             <div class="value"><?= $data['stats']['ok'] ?? 0 ?></div>
-            <div class="label">Generated</div>
+            <div class="label">Berhasil</div>
         </div>
         <div class="stat-card stat-skip">
             <div class="value"><?= $data['stats']['skip'] ?? 0 ?></div>
-            <div class="label">Skipped</div>
+            <div class="label">Dilewati</div>
         </div>
         <div class="stat-card stat-fail">
             <div class="value"><?= $data['stats']['fail'] ?? 0 ?></div>
-            <div class="label">Failed</div>
+            <div class="label">Gagal</div>
         </div>
         <div class="stat-card stat-clean">
             <div class="value"><?= $data['stats']['cleaned'] ?? 0 ?></div>
-            <div class="label">Cleaned</div>
+            <div class="label">Dibersihkan</div>
         </div>
     </div>
 
-    <?php if (!empty($data['logs'])): ?>
+    <?php if (empty($data['logs'])): ?>
+    <div class="empty">Tidak ada permintaan radiologi yang diproses saat ini.</div>
+    <?php else: ?>
     <table>
         <thead>
-            <tr><th>No Order</th><th>Pasien</th><th>Info</th><th>Status</th></tr>
+            <tr>
+                <th>#</th>
+                <th>No. Order</th>
+                <th>Nama Pasien</th>
+                <th>Status</th>
+                <th>Keterangan</th>
+            </tr>
         </thead>
         <tbody>
-            <?php foreach ($data['logs'] as $log): ?>
+            <?php foreach ($data['logs'] as $i => $log): ?>
             <tr>
+                <td><?= $i + 1 ?></td>
                 <td><?= htmlspecialchars($log['noorder']) ?></td>
                 <td><?= htmlspecialchars($log['pasien']) ?></td>
-                <td><?= htmlspecialchars($log['pesan']) ?></td>
                 <td><span class="badge badge-<?= htmlspecialchars($log['status']) ?>"><?= htmlspecialchars(strtoupper($log['status'])) ?></span></td>
+                <td><?= htmlspecialchars($log['pesan']) ?></td>
             </tr>
             <?php endforeach; ?>
         </tbody>
     </table>
-    <?php else: ?>
-    <div class="empty">No worklist entries for today.</div>
     <?php endif; ?>
+
+    <p class="countdown">Halaman akan reload otomatis dalam <span id="cd"><?= DASHBOARD_REFRESH_SEC ?></span> detik</p>
 
     <div class="footer">
         Orthanc PACS MWL Sync · Based on
         <a href="https://github.com/mas-elkhanza/SIMRS-Khanza/" target="_blank" rel="noopener">SIMRS Khanza</a>
         by mas-elkhanza
     </div>
+
+    <script>
+    var s = <?= DASHBOARD_REFRESH_SEC ?>;
+    setInterval(function(){ s--; document.getElementById('cd').innerText = s; }, 1000);
+    </script>
 </body>
 </html>

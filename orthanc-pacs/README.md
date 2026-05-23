@@ -98,6 +98,7 @@ All configuration is managed through the `.env` file — no need to enter any co
 | `MWL_SYNC_INTERVAL` | Seconds between sync cycles | `10` |
 | `MWL_DASHBOARD_REFRESH_SEC` | Dashboard auto-refresh interval (seconds) | `300` |
 | `MWL_STALE_DAYS` | Days to keep old worklist files | `2` |
+| `MWL_INSTITUTION_NAME` | Hospital/institution name for DICOM metadata | *(empty)* |
 | `DICOM_UID_ROOT` | OID root for DICOM UID generation | `2.25` |
 
 ### General

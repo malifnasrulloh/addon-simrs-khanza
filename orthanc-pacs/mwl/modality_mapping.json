@@ -1,0 +1,214 @@
+{
+	"default_aet": {
+		"CR": "CR_STATION",
+		"XR": "CR_STATION",
+		"US": "USG_STATION",
+		"CT": "CT_STATION",
+		"MR": "MR_STATION",
+		"MG": "MG_STATION",
+		"DX": "DR_STATION",
+		"RF": "RF_STATION"
+	},
+	"mapping": [
+		{
+			"kd_jenis_prw": "J000021",
+			"nm_perawatan": "Antebracii AP + Lateral (2 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000039",
+			"nm_perawatan": "Ankle AP + Lateral (2 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000094",
+			"nm_perawatan": "USG Lower Abdomen",
+			"modality": "US"
+		},
+		{
+			"kd_jenis_prw": "J000093",
+			"nm_perawatan": "USG Upper Abdomen",
+			"modality": "US"
+		},
+		{
+			"kd_jenis_prw": "J000092",
+			"nm_perawatan": "USG Whole Abdomen",
+			"modality": "US"
+		},
+		{
+			"kd_jenis_prw": "J000024",
+			"nm_perawatan": "LLD",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000029",
+			"nm_perawatan": "Clavicula AP",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000035",
+			"nm_perawatan": "Manus AP + Lateral (2 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000022",
+			"nm_perawatan": "BOF",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000038",
+			"nm_perawatan": "Genu AP + Lateral (2 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000007",
+			"nm_perawatan": "Nassal",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000025",
+			"nm_perawatan": "Pelvis AP",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000030",
+			"nm_perawatan": "Scapula AP",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000028",
+			"nm_perawatan": "Skull Lateral",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000009",
+			"nm_perawatan": "Vertebrae Cervical AP",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000011",
+			"nm_perawatan": "Vertebrae Cervical Lateral",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000016",
+			"nm_perawatan": "Vertebrae Lumbo Sacral Lateral",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000006",
+			"nm_perawatan": "Mandibulla Sinistra",
+			"modality": "MR"
+		},
+		{
+			"kd_jenis_prw": "J000005",
+			"nm_perawatan": "Mandibulla Dextra",
+			"modality": "MR"
+		},
+		{
+			"kd_jenis_prw": "J000097",
+			"nm_perawatan": "USG Testis / Scrotum",
+			"modality": "US"
+		},
+		{
+			"kd_jenis_prw": "J000096",
+			"nm_perawatan": "USG Thyroid",
+			"modality": "US"
+		},
+		{
+			"kd_jenis_prw": "J000032",
+			"nm_perawatan": "Humerus AP + Lateral (2 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000017",
+			"nm_perawatan": "Vertebrae Thoracal AP",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000020",
+			"nm_perawatan": "Vertebrae Thoracal Lateral",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000019",
+			"nm_perawatan": "Vertebrae Thoracal AP + Lateral + Obliq (4 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000012",
+			"nm_perawatan": "Vertebrae Cervical AP + Lateral + Obliq (4 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000015",
+			"nm_perawatan": "Vertebrae Lumbo Sacral AP + Lateral + Obliq (4 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000001",
+			"nm_perawatan": "Thorax AP",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000037",
+			"nm_perawatan": "Femur AP + Lateral (2 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000031",
+			"nm_perawatan": "Shoulder AP + Lateral (2 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000033",
+			"nm_perawatan": "Cubiti AP + Lateral (2 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000023",
+			"nm_perawatan": "Cruris AP + Lateral (2 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000008",
+			"nm_perawatan": "Waters",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000034",
+			"nm_perawatan": "Wrist AP + Lateral (2 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000013",
+			"nm_perawatan": "Vertebrae Lumbo Sacral AP",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000002",
+			"nm_perawatan": "Thorax Lateral",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000040",
+			"nm_perawatan": "Pedis AP + Lateral (2 sisi)",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000004",
+			"nm_perawatan": "Thorax Decubitus",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000026",
+			"nm_perawatan": "Skull AP",
+			"modality": "XR"
+		},
+		{
+			"kd_jenis_prw": "J000095",
+			"nm_perawatan": "USG Mamma Dex - Sin",
+			"modality": "US"
+		}
+	]
+}
