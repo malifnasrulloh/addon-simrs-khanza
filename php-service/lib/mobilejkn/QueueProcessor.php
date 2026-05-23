@@ -101,6 +101,22 @@ class QueueProcessor
 
         foreach ($bookings as $b) {
             $nb = $b['nobooking'];
+
+            // Auto-heal statuskirim: If booking already has tasks sent on BPJS, sync statuskirim=Sudah
+            $listRes = $this->api->getListTask($nb);
+            if ($listRes['success'] && !empty($listRes['data'])) {
+                try {
+                    $this->db->markBookingAsSent($nb);
+                    $this->log->info("[BLOCK 1] {$nb}: auto-synced statuskirim=Sudah (found existing tasks on BPJS)");
+                    $this->successCount++;
+                    continue; // Skip /antrean/add since booking exists on BPJS
+                } catch (\PDOException $e) {
+                    $this->log->error("[BLOCK 1] DB update failed for {$nb}: " . $e->getMessage());
+                    $this->failCount++;
+                    continue;
+                }
+            }
+
             $payload = PayloadBuilder::jknBooking($b);
 
             $this->log->info("[BLOCK 1] {$nb}: SEND /antrean/add");
