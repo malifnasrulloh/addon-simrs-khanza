@@ -914,4 +914,152 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    /**
+     * Build MedicationDispense payload.
+     *
+     * @param string      $orgId                 Satu Sehat Organization ID
+     * @param array       $p                     MedicationDispense data row
+     * @param string      $idPasien              IHS Patient ID
+     * @param string      $idDokter              IHS Practitioner ID
+     * @param string|null $idMedicationRequest   Authorizing MedicationRequest ID (if synced)
+     * @param string|null $idMedicationDispense  Existing MedicationDispense ID (if updating)
+     * @return array
+     */
+    public static function medicationDispense(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        ?string $idMedicationRequest,
+        ?string $idMedicationDispense = null
+    ): array {
+        // Parse signa aturan pakai
+        $signa1 = 1.0;
+        $signa2 = 1.0;
+        $aturan = $p['aturan'] ?? '';
+        $parts = explode('x', strtolower($aturan));
+        if (isset($parts[0])) {
+            $val = preg_replace('/[^0-9.]/', '', $parts[0]);
+            if (is_numeric($val)) {
+                $signa1 = (float)$val;
+            }
+        }
+        if (isset($parts[1])) {
+            $val = preg_replace('/[^0-9.]/', '', $parts[1]);
+            if (is_numeric($val)) {
+                $signa2 = (float)$val;
+            }
+        }
+
+        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30Z"
+        $whenPrepared = str_replace(' ', 'T', $p['tgl_peresepan'] . ' ' . $p['jam_peresepan']) . 'Z';
+        $whenHandedOver = str_replace(' ', 'T', $p['tgl_perawatan'] . ' ' . $p['jam']) . 'Z';
+
+        // Identifiers: match Java's custom system conventions
+        $sys1 = $idMedicationDispense ? 'medicationdispense' : 'prescription';
+        $sys2Type = $idMedicationDispense ? 'medicationdispense-item' : 'prescription-item';
+
+        $payload = [
+            'resourceType' => 'MedicationDispense',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/' . $sys1 . '/' . $orgId,
+                    'use'    => 'official',
+                    'value'  => $p['no_resep']
+                ],
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/' . $sys2Type . '/' . $orgId,
+                    'use'    => 'official',
+                    'value'  => $p['kode_brng']
+                ]
+            ],
+            'status' => 'completed',
+            'category' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/fhir/CodeSystem/medicationdispense-category',
+                        'code'    => strtolower($p['status_pemberian']) === 'ranap' ? 'inpatient' : 'outpatient',
+                        'display' => strtolower($p['status_pemberian']) === 'ranap' ? 'Inpatient' : 'Outpatient'
+                    ]
+                ]
+            ],
+            'medicationReference' => [
+                'reference' => 'Medication/' . $p['id_medication'],
+                'display'   => $p['obat_display']
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'context' => [
+                'reference' => 'Encounter/' . $p['id_encounter']
+            ],
+            'performer' => [
+                [
+                    'actor' => [
+                        'reference' => 'Practitioner/' . $idDokter,
+                        'display'   => $p['nama']
+                    ]
+                ]
+            ],
+            'location' => [
+                'reference' => 'Location/' . $p['id_lokasi_satusehat'],
+                'display'   => $p['nm_bangsal']
+            ],
+            'quantity' => [
+                'value'  => (float)$p['jml'],
+                'system' => $p['denominator_system'],
+                'code'   => $p['denominator_code']
+            ],
+            'whenPrepared'   => $whenPrepared,
+            'whenHandedOver' => $whenHandedOver,
+            'dosageInstruction' => [
+                [
+                    'sequence' => 1,
+                    'text'     => $aturan,
+                    'timing' => [
+                        'repeat' => [
+                            'frequency'  => (int)$signa2,
+                            'period'     => 1,
+                            'periodUnit' => 'd'
+                        ]
+                    ],
+                    'route' => [
+                        'coding' => [
+                            [
+                                'system'  => $p['route_system'],
+                                'code'    => $p['route_code'],
+                                'display' => $p['route_display']
+                            ]
+                        ]
+                    ],
+                    'doseAndRate' => [
+                        [
+                            'doseQuantity' => [
+                                'value'  => $signa1,
+                                'unit'   => $p['denominator_code'],
+                                'system' => $p['denominator_system'],
+                                'code'   => $p['denominator_code']
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ];
+
+        if (!empty($idMedicationRequest)) {
+            $payload['authorizingPrescription'] = [
+                [
+                    'reference' => 'MedicationRequest/' . $idMedicationRequest
+                ]
+            ];
+        }
+
+        if ($idMedicationDispense) {
+            $payload['id'] = $idMedicationDispense;
+        }
+
+        return $payload;
+    }
 }

@@ -535,6 +535,36 @@ Run the prescription synchronization every hour (offset by 5 minutes from other 
 5 * * * * cd /path/to/php-service && php satusehat_medicationrequest_sync.php >> /dev/null 2>&1
 ```
 
+---
+
+# Satu Sehat MedicationDispense Sync Service (PHP)
+
+PHP CLI script to automatically synchronize drug dispenses (non-racikan) with the Satu Sehat API.
+It maps hospital drug dispenses from the `detail_pemberian_obat` table into standard FHIR `MedicationDispense` resource profiles.
+
+## Features
+
+- **Unified Processing**: Consolidates outpatient (Ralan) and inpatient (Ranap) non-racikan drug dispenses using single database query joins.
+- **AuthorizingPrescription Linking**: Seamlessly queries and associates the corresponding Satu Sehat `MedicationRequest` ID if the prescription has already been synced.
+- **SQLite Local State Synchronization**: Utilizes local SQLite state management (`medicationdispense_state`) to cache synchronization status, dramatically improving run performance.
+- **Resilient Duplicate Resolution**: Gracefully catches duplicate conflicts by performing lookup queries matching `http://sys-ids.kemkes.go.id/prescription/{orgId}|{no_resep}` on Satu Sehat to automatically update and resolve local mapping status.
+
+## Quick Start
+
+```bash
+# 1. Run in verbose mode to view synchronization logs
+php satusehat_medicationdispense_sync.php --verbose
+```
+
+## Cron Setup
+
+Run the drug dispense synchronization every hour (offset by 10 minutes from other sync services to optimize server loads):
+
+```bash
+10 * * * * cd /path/to/php-service && php satusehat_medicationdispense_sync.php >> /dev/null 2>&1
+```
+
+
 
 
 

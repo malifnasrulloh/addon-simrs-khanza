@@ -97,6 +97,13 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for MedicationDispense state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS medicationdispense_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -1223,5 +1230,228 @@ class SatuSehatDatabase
                 'id' => $idMedicationRequest
             ]);
         }
+    }
+
+    // ─── MEDICATION DISPENSE STATE TRACKING ─────────────────────────────────────
+
+    public function getMedicationDispenseLocalState(
+        string $noRawat, 
+        string $tglPerawatan, 
+        string $jam, 
+        string $kodeBrng, 
+        string $noBatch, 
+        string $noFaktur
+    ): ?string {
+        $key = "{$noRawat}|{$tglPerawatan}|{$jam}|{$kodeBrng}|{$noBatch}|{$noFaktur}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM medicationdispense_state WHERE composite_key = :key");
+        $stmt->execute(['key' => $key]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateMedicationDispenseLocalState(
+        string $noRawat, 
+        string $tglPerawatan, 
+        string $jam, 
+        string $kodeBrng, 
+        string $noBatch, 
+        string $noFaktur, 
+        string $status
+    ): void {
+        $key = "{$noRawat}|{$tglPerawatan}|{$jam}|{$kodeBrng}|{$noBatch}|{$noFaktur}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO medicationdispense_state (composite_key, status, updated_at) 
+            VALUES (:key, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['key' => $key, 'st' => $status]);
+    }
+
+    // ─── MEDICATION DISPENSE MYSQL OPERATIONS ───────────────────────────────────
+
+    /**
+     * Helper to retrieve ID of synced MedicationRequest (if any).
+     */
+    public function getMedicationRequestId(string $noResep, string $kodeBrng): string
+    {
+        $sql = "SELECT id_medicationrequest FROM satu_sehat_medicationrequest WHERE no_resep = :nr AND kode_brng = :kb";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['nr' => $noResep, 'kb' => $kodeBrng]);
+        return $stmt->fetchColumn() ?: '';
+    }
+
+    /**
+     * Fetch pending MedicationDispense records cross Ralan and Ranap.
+     */
+    public function fetchPendingMedicationDispenseActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    dpo.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_peresepan, ro.jam_peresepan, dpo.jml, ssm.id_medication,
+                    ap.aturan, ro.no_resep, IFNULL(ssmd.id_medicationdispanse, '') as id_medicationdispanse,
+                    dpo.no_batch, dpo.no_faktur, dpo.tgl_perawatan, dpo.jam,
+                    ssml.id_lokasi_satusehat, b.nm_bangsal, 'Ralan' as status_pemberian
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN detail_pemberian_obat dpo ON dpo.no_rawat = ro.no_rawat 
+                  AND dpo.tgl_perawatan = ro.tgl_perawatan AND dpo.jam = ro.jam
+                INNER JOIN aturan_pakai ap ON dpo.no_rawat = ap.no_rawat 
+                  AND dpo.tgl_perawatan = ap.tgl_perawatan AND dpo.jam = ap.jam AND dpo.kode_brng = ap.kode_brng
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+                INNER JOIN bangsal b ON b.kd_bangsal = dpo.kd_bangsal
+                INNER JOIN satu_sehat_mapping_lokasi_depo_farmasi ssml ON ssml.kd_bangsal = b.kd_bangsal
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                LEFT JOIN satu_sehat_medicationdispense ssmd ON ssmd.no_rawat = dpo.no_rawat 
+                  AND ssmd.tgl_perawatan = dpo.tgl_perawatan AND ssmd.jam = dpo.jam 
+                  AND ssmd.kode_brng = dpo.kode_brng AND ssmd.no_batch = dpo.no_batch AND ssmd.no_faktur = dpo.no_faktur
+                WHERE dpo.status = 'Ralan' AND rp.tgl_registrasi BETWEEN :df1 AND :dt1
+                  AND (ssmd.id_medicationdispanse IS NULL OR ssmd.id_medicationdispanse = '')
+            )
+            UNION ALL
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    dpo.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_peresepan, ro.jam_peresepan, dpo.jml, ssm.id_medication,
+                    ap.aturan, ro.no_resep, IFNULL(ssmd.id_medicationdispanse, '') as id_medicationdispanse,
+                    dpo.no_batch, dpo.no_faktur, dpo.tgl_perawatan, dpo.jam,
+                    ssml.id_lokasi_satusehat, b.nm_bangsal, 'Ranap' as status_pemberian
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN detail_pemberian_obat dpo ON dpo.no_rawat = ro.no_rawat 
+                  AND dpo.tgl_perawatan = ro.tgl_perawatan AND dpo.jam = ro.jam
+                INNER JOIN aturan_pakai ap ON dpo.no_rawat = ap.no_rawat 
+                  AND dpo.tgl_perawatan = ap.tgl_perawatan AND dpo.jam = ap.jam AND dpo.kode_brng = ap.kode_brng
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+                INNER JOIN bangsal b ON b.kd_bangsal = dpo.kd_bangsal
+                INNER JOIN satu_sehat_mapping_lokasi_depo_farmasi ssml ON ssml.kd_bangsal = b.kd_bangsal
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                LEFT JOIN satu_sehat_medicationdispense ssmd ON ssmd.no_rawat = dpo.no_rawat 
+                  AND ssmd.tgl_perawatan = dpo.tgl_perawatan AND ssmd.jam = dpo.jam 
+                  AND ssmd.kode_brng = dpo.kode_brng AND ssmd.no_batch = dpo.no_batch AND ssmd.no_faktur = dpo.no_faktur
+                WHERE dpo.status = 'Ranap' AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+                  AND (ssmd.id_medicationdispanse IS NULL OR ssmd.id_medicationdispanse = '')
+            )
+            ORDER BY tgl_registrasi ASC, jam_reg ASC
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute([
+            'df1' => $dateFrom, 'dt1' => $dateTo,
+            'df2' => $dateFrom, 'dt2' => $dateTo
+        ]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Fetch existing MedicationDispense records cross Ralan and Ranap (for Phase 2 updates).
+     */
+    public function fetchPendingMedicationDispenseUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    dpo.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_peresepan, ro.jam_peresepan, dpo.jml, ssm.id_medication,
+                    ap.aturan, ro.no_resep, ssmd.id_medicationdispanse,
+                    dpo.no_batch, dpo.no_faktur, dpo.tgl_perawatan, dpo.jam,
+                    ssml.id_lokasi_satusehat, b.nm_bangsal, 'Ralan' as status_pemberian
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN detail_pemberian_obat dpo ON dpo.no_rawat = ro.no_rawat 
+                  AND dpo.tgl_perawatan = ro.tgl_perawatan AND dpo.jam = ro.jam
+                INNER JOIN aturan_pakai ap ON dpo.no_rawat = ap.no_rawat 
+                  AND dpo.tgl_perawatan = ap.tgl_perawatan AND dpo.jam = ap.jam AND dpo.kode_brng = ap.kode_brng
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+                INNER JOIN bangsal b ON b.kd_bangsal = dpo.kd_bangsal
+                INNER JOIN satu_sehat_mapping_lokasi_depo_farmasi ssml ON ssml.kd_bangsal = b.kd_bangsal
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                INNER JOIN satu_sehat_medicationdispense ssmd ON ssmd.no_rawat = dpo.no_rawat 
+                  AND ssmd.tgl_perawatan = dpo.tgl_perawatan AND ssmd.jam = dpo.jam 
+                  AND ssmd.kode_brng = dpo.kode_brng AND ssmd.no_batch = dpo.no_batch AND ssmd.no_faktur = dpo.no_faktur
+                WHERE dpo.status = 'Ralan' AND rp.tgl_registrasi BETWEEN :df1 AND :dt1
+            )
+            UNION ALL
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    dpo.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_peresepan, ro.jam_peresepan, dpo.jml, ssm.id_medication,
+                    ap.aturan, ro.no_resep, ssmd.id_medicationdispanse,
+                    dpo.no_batch, dpo.no_faktur, dpo.tgl_perawatan, dpo.jam,
+                    ssml.id_lokasi_satusehat, b.nm_bangsal, 'Ranap' as status_pemberian
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN detail_pemberian_obat dpo ON dpo.no_rawat = ro.no_rawat 
+                  AND dpo.tgl_perawatan = ro.tgl_perawatan AND dpo.jam = ro.jam
+                INNER JOIN aturan_pakai ap ON dpo.no_rawat = ap.no_rawat 
+                  AND dpo.tgl_perawatan = ap.tgl_perawatan AND dpo.jam = ap.jam AND dpo.kode_brng = ap.kode_brng
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+                INNER JOIN bangsal b ON b.kd_bangsal = dpo.kd_bangsal
+                INNER JOIN satu_sehat_mapping_lokasi_depo_farmasi ssml ON ssml.kd_bangsal = b.kd_bangsal
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                INNER JOIN satu_sehat_medicationdispense ssmd ON ssmd.no_rawat = dpo.no_rawat 
+                  AND ssmd.tgl_perawatan = dpo.tgl_perawatan AND ssmd.jam = dpo.jam 
+                  AND ssmd.kode_brng = dpo.kode_brng AND ssmd.no_batch = dpo.no_batch AND ssmd.no_faktur = dpo.no_faktur
+                WHERE dpo.status = 'Ranap' AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+            )
+            ORDER BY tgl_registrasi ASC, jam_reg ASC
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute([
+            'df1' => $dateFrom, 'dt1' => $dateTo,
+            'df2' => $dateFrom, 'dt2' => $dateTo
+        ]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Save the returned Satu Sehat MedicationDispense ID back to MySQL.
+     */
+    public function saveMedicationDispense(
+        string $noRawat, 
+        string $tglPerawatan, 
+        string $jam, 
+        string $kodeBrng, 
+        string $noBatch, 
+        string $noFaktur, 
+        string $idMedicationDispense
+    ): bool {
+        $sql = "INSERT INTO satu_sehat_medicationdispense (no_rawat, tgl_perawatan, jam, kode_brng, no_batch, no_faktur, id_medicationdispanse) 
+                VALUES (:nr, :tp, :jm, :kb, :nb, :nf, :id) 
+                ON DUPLICATE KEY UPDATE id_medicationdispanse = :id";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'nr' => $noRawat,
+            'tp' => $tglPerawatan,
+            'jm' => $jam,
+            'kb' => $kodeBrng,
+            'nb' => $noBatch,
+            'nf' => $noFaktur,
+            'id' => $idMedicationDispense
+        ]);
     }
 }
