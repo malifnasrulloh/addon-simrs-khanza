@@ -124,6 +124,19 @@ $api = new BpjsAntreanClient(
     $isDryRun
 );
 
+// Check Circuit Breaker before proceeding
+$cb = $api->getCircuitBreaker();
+if ($cb->isOpen()) {
+    $details = $cb->getStatusDetails();
+    $log->warning("══════════════════════════════════════════════════════════════");
+    $log->warning("  [CIRCUIT-BREAKER] Circuit is OPEN (tripped due to consecutive connection failures).");
+    $log->warning("  Remaining cooling-off time: " . $details['remaining_cooling_time'] . " seconds.");
+    $log->warning("  Skipping this execution cycle to avoid thread contention and DB lock timeouts.");
+    $log->warning("══════════════════════════════════════════════════════════════");
+    $db->close();
+    exit(0);
+}
+
 $processor = new QueueProcessor($db, $api, $config, $log);
 
 // ─── Execute ───────────────────────────────────────────────────────────────

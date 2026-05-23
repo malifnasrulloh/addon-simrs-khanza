@@ -107,8 +107,9 @@ class QueueProcessor
             $result = $this->api->addAntrean($payload);
 
             $code = $result['code'] ?? '';
-            // 200=OK, 201=already exists, 208=duplicate → all mean accepted
-            if ($result['success'] || in_array($code, ['200', '201', '208'])) {
+            // 200=OK, 208=duplicate (already exists on BPJS) → accepted.
+            // 201 is treated as a validation failure.
+            if ($result['success'] || $code === '208') {
                 try {
                     $this->db->markBookingAsSent($nb);
                     $this->log->info("[BLOCK 1] {$nb}: ✓ accepted (code={$code})");
@@ -284,9 +285,9 @@ class QueueProcessor
                 $addResult = $this->api->addAntrean($payload);
                 $addCode   = $addResult['code'] ?? '';
 
-                if ($addResult['success'] || in_array($addCode, ['200', '201', '208'])) {
-                    // 200=OK, 201=already exists (SEP terbit), 208=duplicate booking
-                    // All mean booking is on BPJS side → proceed to task chain
+                if ($addResult['success'] || $addCode === '208') {
+                    // 200=OK, 208=duplicate booking
+                    // Both mean booking is on BPJS side → proceed to task chain
                     $this->log->info("[BLOCK 4] {$noRawat}: ✓ /antrean/add accepted (code={$addCode})");
                     $this->successCount++;
                 } else {
@@ -349,6 +350,8 @@ class QueueProcessor
                         $state['3'] = 'Belum';
                     }
                 }
+            } else {
+                $this->log->debug("[{$label}] {$noRawat} TaskID 3: patient has not checked in (waiting for digital/physical check-in or SEP) — pausing task chain");
             }
         }
 

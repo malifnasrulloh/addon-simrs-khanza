@@ -59,10 +59,36 @@ class Logger
         return $this->logDir;
     }
 
+    /**
+     * Scrub sensitive patient credentials (Data Minimization)
+     */
+    public static function scrubSensitiveData(string $message): string
+    {
+        $keys = 'nik|nohp|nomorkartu|nomorpeserta|no_peserta|no_ktp|no_tlp';
+        $pattern = '/(["\']?(?:' . $keys . ')(?:_bpjs)?["\']?\s*[:=]\s*["\']?)([^"\'\s,;\}]+)(["\']?)/i';
+
+        return preg_replace_callback($pattern, function($matches) {
+            $prefix = $matches[1];
+            $val    = $matches[2];
+            $suffix = $matches[3];
+
+            $len = strlen($val);
+            if ($len > 4) {
+                $masked = substr($val, 0, 2) . str_repeat('*', max(2, $len - 4)) . substr($val, -2);
+            } else {
+                $masked = str_repeat('*', $len);
+            }
+            return $prefix . $masked . $suffix;
+        }, $message);
+    }
+
     public function write(string $level, string $message): void
     {
         $levelNum = self::LEVELS[$level] ?? 1;
         if ($levelNum < $this->minLevel && !$this->verbose) return;
+
+        // Apply automatic log scrubbing (Data Minimization)
+        $message = self::scrubSensitiveData($message);
 
         $ts = date('Y-m-d H:i:s');
         $line = "[{$ts}] [{$level}] {$message}";

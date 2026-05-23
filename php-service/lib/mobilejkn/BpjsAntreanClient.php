@@ -24,6 +24,7 @@ class BpjsAntreanClient
     private Logger $log;
     private int    $batchSize;
     private bool   $dryRun;
+    private CircuitBreaker $cb;
 
     // ─── cURL defaults ─────────────────────────────────────────────────────
     private const CONNECT_TIMEOUT = 10;
@@ -46,6 +47,18 @@ class BpjsAntreanClient
         $this->batchSize = $batchSize;
         $this->log       = $log;
         $this->dryRun    = $dryRun;
+
+        // Initialize file-persistent Circuit Breaker
+        require_once __DIR__ . '/CircuitBreaker.php';
+        $this->cb = new CircuitBreaker($this->log->getLogDir(), $this->log);
+    }
+
+    /**
+     * Get the persistent Circuit Breaker instance.
+     */
+    public function getCircuitBreaker(): CircuitBreaker
+    {
+        return $this->cb;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -118,6 +131,14 @@ class BpjsAntreanClient
         foreach ($chunks as $chunkIdx => $chunk) {
             $chunkNum = $chunkIdx + 1;
             $this->log->debug("[BATCH] Processing chunk {$chunkNum}/{$totalChunks} (" . count($chunk) . " requests)");
+
+            if ($this->cb->isOpen()) {
+                $this->log->warning("[BATCH] Circuit breaker is OPEN. Aborting execution for remaining " . count($chunk) . " requests.");
+                foreach ($chunk as $req) {
+                    $results[$req['id']] = ['success' => false, 'code' => 'CB_OPEN', 'message' => 'Circuit breaker is open (cooling off)'];
+                }
+                continue;
+            }
 
             if ($this->dryRun) {
                 foreach ($chunk as $req) {
@@ -195,6 +216,9 @@ class BpjsAntreanClient
         } while ($running > 0);
 
         // Collect results
+        $hasSuccess        = false;
+        $hasNetworkFailure = false;
+
         foreach ($handles as $id => $handleData) {
             $ch        = $handleData['ch'];
             $timestamp = $handleData['timestamp'];
@@ -206,8 +230,16 @@ class BpjsAntreanClient
             if ($error) {
                 $this->log->error("[HTTP] {$id}: cURL error: {$error}");
                 $results[$id] = ['success' => false, 'code' => '0', 'message' => "cURL error: {$error}"];
+                $hasNetworkFailure = true;
             } else {
-                $results[$id] = $this->parseApiResponse($id, $response, $httpCode, $timestamp);
+                $res = $this->parseApiResponse($id, $response, $httpCode, $timestamp);
+                $results[$id] = $res;
+                if ($res['success']) {
+                    $hasSuccess = true;
+                }
+                if ($httpCode >= 500) {
+                    $hasNetworkFailure = true;
+                }
             }
 
             curl_multi_remove_handle($mh, $ch);
@@ -215,6 +247,14 @@ class BpjsAntreanClient
         }
 
         curl_multi_close($mh);
+
+        // Update Circuit Breaker based on multi-curl batch outcome
+        if ($hasSuccess) {
+            $this->cb->recordSuccess();
+        } elseif ($hasNetworkFailure) {
+            $this->cb->recordFailure();
+        }
+
         return $results;
     }
 
@@ -224,6 +264,11 @@ class BpjsAntreanClient
 
     private function post(string $endpoint, array $payload): array
     {
+        if ($this->cb->isOpen()) {
+            $this->log->warning("[HTTP] Circuit breaker is OPEN. Aborting POST {$endpoint}");
+            return ['success' => false, 'code' => 'CB_OPEN', 'message' => 'Circuit breaker is open (cooling off)'];
+        }
+
         $url       = $this->baseUrl . $endpoint;
         $body      = json_encode($payload, JSON_UNESCAPED_UNICODE);
         $timestamp = time();
@@ -256,12 +301,19 @@ class BpjsAntreanClient
         $error    = curl_error($ch);
         curl_close($ch);
 
-        if ($error) {
-            $this->log->error("[HTTP] cURL error: {$error}");
-            return ['success' => false, 'code' => '0', 'message' => "cURL error: {$error}"];
+        if ($error || $httpCode >= 500) {
+            if ($error) {
+                $this->log->error("[HTTP] cURL error: {$error}");
+            }
+            $this->cb->recordFailure();
+            return ['success' => false, 'code' => (string)$httpCode, 'message' => $error ?: "HTTP Status {$httpCode}"];
         }
 
-        return $this->parseApiResponse($endpoint, $response, $httpCode, $timestamp);
+        $res = $this->parseApiResponse($endpoint, $response, $httpCode, $timestamp);
+        if ($res['success']) {
+            $this->cb->recordSuccess();
+        }
+        return $res;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
