@@ -94,12 +94,18 @@ class BpjsAntreanClient
      */
     public function updateWaktu(string $kodebooking, string $taskId, int $waktu, string $jenisresep = 'Tidak ada'): array
     {
-        return $this->post('/antrean/updatewaktu', [
+        $payload = [
             'kodebooking' => $kodebooking,
             'taskid'      => (string) $taskId,
             'waktu'       => (string) $waktu,
-            'jenisresep'  => $jenisresep,
-        ]);
+        ];
+
+        // BPJS Antrean spec: jenisresep parameter is strictly only sent on taskid 5
+        if ((string)$taskId === '5') {
+            $payload['jenisresep'] = $jenisresep;
+        }
+
+        return $this->post('/antrean/updatewaktu', $payload);
     }
 
     /**
