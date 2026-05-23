@@ -14,11 +14,23 @@ class SatuSehatDatabase
     private PDO $sqlite;
     private Logger $log;
     private SatuSehatClient $client;
+    private $lockFile;
 
     public function __construct(SatuSehatConfig $config, Logger $log, SatuSehatClient $client)
     {
         $this->log = $log;
         $this->client = $client;
+
+        // ── Process Lock to Prevent Cron Overlap
+        $lockName = defined('SERVICE_NAME') ? SERVICE_NAME : 'satusehat_default';
+        $lockFilePath = sys_get_temp_dir() . '/' . preg_replace('/[^a-zA-Z0-9_]/', '', $lockName) . '.lock';
+        $this->lockFile = fopen($lockFilePath, 'c');
+        if ($this->lockFile) {
+            if (!flock($this->lockFile, LOCK_EX | LOCK_NB)) {
+                $this->log->warning("[LOCK] Another instance of {$lockName} is already running. Exiting.");
+                exit(0);
+            }
+        }
 
         // ── MySQL Connection
         $dsn = sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
@@ -34,6 +46,7 @@ class SatuSehatDatabase
         $sqlitePath = rtrim($config->logDir, '/') . '/satusehat_state.sqlite';
         $this->sqlite = new PDO("sqlite:{$sqlitePath}");
         $this->sqlite->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $this->sqlite->exec("PRAGMA journal_mode=WAL;");
         
         // Ensure table exists
         $this->sqlite->exec("CREATE TABLE IF NOT EXISTS encounter_state (
@@ -115,6 +128,10 @@ class SatuSehatDatabase
 
     public function close(): void
     {
+        if ($this->lockFile) {
+            flock($this->lockFile, LOCK_UN);
+            fclose($this->lockFile);
+        }
         unset($this->mysql);
         unset($this->sqlite);
     }
