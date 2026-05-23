@@ -105,8 +105,26 @@ class SatuSehatEncounterProcessor
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created Encounter {$idEncounter}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
-                $this->failCount++;
+                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+
+                // Duplicate Handling Fallback
+                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                    $this->log->warning("[PHASE 1] {$noRawat}: Duplicated Encounter detected. Searching existing records...");
+                    $idEncounter = $this->resolveDuplicateEncounter($noRawat);
+
+                    if ($idEncounter) {
+                        $this->db->saveEncounter($noRawat, $idEncounter);
+                        $this->db->updateLocalState($noRawat, 'arrived');
+                        $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered Encounter {$idEncounter} from Satu Sehat API");
+                        $this->successCount++;
+                    } else {
+                        $this->log->error("[PHASE 1] {$noRawat}: ✗ Failed to recover duplicate Encounter.");
+                        $this->failCount++;
+                    }
+                } else {
+                    $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $errorMessage);
+                    $this->failCount++;
+                }
             }
         }
     }
@@ -228,5 +246,27 @@ class SatuSehatEncounterProcessor
                 $this->failCount++;
             }
         }
+    }
+
+    /**
+     * Resolves a duplicate Encounter by searching the Satu Sehat API by its identifier.
+     */
+    private function resolveDuplicateEncounter(string $noRawat): ?string
+    {
+        $endpoint = "/Encounter?identifier=http://sys-ids.kemkes.go.id/encounter/{$this->config->orgId}|" . urlencode($noRawat);
+        $result = $this->api->get($endpoint);
+
+        if (!$result['success'] || empty($result['data']['entry'])) {
+            return null;
+        }
+
+        foreach ($result['data']['entry'] as $entry) {
+            $res = $entry['resource'] ?? [];
+            if (isset($res['id'])) {
+                return $res['id']; // Match found
+            }
+        }
+
+        return null;
     }
 }
