@@ -765,4 +765,153 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    /**
+     * Build MedicationRequest payload.
+     *
+     * @param string      $orgId               Satu Sehat Organization ID
+     * @param array       $p                   MedicationRequest data row
+     * @param string      $idPasien            IHS Patient ID
+     * @param string      $idDokter            IHS Practitioner ID
+     * @param string|null $idMedicationRequest Existing MedicationRequest ID (if updating)
+     * @return array
+     */
+    public static function medicationRequest(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        ?string $idMedicationRequest = null
+    ): array {
+        // Parse signa aturan pakai
+        $signa1 = 1.0;
+        $signa2 = 1.0;
+        $aturan = $p['aturan_pakai'] ?? '';
+        $parts = explode('x', strtolower($aturan));
+        if (isset($parts[0])) {
+            $val = preg_replace('/[^0-9.]/', '', $parts[0]);
+            if (is_numeric($val)) {
+                $signa1 = (float)$val;
+            }
+        }
+        if (isset($parts[1])) {
+            $val = preg_replace('/[^0-9.]/', '', $parts[1]);
+            if (is_numeric($val)) {
+                $signa2 = (float)$val;
+            }
+        }
+
+        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
+        $authoredOn = str_replace(' ', 'T', $p['tgl_peresepan'] . ' ' . $p['jam_peresepan']) . '+07:00';
+
+        // Identifiers
+        $isRacikan = (bool)$p['is_racikan'];
+        $noRacik = $p['no_racik'] ?? '';
+        
+        $prescVal = $p['no_resep'];
+        if ($isRacikan && $noRacik !== '') {
+            $prescVal = $p['no_resep'] . '-' . $noRacik;
+        }
+
+        $payload = [
+            'resourceType' => 'MedicationRequest',
+            'meta' => [
+                'profile' => ['https://fhir.kemkes.go.id/r4/StructureDefinition/MedicationRequest']
+            ],
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/prescription/' . $orgId,
+                    'use'    => 'official',
+                    'value'  => $prescVal
+                ],
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/prescription-item/' . $orgId,
+                    'use'    => 'official',
+                    'value'  => $p['kode_brng']
+                ]
+            ],
+            'status' => 'completed',
+            'intent' => 'order',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/medicationrequest-category',
+                            'code'    => strtolower($p['status_lanjut']) === 'ranap' ? 'inpatient' : 'outpatient',
+                            'display' => strtolower($p['status_lanjut']) === 'ranap' ? 'Inpatient' : 'Outpatient'
+                        ]
+                    ]
+                ]
+            ],
+            'medicationReference' => [
+                'reference' => 'Medication/' . $p['id_medication'],
+                'display'   => $p['obat_display']
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter']
+            ],
+            'authoredOn' => $authoredOn,
+            'requester' => [
+                'reference' => 'Practitioner/' . $idDokter,
+                'display'   => $p['nama']
+            ],
+            'dosageInstruction' => [
+                [
+                    'sequence' => 1,
+                    'patientInstruction' => $aturan,
+                    'timing' => [
+                        'repeat' => [
+                            'frequency'  => (int)$signa2,
+                            'period'     => 1,
+                            'periodUnit' => 'd'
+                        ]
+                    ],
+                    'route' => [
+                        'coding' => [
+                            [
+                                'system'  => $p['route_system'],
+                                'code'    => $p['route_code'],
+                                'display' => $p['route_display']
+                            ]
+                        ]
+                    ],
+                    'doseAndRate' => [
+                        [
+                            'doseQuantity' => [
+                                'value'  => $signa1,
+                                'unit'   => $p['denominator_code'],
+                                'system' => $p['denominator_system'],
+                                'code'   => $p['denominator_code']
+                            ]
+                        ]
+                    ]
+                ]
+            ],
+            'dispenseRequest' => [
+                'quantity' => [
+                    'value'  => (float)$p['jml'],
+                    'unit'   => $p['denominator_code'],
+                    'system' => $p['denominator_system'],
+                    'code'   => $p['denominator_code']
+                ]
+            ]
+        ];
+
+        // Include Organization performer as in Java (only if not compound, but let's make it consistent)
+        if (!$isRacikan) {
+            $payload['dispenseRequest']['performer'] = [
+                'reference' => 'Organization/' . $orgId
+            ];
+        }
+
+        if ($idMedicationRequest) {
+            $payload['id'] = $idMedicationRequest;
+        }
+
+        return $payload;
+    }
 }

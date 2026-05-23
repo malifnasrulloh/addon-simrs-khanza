@@ -506,5 +506,35 @@ Master-data changes occur infrequently compared to patient transactions. Running
 0 * * * * cd /path/to/php-service && php satusehat_medication_sync.php >> /dev/null 2>&1
 ```
 
+---
+
+# Satu Sehat MedicationRequest Sync Service (PHP)
+
+PHP CLI script to automatically synchronize drug prescriptions (both non-racikan/non-compound and racikan/compound prescriptions) with the Satu Sehat API.
+It maps hospital drug requests from the `resep_dokter`, `resep_dokter_racikan`, and `resep_dokter_racikan_detail` tables into standard FHIR `MedicationRequest` resource profiles.
+
+## Features
+
+- **Unified Processing**: Consolidates outpatient (Ralan) and inpatient (Ranap) non-racikan and racikan drug prescriptions using highly optimized single database query joins.
+- **Accurate Signa Parsing**: Converts prescription sigmas (e.g. `3x1`) into corresponding FHIR timing frequency and dosage instructions.
+- **SQLite Local State Synchronization**: Utilizes local SQLite state management (`medicationrequest_state`) to cache synchronization status, dramatically improving run performance.
+- **Resilient Duplicate Resolution**: Gracefully catches duplicate prescription conflicts by performing an identifier lookup matching `http://sys-ids.kemkes.go.id/prescription/{orgId}|{no_resep}[-{no_racik}]` on Satu Sehat to automatically update and resolve local mapping status.
+
+## Quick Start
+
+```bash
+# 1. Run in verbose mode to view synchronization logs
+php satusehat_medicationrequest_sync.php --verbose
+```
+
+## Cron Setup
+
+Run the prescription synchronization every hour (offset by 5 minutes from other sync services to optimize server loads):
+
+```bash
+5 * * * * cd /path/to/php-service && php satusehat_medicationrequest_sync.php >> /dev/null 2>&1
+```
+
+
 
 

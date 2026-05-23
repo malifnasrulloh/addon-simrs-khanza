@@ -90,6 +90,13 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for MedicationRequest state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS medicationrequest_state (
+            composite_key VARCHAR(100) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -1040,5 +1047,181 @@ class SatuSehatDatabase
             'kb' => $kodeBrng,
             'id' => $idMedication
         ]);
+    }
+
+    // ─── MEDICATION REQUEST STATE TRACKING ──────────────────────────────────────
+
+    public function getMedicationRequestLocalState(string $noResep, string $kodeBrng, string $noRacik): ?string
+    {
+        $key = "{$noResep}|{$kodeBrng}|{$noRacik}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM medicationrequest_state WHERE composite_key = :key");
+        $stmt->execute(['key' => $key]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateMedicationRequestLocalState(string $noResep, string $kodeBrng, string $noRacik, string $status): void
+    {
+        $key = "{$noResep}|{$kodeBrng}|{$noRacik}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO medicationrequest_state (composite_key, status, updated_at) 
+            VALUES (:key, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['key' => $key, 'st' => $status]);
+    }
+
+    // ─── MEDICATION REQUEST MYSQL OPERATIONS ────────────────────────────────────
+
+    /**
+     * Unified query to fetch pending medication requests across Ralan/Ranap and Non-racikan/Racikan.
+     */
+    public function fetchPendingMedicationRequestActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    rd.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_peresepan, ro.jam_peresepan, rd.jml, ssm.id_medication,
+                    rd.aturan_pakai, rd.no_resep, IFNULL(ssmr.id_medicationrequest, '') as id_medicationrequest,
+                    rp.status_lanjut, '0' as is_racikan, '' as no_racik
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rd.kode_brng
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                LEFT JOIN satu_sehat_medicationrequest ssmr ON ssmr.no_resep = rd.no_resep AND ssmr.kode_brng = rd.kode_brng
+                WHERE rp.tgl_registrasi BETWEEN :df1 AND :dt1
+                  AND (ssmr.id_medicationrequest IS NULL OR ssmr.id_medicationrequest = '')
+            )
+            UNION ALL
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    rdrd.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_peresepan, ro.jam_peresepan, rdrd.jml, ssm.id_medication,
+                    rdr.aturan_pakai, rdr.no_resep, IFNULL(ssmrr.id_medicationrequest, '') as id_medicationrequest,
+                    rp.status_lanjut, '1' as is_racikan, rdrd.no_racik
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN resep_dokter_racikan rdr ON rdr.no_resep = ro.no_resep
+                INNER JOIN resep_dokter_racikan_detail rdrd ON rdrd.no_resep = rdr.no_resep AND rdrd.no_racik = rdr.no_racik
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rdrd.kode_brng
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                LEFT JOIN satu_sehat_medicationrequest_racikan ssmrr ON ssmrr.no_resep = rdrd.no_resep AND ssmrr.kode_brng = rdrd.kode_brng AND ssmrr.no_racik = rdrd.no_racik
+                WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2
+                  AND (ssmrr.id_medicationrequest IS NULL OR ssmrr.id_medicationrequest = '')
+            )
+            ORDER BY tgl_registrasi ASC, jam_reg ASC
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute([
+            'df1' => $dateFrom, 'dt1' => $dateTo,
+            'df2' => $dateFrom, 'dt2' => $dateTo
+        ]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Unified query to fetch existing medication requests that have an ID (for PUT updates).
+     */
+    public function fetchPendingMedicationRequestUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    rd.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_peresepan, ro.jam_peresepan, rd.jml, ssm.id_medication,
+                    rd.aturan_pakai, rd.no_resep, ssmr.id_medicationrequest,
+                    rp.status_lanjut, '0' as is_racikan, '' as no_racik
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rd.kode_brng
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                INNER JOIN satu_sehat_medicationrequest ssmr ON ssmr.no_resep = rd.no_resep AND ssmr.kode_brng = rd.kode_brng
+                WHERE rp.tgl_registrasi BETWEEN :df1 AND :dt1
+            )
+            UNION ALL
+            (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp,
+                    peg.nama, peg.no_ktp as ktppraktisi, sse.id_encounter, ssmo.obat_code, ssmo.obat_system,
+                    rdrd.kode_brng, ssmo.obat_display, ssmo.form_code, ssmo.form_system, ssmo.form_display,
+                    ssmo.route_code, ssmo.route_system, ssmo.route_display, ssmo.denominator_code,
+                    ssmo.denominator_system, ro.tgl_peresepan, ro.jam_peresepan, rdrd.jml, ssm.id_medication,
+                    rdr.aturan_pakai, rdr.no_resep, ssmrr.id_medicationrequest,
+                    rp.status_lanjut, '1' as is_racikan, rdrd.no_racik
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                INNER JOIN pegawai peg ON ro.kd_dokter = peg.nik
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN resep_dokter_racikan rdr ON rdr.no_resep = ro.no_resep
+                INNER JOIN resep_dokter_racikan_detail rdrd ON rdrd.no_resep = rdr.no_resep AND rdrd.no_racik = rdr.no_racik
+                INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rdrd.kode_brng
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                INNER JOIN satu_sehat_medicationrequest_racikan ssmrr ON ssmrr.no_resep = rdrd.no_resep AND ssmrr.kode_brng = rdrd.kode_brng AND ssmrr.no_racik = rdrd.no_racik
+                WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2
+            )
+            ORDER BY tgl_registrasi ASC, jam_reg ASC
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute([
+            'df1' => $dateFrom, 'dt1' => $dateTo,
+            'df2' => $dateFrom, 'dt2' => $dateTo
+        ]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Save the returned Satu Sehat MedicationRequest ID back to MySQL (handling both racikan and non-racikan).
+     */
+    public function saveMedicationRequest(
+        string $noResep, 
+        string $kodeBrng, 
+        string $noRacik, 
+        string $idMedicationRequest, 
+        bool $isRacikan
+    ): bool {
+        if ($isRacikan) {
+            $sql = "INSERT INTO satu_sehat_medicationrequest_racikan (no_resep, kode_brng, no_racik, id_medicationrequest) 
+                    VALUES (:nr, :kb, :nrc, :id) 
+                    ON DUPLICATE KEY UPDATE id_medicationrequest = :id";
+            $stmt = $this->mysql->prepare($sql);
+            return $stmt->execute([
+                'nr'  => $noResep,
+                'kb'  => $kodeBrng,
+                'nrc' => $noRacik,
+                'id'  => $idMedicationRequest
+            ]);
+        } else {
+            $sql = "INSERT INTO satu_sehat_medicationrequest (no_resep, kode_brng, id_medicationrequest) 
+                    VALUES (:nr, :kb, :id) 
+                    ON DUPLICATE KEY UPDATE id_medicationrequest = :id";
+            $stmt = $this->mysql->prepare($sql);
+            return $stmt->execute([
+                'nr' => $noResep,
+                'kb' => $kodeBrng,
+                'id' => $idMedicationRequest
+            ]);
+        }
     }
 }
