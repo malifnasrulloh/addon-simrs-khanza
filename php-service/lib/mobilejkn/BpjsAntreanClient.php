@@ -109,6 +109,18 @@ class BpjsAntreanClient
     }
 
     /**
+     * POST /antrean/getlisttask — Get list of tasks sent to BPJS for a booking code.
+     *
+     * @return array{success: bool, code: string, message: string, data: array}
+     */
+    public function getListTask(string $kodebooking): array
+    {
+        return $this->post('/antrean/getlisttask', [
+            'kodebooking' => $kodebooking,
+        ]);
+    }
+
+    /**
      * POST /antrean/farmasi/add — Add pharmacy queue entry.
      */
     public function addFarmasiAntrean(array $payload): array

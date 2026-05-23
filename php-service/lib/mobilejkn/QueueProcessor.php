@@ -324,6 +324,9 @@ class QueueProcessor
     ): void {
         $jamMulai = $jadwal['jam_mulai'] ?? '08:00:00';
 
+        // Bidirectional auto-healing: sync sent task state from BPJS to local DB
+        $this->syncTaskStateFromBpjs($kodebooking, $noRawat, $state, $label);
+
         // Determine jenisresep once per patient (per BPJS spec)
         $noResep    = $this->db->fetchNoResep($noRawat);
         $isRacikan  = !empty($noResep) ? $this->db->isRacikan($noResep) : false;
@@ -540,6 +543,50 @@ class QueueProcessor
             $this->log->info("[FARMASI] {$noRawat}: ✓ accepted");
         } else {
             $this->log->warning("[FARMASI] {$noRawat}: ✗ {$result['code']} — {$result['message']}");
+        }
+    }
+
+    /**
+     * Synchronize task state from BPJS (/antrean/getlisttask) to the local database.
+     * This handles cases where tasks were already sent to BPJS by other apps/portals,
+     * but are missing in the local referensi_mobilejkn_bpjs_taskid table.
+     */
+    private function syncTaskStateFromBpjs(string $kodebooking, string $noRawat, array &$state, string $label): void
+    {
+        $res = $this->api->getListTask($kodebooking);
+        if (!$res['success'] || empty($res['data'])) {
+            return;
+        }
+
+        $tasks = $res['data'];
+        $updatedLocal = false;
+
+        foreach ($tasks as $t) {
+            $tId = (string) ($t['taskid'] ?? '');
+            if (empty($tId)) {
+                continue;
+            }
+
+            // If local DB doesn't think this task has been sent, but BPJS has it:
+            if (($state[$tId] ?? '') !== 'Sudah') {
+                $waktuStr = $t['wakturs'] ?? '';
+                if (empty($waktuStr) && !empty($t['waktu'])) {
+                    // Fallback to epoch milliseconds
+                    $waktuStr = date('Y-m-d H:i:s', (int) round($t['waktu'] / 1000));
+                }
+
+                if (!empty($waktuStr)) {
+                    if ($this->db->insertTaskId($noRawat, $tId, $waktuStr)) {
+                        $this->log->info("[{$label}] {$noRawat} TaskID {$tId}: auto-synced from BPJS (waktu: {$waktuStr})");
+                        $updatedLocal = true;
+                    }
+                }
+            }
+        }
+
+        // If we updated local records, reload the state array so the task chain has the latest data
+        if ($updatedLocal) {
+            $state = $this->db->loadTaskState($noRawat);
         }
     }
 }
