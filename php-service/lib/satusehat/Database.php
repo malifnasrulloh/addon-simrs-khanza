@@ -69,6 +69,13 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for AllergyIntolerance state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS allergyintolerance_state (
+            composite_key VARCHAR(100) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -636,6 +643,135 @@ class SatuSehatDatabase
             'kd' => $kode,
             'st' => $status,
             'id' => $idProcedure
+        ]);
+    }
+
+    // ─── ALLERGY INTOLERANCE STATE TRACKING ──────────────────────────────────────────────
+
+    public function getAllergyLocalState(string $noRawat, string $tglPerawatan, string $jamRawat, string $alergi): ?string
+    {
+        $compositeKey = md5($noRawat . '_' . $tglPerawatan . '_' . $jamRawat . '_' . $alergi);
+        $stmt = $this->sqlite->prepare("SELECT status FROM allergyintolerance_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateAllergyLocalState(string $noRawat, string $tglPerawatan, string $jamRawat, string $alergi, string $status): void
+    {
+        $compositeKey = md5($noRawat . '_' . $tglPerawatan . '_' . $jamRawat . '_' . $alergi);
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO allergyintolerance_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    // ─── ALLERGY INTOLERANCE MYSQL OPERATIONS ────────────────────────────────────────────
+
+    public function fetchPendingAllergyActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT * FROM (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                    p.nm_pasien, p.no_ktp, sse.id_encounter, pr.alergi, 
+                    pg.nama, pg.no_ktp as ktppraktisi, pr.tgl_perawatan, pr.jam_rawat, 
+                    ssai.id_allergy_intolerance, 'Ralan' as status_rawat
+                FROM reg_periksa rp 
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat 
+                INNER JOIN pegawai pg ON pr.nip = pg.nik 
+                LEFT JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pr.no_rawat 
+                    AND ssai.tgl_perawatan = pr.tgl_perawatan 
+                    AND ssai.jam_rawat = pr.jam_rawat 
+                WHERE pr.alergi <> '' 
+                  AND rp.tgl_registrasi BETWEEN :df AND :dt
+                  AND ssai.id_allergy_intolerance IS NULL
+
+                UNION ALL
+
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                    p.nm_pasien, p.no_ktp, sse.id_encounter, pi.alergi, 
+                    pg.nama, pg.no_ktp as ktppraktisi, pi.tgl_perawatan, pi.jam_rawat, 
+                    ssai.id_allergy_intolerance, 'Ranap' as status_rawat
+                FROM reg_periksa rp 
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat 
+                INNER JOIN pegawai pg ON pi.nip = pg.nik 
+                LEFT JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pi.no_rawat 
+                    AND ssai.tgl_perawatan = pi.tgl_perawatan 
+                    AND ssai.jam_rawat = pi.jam_rawat 
+                WHERE pi.alergi <> '' 
+                  AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+                  AND ssai.id_allergy_intolerance IS NULL
+            ) AS combined
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function fetchPendingAllergyUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT * FROM (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                    p.nm_pasien, p.no_ktp, sse.id_encounter, pr.alergi, 
+                    pg.nama, pg.no_ktp as ktppraktisi, pr.tgl_perawatan, pr.jam_rawat, 
+                    ssai.id_allergy_intolerance, 'Ralan' as status_rawat
+                FROM reg_periksa rp 
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat 
+                INNER JOIN pegawai pg ON pr.nip = pg.nik 
+                INNER JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pr.no_rawat 
+                    AND ssai.tgl_perawatan = pr.tgl_perawatan 
+                    AND ssai.jam_rawat = pr.jam_rawat 
+                WHERE pr.alergi <> '' 
+                  AND rp.tgl_registrasi BETWEEN :df AND :dt
+
+                UNION ALL
+
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                    p.nm_pasien, p.no_ktp, sse.id_encounter, pi.alergi, 
+                    pg.nama, pg.no_ktp as ktppraktisi, pi.tgl_perawatan, pi.jam_rawat, 
+                    ssai.id_allergy_intolerance, 'Ranap' as status_rawat
+                FROM reg_periksa rp 
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat 
+                INNER JOIN pegawai pg ON pi.nip = pg.nik 
+                INNER JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pi.no_rawat 
+                    AND ssai.tgl_perawatan = pi.tgl_perawatan 
+                    AND ssai.jam_rawat = pi.jam_rawat 
+                WHERE pi.alergi <> '' 
+                  AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+            ) AS combined
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function saveAllergyIntolerance(string $noRawat, string $tglPerawatan, string $jamRawat, string $statusRawat, string $idAllergy): bool
+    {
+        $sql = "INSERT INTO satu_sehat_allergy_intolerance (no_rawat, tgl_perawatan, jam_rawat, status, id_allergy_intolerance) 
+                VALUES (:nr, :tgl, :jam, :st, :id) 
+                ON DUPLICATE KEY UPDATE id_allergy_intolerance = :id";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'nr'  => $noRawat,
+            'tgl' => $tglPerawatan,
+            'jam' => $jamRawat,
+            'st'  => $statusRawat,
+            'id'  => $idAllergy
         ]);
     }
 }

@@ -499,4 +499,80 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    /**
+     * Build AllergyIntolerance payload.
+     *
+     * @param array  $a            Patient/Allergy data row
+     * @param array  $allergyData  Dictionary lookup data for the allergy
+     * @param string $idPasien     IHS Patient ID
+     * @param string $idPraktisi   IHS Practitioner ID
+     * @param string $idSatuSehat  SIMRS Satu Sehat ID (from config/DB)
+     * @param string $idAllergy    Existing AllergyIntolerance ID (if updating)
+     * @return array
+     */
+    public static function allergyIntolerance(array $a, array $allergyData, string $idPasien, string $idPraktisi, string $idSatuSehat, string $idAllergy = ''): array
+    {
+        $recordedDate = $a['tgl_perawatan'] . 'T' . $a['jam_rawat'] . '+07:00';
+
+        $payload = [
+            'resourceType' => 'AllergyIntolerance',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/allergy/' . $idSatuSehat,
+                    'value'  => $a['no_rawat']
+                ]
+            ],
+            'clinicalStatus' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical',
+                        'code'    => 'active',
+                        'display' => 'Active'
+                    ]
+                ]
+            ],
+            'verificationStatus' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/CodeSystem/allergyintolerance-verification',
+                        'code'    => 'confirmed',
+                        'display' => 'Confirmed'
+                    ]
+                ]
+            ],
+            'category' => [
+                $allergyData['category']
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => $allergyData['coding_system'],
+                        'code'    => $allergyData['coding_code'],
+                        'display' => $allergyData['coding_display']
+                    ]
+                ],
+                'text' => $allergyData['text']
+            ],
+            'patient' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $a['nm_pasien']
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $a['id_encounter'],
+                'display'   => 'Kunjungan ' . $a['nm_pasien'] . ' pada tanggal ' . ($a['tgl_registrasi'] ?? '') . ' dengan nomor kunjungan ' . $a['no_rawat']
+            ],
+            'recordedDate' => $recordedDate,
+            'recorder' => [
+                'reference' => 'Practitioner/' . $idPraktisi,
+                'display'   => $a['nama']
+            ]
+        ];
+
+        if (!empty($idAllergy)) {
+            $payload['id'] = $idAllergy;
+        }
+
+        return $payload;
+    }
 }

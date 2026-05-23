@@ -424,3 +424,30 @@ php satusehat_procedure_sync.php --verbose
 ```bash
 */5 * * * * cd /path/to/php-service && php satusehat_procedure_sync.php >> /dev/null 2>&1
 ```
+
+---
+
+# Satu Sehat Allergy Intolerance Sync Service (PHP)
+
+PHP CLI script to automatically synchronize patient Allergy data with the BPJS Satu Sehat API.
+It utilizes a local auto-learning dictionary to correctly map raw text to FHIR `AllergyIntolerance` SNOMED CT codes.
+
+## Features
+
+- **Automated POST & PUT**: Creates new AllergyIntolerance records or updates existing ones across both outpatient (`pemeriksaan_ralan`) and inpatient (`pemeriksaan_ranap`) records.
+- **Smart Duplicate Fallback**: If Satu Sehat returns a duplicate collision, it automatically fetches existing records and links the `id_allergy_intolerance` using matching SNOMED codes.
+- **Self-Learning Dictionary**: Maintains its own local cache (`cache/alergisatusehat.iyem`). If a doctor types an unknown allergy, it defaults to a generic FHIR-compliant SNOMED code (`419199007` - Allergy to substance) and saves the mapping locally to ensure 100% sync success without rejecting the payload.
+
+## Quick Start
+
+```bash
+# 1. Run
+php satusehat_allergyintolerance_sync.php --verbose
+```
+
+## Cron Setup
+
+```bash
+*/5 * * * * cd /path/to/php-service && php satusehat_allergyintolerance_sync.php >> /dev/null 2>&1
+```
+
