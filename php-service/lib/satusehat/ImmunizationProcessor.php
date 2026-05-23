@@ -31,7 +31,7 @@ class SatuSehatImmunizationProcessor
         $this->log    = $log;
     }
 
-    public function run(): array
+    public function run(?array $activeRecords = null, ?array $updateRecords = null): array
     {
         $this->successCount = 0;
         $this->failCount    = 0;
@@ -49,11 +49,11 @@ class SatuSehatImmunizationProcessor
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 1: POST New Immunization");
-        $this->processActive($dateFrom, $dateTo);
+        $this->processActive($dateFrom, $dateTo, $activeRecords);
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 2: PUT Update Immunization");
-        $this->processUpdate($dateFrom, $dateTo);
+        $this->processUpdate($dateFrom, $dateTo, $updateRecords);
 
         return [
             'success' => $this->successCount,
@@ -62,9 +62,11 @@ class SatuSehatImmunizationProcessor
         ];
     }
 
-    private function processActive(string $dateFrom, string $dateTo): void
+    private function processActive(string $dateFrom, string $dateTo, ?array $records = null): void
     {
-        $records = $this->db->fetchPendingImmunizationActive($dateFrom, $dateTo);
+        if ($records === null) {
+            $records = $this->db->fetchPendingImmunizationActive($dateFrom, $dateTo);
+        }
         
         if (empty($records)) {
             $this->log->info("[PHASE 1] No pending Immunization to POST.");
@@ -138,9 +140,11 @@ class SatuSehatImmunizationProcessor
         }
     }
 
-    private function processUpdate(string $dateFrom, string $dateTo): void
+    private function processUpdate(string $dateFrom, string $dateTo, ?array $records = null): void
     {
-        $records = $this->db->fetchPendingImmunizationUpdate($dateFrom, $dateTo);
+        if ($records === null) {
+            $records = $this->db->fetchPendingImmunizationUpdate($dateFrom, $dateTo);
+        }
 
         if (empty($records)) {
             $this->log->info("[PHASE 2] No pending Immunization to PUT.");

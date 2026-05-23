@@ -35,7 +35,7 @@ class SatuSehatMedicationDispenseProcessor
         $this->log    = $log;
     }
 
-    public function run(): array
+    public function run(?array $activeRecords = null, ?array $updateRecords = null): array
     {
         $this->successCount = 0;
         $this->failCount    = 0;
@@ -45,11 +45,11 @@ class SatuSehatMedicationDispenseProcessor
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 1: POST New MedicationDispense");
-        $this->processActive();
+        $this->processActive($activeRecords);
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 2: PUT Update MedicationDispense");
-        $this->processUpdate();
+        $this->processUpdate($updateRecords);
 
         return [
             'success' => $this->successCount,
@@ -58,9 +58,11 @@ class SatuSehatMedicationDispenseProcessor
         ];
     }
 
-    private function processActive(): void
+    private function processActive(?array $records = null): void
     {
-        $records = $this->db->fetchPendingMedicationDispenseActive($this->config->dateFrom, $this->config->dateTo);
+        if ($records === null) {
+            $records = $this->db->fetchPendingMedicationDispenseActive($this->config->dateFrom, $this->config->dateTo);
+        }
 
         if (empty($records)) {
             $this->log->info("[PHASE 1] No pending MedicationDispense to POST.");
@@ -150,9 +152,11 @@ class SatuSehatMedicationDispenseProcessor
         }
     }
 
-    private function processUpdate(): void
+    private function processUpdate(?array $records = null): void
     {
-        $records = $this->db->fetchPendingMedicationDispenseUpdate($this->config->dateFrom, $this->config->dateTo);
+        if ($records === null) {
+            $records = $this->db->fetchPendingMedicationDispenseUpdate($this->config->dateFrom, $this->config->dateTo);
+        }
 
         if (empty($records)) {
             $this->log->info("[PHASE 2] No pending MedicationDispense to PUT.");

@@ -31,7 +31,7 @@ class SatuSehatObservationTTVProcessor
         $this->log    = $log;
     }
 
-    public function run(): array
+    public function run(?array $preFetchedObservations = null): array
     {
         $this->successCount = 0;
         $this->failCount    = 0;
@@ -52,7 +52,8 @@ class SatuSehatObservationTTVProcessor
         foreach ($definitions as $ttvType => $def) {
             $this->log->info("──────────────────────────────────────────────────────────────");
             $this->log->info("[SYNC] Processing Observation: " . strtoupper($ttvType));
-            $this->processObservation($ttvType, $def, $dateFrom, $dateTo);
+            $records = $preFetchedObservations[$ttvType] ?? null;
+            $this->processObservation($ttvType, $def, $dateFrom, $dateTo, $records);
         }
 
         return [
@@ -62,9 +63,11 @@ class SatuSehatObservationTTVProcessor
         ];
     }
 
-    private function processObservation(string $ttvTypeKey, array $def, string $dateFrom, string $dateTo): void
+    private function processObservation(string $ttvTypeKey, array $def, string $dateFrom, string $dateTo, ?array $patients = null): void
     {
-        $patients = $this->db->fetchPendingObservations($ttvTypeKey, $def, $dateFrom, $dateTo);
+        if ($patients === null) {
+            $patients = $this->db->fetchPendingObservations($ttvTypeKey, $def, $dateFrom, $dateTo);
+        }
         
         if (empty($patients)) {
             $this->log->info("  No pending {$ttvTypeKey} records.");

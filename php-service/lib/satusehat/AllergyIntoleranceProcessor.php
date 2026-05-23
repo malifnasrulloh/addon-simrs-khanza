@@ -34,7 +34,7 @@ class SatuSehatAllergyIntoleranceProcessor
         $this->dictionary = $dictionary;
     }
 
-    public function run(): array
+    public function run(?array $activeRecords = null, ?array $updateRecords = null): array
     {
         $this->successCount = 0;
         $this->failCount    = 0;
@@ -52,11 +52,11 @@ class SatuSehatAllergyIntoleranceProcessor
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 1: POST New AllergyIntolerance");
-        $this->processActive($dateFrom, $dateTo);
+        $this->processActive($dateFrom, $dateTo, $activeRecords);
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 2: PUT Update AllergyIntolerance");
-        $this->processUpdate($dateFrom, $dateTo);
+        $this->processUpdate($dateFrom, $dateTo, $updateRecords);
 
         return [
             'success' => $this->successCount,
@@ -65,9 +65,11 @@ class SatuSehatAllergyIntoleranceProcessor
         ];
     }
 
-    private function processActive(string $dateFrom, string $dateTo): void
+    private function processActive(string $dateFrom, string $dateTo, ?array $patients = null): void
     {
-        $patients = $this->db->fetchPendingAllergyActive($dateFrom, $dateTo);
+        if ($patients === null) {
+            $patients = $this->db->fetchPendingAllergyActive($dateFrom, $dateTo);
+        }
         
         if (empty($patients)) {
             $this->log->info("[PHASE 1] No pending AllergyIntolerance to POST.");
@@ -145,9 +147,11 @@ class SatuSehatAllergyIntoleranceProcessor
         }
     }
 
-    private function processUpdate(string $dateFrom, string $dateTo): void
+    private function processUpdate(string $dateFrom, string $dateTo, ?array $patients = null): void
     {
-        $patients = $this->db->fetchPendingAllergyUpdate($dateFrom, $dateTo);
+        if ($patients === null) {
+            $patients = $this->db->fetchPendingAllergyUpdate($dateFrom, $dateTo);
+        }
 
         if (empty($patients)) {
             $this->log->info("[PHASE 2] No pending AllergyIntolerance to PUT.");

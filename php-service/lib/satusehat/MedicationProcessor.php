@@ -31,7 +31,7 @@ class SatuSehatMedicationProcessor
         $this->log    = $log;
     }
 
-    public function run(): array
+    public function run(?array $activeRecords = null, ?array $updateRecords = null): array
     {
         $this->successCount = 0;
         $this->failCount    = 0;
@@ -39,11 +39,11 @@ class SatuSehatMedicationProcessor
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 1: POST New Medication Master");
-        $this->processActive();
+        $this->processActive($activeRecords);
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 2: PUT Update Medication Master");
-        $this->processUpdate();
+        $this->processUpdate($updateRecords);
 
         return [
             'success' => $this->successCount,
@@ -52,9 +52,11 @@ class SatuSehatMedicationProcessor
         ];
     }
 
-    private function processActive(): void
+    private function processActive(?array $records = null): void
     {
-        $records = $this->db->fetchPendingMedicationActive();
+        if ($records === null) {
+            $records = $this->db->fetchPendingMedicationActive();
+        }
         
         if (empty($records)) {
             $this->log->info("[PHASE 1] No pending Medication to POST.");
@@ -105,9 +107,11 @@ class SatuSehatMedicationProcessor
         }
     }
 
-    private function processUpdate(): void
+    private function processUpdate(?array $records = null): void
     {
-        $records = $this->db->fetchPendingMedicationUpdate();
+        if ($records === null) {
+            $records = $this->db->fetchPendingMedicationUpdate();
+        }
 
         if (empty($records)) {
             $this->log->info("[PHASE 2] No pending Medication to PUT.");

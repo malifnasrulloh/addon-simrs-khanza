@@ -29,7 +29,7 @@ class SatuSehatEpisodeOfCareProcessor
         $this->log    = $log;
     }
 
-    public function run(): array
+    public function run(?array $activeRecords = null, ?array $finishedRecords = null): array
     {
         $this->successCount = 0;
         $this->failCount    = 0;
@@ -47,11 +47,11 @@ class SatuSehatEpisodeOfCareProcessor
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 1: POST 'active' Episode Of Care");
-        $this->processActive($dateFrom, $dateTo);
+        $this->processActive($dateFrom, $dateTo, $activeRecords);
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 2: PUT 'finished' Episode Of Care");
-        $this->processFinished($dateFrom, $dateTo);
+        $this->processFinished($dateFrom, $dateTo, $finishedRecords);
 
         return [
             'success' => $this->successCount,
@@ -60,9 +60,11 @@ class SatuSehatEpisodeOfCareProcessor
         ];
     }
 
-    private function processActive(string $dateFrom, string $dateTo): void
+    private function processActive(string $dateFrom, string $dateTo, ?array $patients = null): void
     {
-        $patients = $this->db->fetchPendingEocActive($dateFrom, $dateTo);
+        if ($patients === null) {
+            $patients = $this->db->fetchPendingEocActive($dateFrom, $dateTo);
+        }
         
         if (empty($patients)) {
             $this->log->info("[PHASE 1] No pending 'active' episodes.");
@@ -137,9 +139,11 @@ class SatuSehatEpisodeOfCareProcessor
         }
     }
 
-    private function processFinished(string $dateFrom, string $dateTo): void
+    private function processFinished(string $dateFrom, string $dateTo, ?array $patients = null): void
     {
-        $patients = $this->db->fetchPendingEocFinished($dateFrom, $dateTo);
+        if ($patients === null) {
+            $patients = $this->db->fetchPendingEocFinished($dateFrom, $dateTo);
+        }
 
         if (empty($patients)) {
             $this->log->info("[PHASE 2] No pending 'finished' episodes.");

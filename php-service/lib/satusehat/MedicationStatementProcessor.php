@@ -35,7 +35,7 @@ class SatuSehatMedicationStatementProcessor
         $this->log    = $log;
     }
 
-    public function run(): array
+    public function run(?array $activeRecords = null, ?array $updateRecords = null): array
     {
         $this->successCount = 0;
         $this->failCount    = 0;
@@ -45,11 +45,11 @@ class SatuSehatMedicationStatementProcessor
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 1: POST New MedicationStatement");
-        $this->processActive();
+        $this->processActive($activeRecords);
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 2: PUT Update MedicationStatement");
-        $this->processUpdate();
+        $this->processUpdate($updateRecords);
 
         return [
             'success' => $this->successCount,
@@ -58,9 +58,11 @@ class SatuSehatMedicationStatementProcessor
         ];
     }
 
-    private function processActive(): void
+    private function processActive(?array $records = null): void
     {
-        $records = $this->db->fetchPendingMedicationStatementActive($this->config->dateFrom, $this->config->dateTo);
+        if ($records === null) {
+            $records = $this->db->fetchPendingMedicationStatementActive($this->config->dateFrom, $this->config->dateTo);
+        }
 
         if (empty($records)) {
             $this->log->info("[PHASE 1] No pending MedicationStatement to POST.");
@@ -130,9 +132,11 @@ class SatuSehatMedicationStatementProcessor
         }
     }
 
-    private function processUpdate(): void
+    private function processUpdate(?array $records = null): void
     {
-        $records = $this->db->fetchPendingMedicationStatementUpdate($this->config->dateFrom, $this->config->dateTo);
+        if ($records === null) {
+            $records = $this->db->fetchPendingMedicationStatementUpdate($this->config->dateFrom, $this->config->dateTo);
+        }
 
         if (empty($records)) {
             $this->log->info("[PHASE 2] No pending MedicationStatement to PUT.");

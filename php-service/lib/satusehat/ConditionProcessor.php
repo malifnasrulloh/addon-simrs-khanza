@@ -27,7 +27,7 @@ class SatuSehatConditionProcessor
         $this->log    = $log;
     }
 
-    public function run(): array
+    public function run(?array $activeRecords = null, ?array $updateRecords = null): array
     {
         $this->successCount = 0;
         $this->failCount    = 0;
@@ -45,11 +45,11 @@ class SatuSehatConditionProcessor
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 1: POST New Condition");
-        $this->processActive($dateFrom, $dateTo);
+        $this->processActive($dateFrom, $dateTo, $activeRecords);
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 2: PUT Update Condition");
-        $this->processUpdate($dateFrom, $dateTo);
+        $this->processUpdate($dateFrom, $dateTo, $updateRecords);
 
         return [
             'success' => $this->successCount,
@@ -58,9 +58,11 @@ class SatuSehatConditionProcessor
         ];
     }
 
-    private function processActive(string $dateFrom, string $dateTo): void
+    private function processActive(string $dateFrom, string $dateTo, ?array $patients = null): void
     {
-        $patients = $this->db->fetchPendingConditionActive($dateFrom, $dateTo);
+        if ($patients === null) {
+            $patients = $this->db->fetchPendingConditionActive($dateFrom, $dateTo);
+        }
         
         if (empty($patients)) {
             $this->log->info("[PHASE 1] No pending conditions to POST.");
@@ -123,9 +125,11 @@ class SatuSehatConditionProcessor
         }
     }
 
-    private function processUpdate(string $dateFrom, string $dateTo): void
+    private function processUpdate(string $dateFrom, string $dateTo, ?array $patients = null): void
     {
-        $patients = $this->db->fetchPendingConditionUpdate($dateFrom, $dateTo);
+        if ($patients === null) {
+            $patients = $this->db->fetchPendingConditionUpdate($dateFrom, $dateTo);
+        }
 
         if (empty($patients)) {
             $this->log->info("[PHASE 2] No pending conditions to PUT.");

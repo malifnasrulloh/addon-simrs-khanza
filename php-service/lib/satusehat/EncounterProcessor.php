@@ -27,7 +27,7 @@ class SatuSehatEncounterProcessor
         $this->log    = $log;
     }
 
-    public function run(): array
+    public function run(?array $arrivedRecords = null, ?array $inProgressRecords = null, ?array $finishedRecords = null): array
     {
         $this->successCount = 0;
         $this->failCount    = 0;
@@ -45,15 +45,15 @@ class SatuSehatEncounterProcessor
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 1: POST 'arrived' Encounters");
-        $this->processArrived($dateFrom, $dateTo);
+        $this->processArrived($dateFrom, $dateTo, $arrivedRecords);
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 2: PUT 'in-progress' Encounters");
-        $this->processInProgress($dateFrom, $dateTo);
+        $this->processInProgress($dateFrom, $dateTo, $inProgressRecords);
 
         $this->log->info("──────────────────────────────────────────────────────────────");
         $this->log->info("[SYNC] Phase 3: PUT 'finished' Encounters");
-        $this->processFinished($dateFrom, $dateTo);
+        $this->processFinished($dateFrom, $dateTo, $finishedRecords);
 
         return [
             'success' => $this->successCount,
@@ -62,9 +62,11 @@ class SatuSehatEncounterProcessor
         ];
     }
 
-    private function processArrived(string $dateFrom, string $dateTo): void
+    private function processArrived(string $dateFrom, string $dateTo, ?array $patients = null): void
     {
-        $patients = $this->db->fetchPendingArrived($dateFrom, $dateTo);
+        if ($patients === null) {
+            $patients = $this->db->fetchPendingArrived($dateFrom, $dateTo);
+        }
         
         if (empty($patients)) {
             $this->log->info("[PHASE 1] No pending 'arrived' encounters.");
@@ -129,9 +131,11 @@ class SatuSehatEncounterProcessor
         }
     }
 
-    private function processInProgress(string $dateFrom, string $dateTo): void
+    private function processInProgress(string $dateFrom, string $dateTo, ?array $patients = null): void
     {
-        $patients = $this->db->fetchPendingInProgress($dateFrom, $dateTo);
+        if ($patients === null) {
+            $patients = $this->db->fetchPendingInProgress($dateFrom, $dateTo);
+        }
 
         if (empty($patients)) {
             $this->log->info("[PHASE 2] No pending 'in-progress' encounters.");
@@ -185,9 +189,11 @@ class SatuSehatEncounterProcessor
         }
     }
 
-    private function processFinished(string $dateFrom, string $dateTo): void
+    private function processFinished(string $dateFrom, string $dateTo, ?array $patients = null): void
     {
-        $patients = $this->db->fetchPendingFinished($dateFrom, $dateTo);
+        if ($patients === null) {
+            $patients = $this->db->fetchPendingFinished($dateFrom, $dateTo);
+        }
 
         if (empty($patients)) {
             $this->log->info("[PHASE 3] No pending 'finished' encounters.");
