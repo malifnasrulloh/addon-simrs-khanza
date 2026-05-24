@@ -409,5 +409,32 @@ SQL;
         $stmt->execute(['nr' => $noRawat]);
         return $stmt->fetch() !== false;
     }
+
+    /**
+     * Fetch the full JKN booking record by no_rawat to support dynamic on-demand booking addition.
+     */
+    public function fetchBookingByNoRawat(string $noRawat): ?array
+    {
+        $sql = <<<'SQL'
+SELECT
+    r.nobooking, r.no_rawat, r.norm as no_rkm_medis, p.nm_pasien,
+    r.nohp, r.nomorkartu, r.nik, r.tanggalperiksa,
+    COALESCE(mp.nm_poli_bpjs, '') as nm_poli, COALESCE(md.nm_dokter_bpjs, '') as nm_dokter, r.jampraktek,
+    r.jeniskunjungan, r.nomorreferensi, r.status, r.validasi,
+    r.kodepoli, r.pasienbaru, r.kodedokter,
+    r.nomorantrean, r.angkaantrean, r.estimasidilayani,
+    r.sisakuotajkn, r.kuotajkn, r.sisakuotanonjkn, r.kuotanonjkn
+FROM referensi_mobilejkn_bpjs r
+INNER JOIN pasien p ON r.norm = p.no_rkm_medis
+LEFT JOIN maping_poli_bpjs mp ON r.kodepoli = mp.kd_poli_bpjs
+LEFT JOIN maping_dokter_dpjpvclaim md ON r.kodedokter = md.kd_dokter_bpjs
+WHERE r.no_rawat = :nr
+LIMIT 1
+SQL;
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
 }
 

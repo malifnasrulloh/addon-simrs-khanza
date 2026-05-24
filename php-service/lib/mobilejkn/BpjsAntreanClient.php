@@ -373,7 +373,7 @@ class BpjsAntreanClient
         $code    = (string) ($json['metadata']['code'] ?? $json['metaData']['code'] ?? '');
         $message = (string) ($json['metadata']['message'] ?? $json['metaData']['message'] ?? 'Unknown');
 
-        $isSuccess = in_array($code, ['200', '208'], true) || $message === 'Ok' || $message === 'OK';
+        $isSuccess = in_array($code, ['200', '208'], true);
 
         $data = [];
         if ($isSuccess) {

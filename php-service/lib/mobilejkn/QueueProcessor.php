@@ -290,31 +290,9 @@ class QueueProcessor
 
             // Load existing task state
             $state = $this->db->loadTaskState($noRawat);
-            $hasSentTasks = ($state['3'] === 'Sudah' || $state['4'] === 'Sudah');
 
-            // Step 1: /antrean/add — only if no tasks sent yet
-            if (!$hasSentTasks) {
-                $nomorRef = $isJkn ? $this->db->fetchNomorReferensi($noRawat) : '';
-                $payload  = PayloadBuilder::onsitePatient($p, $isJkn, $nomorRef);
-
-                $this->log->info("[BLOCK 4] {$noRawat}: SEND /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
-                $addResult = $this->api->addAntrean($payload);
-                $addCode   = $addResult['code'] ?? '';
-
-                if ($addResult['success'] || $addCode === '208') {
-                    // 200=OK, 208=duplicate booking
-                    // Both mean booking is on BPJS side → proceed to task chain
-                    $this->log->info("[BLOCK 4] {$noRawat}: ✓ /antrean/add accepted (code={$addCode})");
-                    $this->successCount++;
-                } else {
-                    // Truly fatal: network error, auth failure, etc → skip this patient
-                    $this->log->warning("[BLOCK 4] {$noRawat}: ✗ /antrean/add failed ({$addCode}): {$addResult['message']}");
-                    $this->failCount++;
-                    continue;
-                }
-            }
-
-            // Step 2: Sequential task chain (same as Block 3)
+            // Directly run the task chain. If the booking is not registered on BPJS yet,
+            // Task 3 will automatically detect 'booking_not_found' and register it dynamically.
             $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 4', $isJkn);
         }
     }
@@ -365,6 +343,49 @@ class QueueProcessor
                     if ($r['ok']) {
                         $state['3'] = 'Sudah';
                         $state['waktu_3'] = $datajam;
+                    } elseif ($r['reason'] === 'booking_not_found') {
+                        $this->log->info("[{$label}] {$noRawat} TaskID 3 failed: booking_not_found. Triggering dynamic booking recovery...");
+
+                        // Dynamically resolve /antrean/add payload
+                        $payload = null;
+                        if ($isJkn) {
+                            $bookingData = $this->db->fetchBookingByNoRawat($noRawat);
+                            if ($bookingData) {
+                                $payload = PayloadBuilder::jknBooking($bookingData);
+                            } else {
+                                $nomorRef = $this->db->fetchNomorReferensi($noRawat);
+                                $payload  = PayloadBuilder::onsitePatient($patient, true, $nomorRef);
+                            }
+                        } else {
+                            $payload = PayloadBuilder::onsitePatient($patient, false, '');
+                        }
+
+                        if ($payload) {
+                            $this->log->info("[{$label}] {$noRawat}: sending dynamic /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
+                            $addResult = $this->api->addAntrean($payload);
+                            $addCode   = $addResult['code'] ?? '';
+
+                            if ($addResult['success'] || $addCode === '208') {
+                                $this->log->info("[{$label}] {$noRawat}: dynamic /antrean/add recovery accepted (code={$addCode}). Retrying Task ID 3 immediately.");
+                                if ($isJkn && !empty($bookingData['nobooking'])) {
+                                    $this->db->markBookingAsSent($bookingData['nobooking']);
+                                }
+                                // Retry sending Task 3
+                                $retryR = $this->sendTaskId($kodebooking, $noRawat, '3', $datajam, $label, $jenisresep);
+                                if ($retryR['ok']) {
+                                    $state['3'] = 'Sudah';
+                                    $state['waktu_3'] = $datajam;
+                                } else {
+                                    $state['3'] = 'Belum';
+                                }
+                            } else {
+                                $this->log->warning("[{$label}] {$noRawat}: dynamic /antrean/add recovery failed ({$addCode}): {$addResult['message']}");
+                                $state['3'] = 'Belum';
+                            }
+                        } else {
+                            $this->log->error("[{$label}] {$noRawat}: failed to resolve booking payload for dynamic recovery");
+                            $state['3'] = 'Belum';
+                        }
                     } else {
                         $state['3'] = 'Belum';
                     }
@@ -526,9 +547,23 @@ class QueueProcessor
         $msg = $result['message'] ?? '';
         $code = $result['code'] ?? '';
 
-        // Detect BPJS time-ordering rejection: "waktu tidak boleh kurang atau sama"
-        $isTimeOrder = (str_contains($msg, 'tidak boleh kurang') || str_contains($msg, 'waktu sebelumnya'));
-        $reason = $isTimeOrder ? 'time_order' : 'api_error';
+        // Detect BPJS time-ordering or booking-not-found rejections
+        $msgLower = strtolower($msg);
+        $isNotFound = (
+            str_contains($msgLower, 'tidak ditemukan') ||
+            str_contains($msgLower, 'tidak terdaftar') ||
+            str_contains($msgLower, 'belum terdaftar') ||
+            str_contains($msgLower, 'belum terkirim') ||
+            str_contains($msgLower, 'tidak ada') ||
+            str_contains($msgLower, 'booking')
+        );
+
+        if ($isNotFound) {
+            $reason = 'booking_not_found';
+        } else {
+            $isTimeOrder = (str_contains($msg, 'tidak boleh kurang') || str_contains($msg, 'waktu sebelumnya'));
+            $reason = $isTimeOrder ? 'time_order' : 'api_error';
+        }
 
         $this->log->warning("[{$label}] {$noRawat} TaskID {$taskId}: ✗ {$code} — {$msg} (rolled back, reason={$reason})");
         $this->failCount++;
@@ -555,10 +590,14 @@ class QueueProcessor
 
         $this->farmasiSent[$noRawat] = true;
 
-        if ($result['success'] || ($result['code'] ?? '') === '208') {
-            $this->log->info("[FARMASI] {$noRawat}: ✓ accepted");
+        $code = (string) ($result['code'] ?? '');
+        $msg  = (string) ($result['message'] ?? '');
+        $isFarmasiSuccess = $result['success'] || $code === '208' || ($code === '201' && str_contains(strtolower($msg), 'sudah ada'));
+
+        if ($isFarmasiSuccess) {
+            $this->log->info("[FARMASI] {$noRawat}: ✓ accepted (code={$code})");
         } else {
-            $this->log->warning("[FARMASI] {$noRawat}: ✗ {$result['code']} — {$result['message']}");
+            $this->log->warning("[FARMASI] {$noRawat}: ✗ {$code} — {$msg}");
         }
     }
 
