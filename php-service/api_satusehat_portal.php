@@ -156,6 +156,11 @@ if ($action === 'searchSatuSehat' && $method === 'GET') {
                     $nikFound = $id['value'];
                 }
             }
+            
+            if (empty($nikFound) || strpos($nikFound, '#') !== false) {
+                $nikFound = $nik;
+            }
+
             if ($nikFound) {
                 try {
                     $stmt = $pdo->prepare("REPLACE INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:nik, :ihs)");
@@ -197,6 +202,16 @@ if ($action === 'createPatient' && $method === 'POST') {
                     }
                 }
             }
+            if (empty($nikFound) || strpos($nikFound, '#') !== false) {
+                if (isset($input['identifier'])) {
+                    foreach ($input['identifier'] as $id) {
+                        if ($id['system'] === 'https://fhir.kemkes.go.id/id/nik') {
+                            $nikFound = $id['value'];
+                        }
+                    }
+                }
+            }
+
             if ($nikFound) {
                 try {
                     $stmt = $pdo->prepare("REPLACE INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:nik, :ihs)");
