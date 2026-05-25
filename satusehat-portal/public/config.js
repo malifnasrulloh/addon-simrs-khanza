@@ -1,7 +1,7 @@
 window.PORTAL_CONFIG = {
-    // URL to the PHP backend API
-    API_URL: "http://127.0.0.1:8080/api_satusehat_portal.php",
+    // URL to the PHP backend API (can be relative to work on any domain/port out-of-the-box!)
+    API_URL: "../php-service/api_satusehat_portal.php",
     
     // The subdirectory path where this frontend is hosted on your webserver
-    ROUTER_BASENAME: "/satusehat-portal"
+    ROUTER_BASENAME: "/ssportal"
 };

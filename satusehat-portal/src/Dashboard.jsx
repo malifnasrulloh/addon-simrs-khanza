@@ -17,6 +17,7 @@ export default function Dashboard({ token, setToken }) {
   const [createMode, setCreateMode] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [createPayload, setCreatePayload] = useState(null);
+  const [showRawJson, setShowRawJson] = useState(false);
 
   const handleLogout = () => {
     setToken(null);
@@ -42,6 +43,7 @@ export default function Dashboard({ token, setToken }) {
     setResult(null);
     setCreateMode(false);
     setShowModal(false);
+    setShowRawJson(false);
 
     try {
       if (activeTab === 'rm') {
@@ -290,6 +292,33 @@ export default function Dashboard({ token, setToken }) {
               </div>
             </div>
           )}
+          
+          <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-color)', textAlign: 'left' }}>
+            <button 
+              className="btn btn-secondary" 
+              style={{ width: 'auto' }}
+              onClick={() => setShowRawJson(!showRawJson)}
+            >
+              {showRawJson ? '⚠️ Hide Raw FHIR JSON Response' : '👁️ Show Raw FHIR JSON Response'}
+            </button>
+            {showRawJson && (
+              <pre style={{
+                marginTop: '1rem',
+                padding: '1rem',
+                background: '#1e1e2e',
+                color: '#cdd6f4',
+                borderRadius: '8px',
+                overflowX: 'auto',
+                maxHeight: '400px',
+                fontSize: '0.85rem',
+                lineHeight: '1.4',
+                border: '1px solid rgba(255,255,255,0.1)',
+                fontFamily: 'monospace'
+              }}>
+                <code>{JSON.stringify(result, null, 2)}</code>
+              </pre>
+            )}
+          </div>
         </div>
       )}
 
