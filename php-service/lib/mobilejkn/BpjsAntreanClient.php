@@ -13,7 +13,7 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../LZString.php';
+require_once __DIR__ . '/../icare/LZString.php';
 
 class BpjsAntreanClient
 {

@@ -109,13 +109,13 @@ PHP CLI script to automate the BPJS iCare validation and approval flow for outpa
 nano .env   # Fill in ICARE_CONS_ID, ICARE_SECRET_KEY, ICARE_USER_KEY
 
 # 2. Test with dry-run (DB query only, no API calls)
-php icare_auto_approve.php --dry-run
+php icare_approval.php --dry-run
 
 # 3. Run for real
-php icare_auto_approve.php
+php icare_approval.php
 
 # 4. Run with debug output
-php icare_auto_approve.php --verbose
+php icare_approval.php --verbose
 ```
 
 ## CLI Options
@@ -154,20 +154,21 @@ php icare_auto_approve.php --verbose
 
 ```bash
 # Every 30 minutes during work hours (Mon-Sat, 7am-5pm)
-0,30 7-17 * * 1-6 cd /path/to/php-service && php icare_auto_approve.php >> /dev/null 2>&1
+0,30 7-17 * * 1-6 cd /path/to/php-service && php icare_approval.php >> /dev/null 2>&1
 ```
 
 ## File Structure
 
 ```
 php-service/
-├── icare_auto_approve.php     # Main entry point
+├── icare_approval.php         # Main entry point
 ├── lib/
-│   ├── BPJSICareApi.php       # API client + AES decryption
-│   ├── HeadlessApproval.php   # cURL browser simulation
-│   ├── LZString.php           # LZString decompression (Java port)
-│   ├── Logger.php             # File + console logging
-│   └── PatientCache.php       # Daily JSON cache
+│   ├── icare/
+│   │   ├── BPJSICareApi.php   # API client + AES decryption
+│   │   ├── HeadlessApproval.php # cURL browser simulation
+│   │   ├── LZString.php       # LZString decompression (Java port)
+│   │   └── PatientCache.php   # Daily JSON cache
+│   └── Logger.php             # File + console logging
 └── logs/
     ├── icare_YYYY-MM-DD.log   # Daily log files
     └── icare_cache_YYYY-MM-DD.json  # Daily cache

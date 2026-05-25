@@ -7,14 +7,14 @@
  * outpatient (Ralan) registrations. Runs headlessly via cURL.
  *
  * Usage:
- *   php icare_auto_approve.php                  # Normal run
- *   php icare_auto_approve.php --dry-run        # DB query only, no API calls
- *   php icare_auto_approve.php --verbose        # Extra debug output
- *   php icare_auto_approve.php --no-cache       # Ignore cache, re-process all
- *   php icare_auto_approve.php --help           # Show help
+ *   php icare_approval.php                  # Normal run
+ *   php icare_approval.php --dry-run        # DB query only, no API calls
+ *   php icare_approval.php --verbose        # Extra debug output
+ *   php icare_approval.php --no-cache       # Ignore cache, re-process all
+ *   php icare_approval.php --help           # Show help
  *
  * Cron example (every 30 minutes during work hours):
- *   *30 7-17 * * 1-6 cd /path/to/php-service && php icare_auto_approve.php
+ *   *30 7-17 * * 1-6 cd /path/to/php-service && php icare_approval.php
  *
  * @author  malifnasrulloh (converted from Java by Antigravity)
  * @version 1.0.0
@@ -34,10 +34,10 @@ if (php_sapi_name() !== 'cli') {
 
 // ─── Load libraries ───────────────────────────────────────────────────────
 require_once BASE_DIR . '/lib/Logger.php';
-require_once BASE_DIR . '/lib/LZString.php';
-require_once BASE_DIR . '/lib/BPJSICareApi.php';
-require_once BASE_DIR . '/lib/HeadlessApproval.php';
-require_once BASE_DIR . '/lib/PatientCache.php';
+require_once BASE_DIR . '/lib/icare/LZString.php';
+require_once BASE_DIR . '/lib/icare/BPJSICareApi.php';
+require_once BASE_DIR . '/lib/icare/HeadlessApproval.php';
+require_once BASE_DIR . '/lib/icare/PatientCache.php';
 
 // ─── CLI arguments ────────────────────────────────────────────────────────
 $options = getopt('', ['help', 'dry-run', 'verbose', 'no-cache']);
@@ -51,7 +51,7 @@ if (isset($options['help'])) {
     ╚══════════════════════════════════════════════════════════════╝
 
     Usage:
-      php icare_auto_approve.php [options]
+      php icare_approval.php [options]
 
     Options:
       --help       Show this help message
@@ -71,7 +71,7 @@ if (isset($options['help'])) {
       Copy .env.example to .env and fill in ICARE_* credentials.
 
     Cron (every 30 min, work hours):
-      */30 7-17 * * 1-6 cd /path/to/php-service && php icare_auto_approve.php
+      */30 7-17 * * 1-6 cd /path/to/php-service && php icare_approval.php
 
     HELP;
     exit(0);
