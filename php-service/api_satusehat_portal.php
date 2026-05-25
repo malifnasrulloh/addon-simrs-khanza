@@ -71,12 +71,14 @@ if ($action === 'login' && $method === 'POST') {
     $stmt = $pdo->prepare("SELECT AES_DECRYPT(id_user, 'nur') as id_user, AES_DECRYPT(password, 'windi') as pwd FROM user WHERE AES_DECRYPT(id_user, 'nur') = :username");
     $stmt->execute(['username' => $username]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    $role = 'user';
 
     // If not found, check 'admin' table
     if (!$user) {
         $stmtAdmin = $pdo->prepare("SELECT AES_DECRYPT(usere, 'nur') as id_user, AES_DECRYPT(passworde, 'windi') as pwd FROM admin WHERE AES_DECRYPT(usere, 'nur') = :username");
         $stmtAdmin->execute(['username' => $username]);
         $user = $stmtAdmin->fetch(PDO::FETCH_ASSOC);
+        $role = 'admin';
     }
 
     if ($user && $user['pwd'] === $password) {
@@ -84,14 +86,18 @@ if ($action === 'login' && $method === 'POST') {
             'iss' => 'simrs-khanza',
             'iat' => time(),
             'exp' => time() + (8 * 3600), // 8 hours expiration
-            'user' => $username
+            'user' => $username,
+            'role' => $role
         ];
         $token = JWT::encode($payload, $jwtSecret);
         
         jsonResponse([
             'success' => true,
             'token' => $token,
-            'user' => ['username' => $username]
+            'user' => [
+                'username' => $username,
+                'role' => $role
+            ]
         ]);
     }
     jsonResponse(['success' => false, 'message' => 'Invalid credentials'], 401);
@@ -102,6 +108,7 @@ $headers = apache_request_headers();
 $authHeader = $headers['Authorization'] ?? '';
 $bearerToken = str_replace('Bearer ', '', $authHeader);
 
+$userRole = 'user';
 if ($action !== 'login') {
     if (empty($bearerToken)) {
         jsonResponse(['success' => false, 'message' => 'Unauthorized. Missing Token.'], 401);
@@ -110,6 +117,7 @@ if ($action !== 'login') {
     if (!$decoded) {
         jsonResponse(['success' => false, 'message' => 'Unauthorized. Invalid or Expired Token.'], 401);
     }
+    $userRole = $decoded['role'] ?? 'user';
 }
 
 if ($action === 'searchLocal' && $method === 'GET') {
@@ -240,6 +248,115 @@ if ($action === 'createPatient' && $method === 'POST') {
         } else {
             jsonResponse(['success' => false, 'message' => $res['message'], 'details' => $res['data']], $res['code']);
         }
+    } catch (Exception $e) {
+        jsonResponse(['success' => false, 'message' => $e->getMessage()], 500);
+    }
+}
+
+if ($action === 'getSyncStats' && $method === 'GET') {
+    if ($userRole !== 'admin') {
+        jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);
+    }
+
+    try {
+        // Total local patients with a valid 16-digit NIK
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM pasien WHERE no_ktp REGEXP '^[0-9]{16}$'");
+        $stmt->execute();
+        $total = (int)$stmt->fetchColumn();
+
+        // Mapped patients
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_ihs_patient WHERE nikpasien REGEXP '^[0-9]{16}$'");
+        $stmt->execute();
+        $mapped = (int)$stmt->fetchColumn();
+
+        $unmapped = $total - $mapped;
+        if ($unmapped < 0) $unmapped = 0;
+
+        jsonResponse([
+            'success' => true,
+            'stats' => [
+                'total_patients' => $total,
+                'mapped_patients' => $mapped,
+                'unmapped_patients' => $unmapped
+            ]
+        ]);
+    } catch (Exception $e) {
+        jsonResponse(['success' => false, 'message' => $e->getMessage()], 500);
+    }
+}
+
+if ($action === 'triggerBatchSync' && $method === 'POST') {
+    if ($userRole !== 'admin') {
+        jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);
+    }
+
+    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 10;
+    if ($limit <= 0 || $limit > 50) $limit = 10;
+
+    try {
+        // Fetch unmapped patients
+        $stmt = $pdo->prepare("
+            SELECT p.no_ktp as nik, p.nm_pasien, p.no_rkm_medis 
+            FROM pasien p 
+            LEFT JOIN satu_sehat_ihs_patient i ON p.no_ktp = i.nikpasien 
+            WHERE i.ihspasien IS NULL 
+              AND p.no_ktp REGEXP '^[0-9]{16}$'
+            LIMIT :limit
+        ");
+        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $stmt->execute();
+        $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $results = [];
+        foreach ($patients as $patient) {
+            $nik = $patient['nik'];
+            $rm = $patient['no_rkm_medis'];
+            $name = $patient['nm_pasien'];
+            
+            try {
+                $endpoint = "/Patient?identifier=https://fhir.kemkes.go.id/id/nik|{$nik}";
+                $res = $client->get($endpoint);
+                
+                if ($res['success'] && !empty($res['data']['entry'])) {
+                    $resource = $res['data']['entry'][0]['resource'];
+                    $ihsNumber = $resource['id'];
+                    
+                    // Map in local DB
+                    $insertStmt = $pdo->prepare("REPLACE INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:nik, :ihs)");
+                    $insertStmt->execute(['nik' => $nik, 'ihs' => $ihsNumber]);
+                    
+                    $results[] = [
+                        'rm' => $rm,
+                        'name' => $name,
+                        'nik' => $nik,
+                        'status' => 'success',
+                        'ihs' => $ihsNumber
+                    ];
+                } else {
+                    $results[] = [
+                        'rm' => $rm,
+                        'name' => $name,
+                        'nik' => $nik,
+                        'status' => 'not_found',
+                        'message' => 'Not found in Satu Sehat'
+                    ];
+                }
+                usleep(100000); // 100ms throttle to respect API rate limits
+            } catch (Exception $e) {
+                $results[] = [
+                    'rm' => $rm,
+                    'name' => $name,
+                    'nik' => $nik,
+                    'status' => 'error',
+                    'message' => $e->getMessage()
+                ];
+            }
+        }
+
+        jsonResponse([
+            'success' => true,
+            'synced' => $results
+        ]);
     } catch (Exception $e) {
         jsonResponse(['success' => false, 'message' => $e->getMessage()], 500);
     }
