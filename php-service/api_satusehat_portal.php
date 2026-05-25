@@ -147,8 +147,8 @@ if ($action === 'searchSatuSehat' && $method === 'GET') {
     try {
         $res = $client->get($endpoint);
         
-        if (!empty($res['entry'])) {
-            $resource = $res['entry'][0]['resource'];
+        if ($res['success'] && !empty($res['data']['entry'])) {
+            $resource = $res['data']['entry'][0]['resource'];
             $ihsNumber = $resource['id'];
             $nikFound = '';
             foreach ($resource['identifier'] as $id) {
@@ -157,11 +157,22 @@ if ($action === 'searchSatuSehat' && $method === 'GET') {
                 }
             }
             if ($nikFound) {
-                $stmt = $pdo->prepare("REPLACE INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:nik, :ihs)");
-                $stmt->execute(['nik' => $nikFound, 'ihs' => $ihsNumber]);
+                try {
+                    $stmt = $pdo->prepare("REPLACE INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:nik, :ihs)");
+                    $stmt->execute(['nik' => $nikFound, 'ihs' => $ihsNumber]);
+                } catch (PDOException $dbEx) {
+                    if (isset($log)) {
+                        $log->warning("Failed to save local IHS mapping for NIK {$nikFound}: " . $dbEx->getMessage());
+                    }
+                }
             }
         }
-        jsonResponse(['success' => true, 'data' => $res]);
+        
+        if ($res['success']) {
+            jsonResponse(['success' => true, 'data' => $res['data']]);
+        } else {
+            jsonResponse(['success' => false, 'message' => $res['message'], 'details' => $res['data']], $res['code']);
+        }
     } catch (Exception $e) {
         jsonResponse(['success' => false, 'message' => $e->getMessage()], 500);
     }
@@ -176,22 +187,33 @@ if ($action === 'createPatient' && $method === 'POST') {
     try {
         $res = $client->post("/Patient", $input);
         
-        if (isset($res['id'])) {
-            $ihsNumber = $res['id'];
+        if ($res['success'] && isset($res['data']['id'])) {
+            $ihsNumber = $res['data']['id'];
             $nikFound = '';
-            if (isset($res['identifier'])) {
-                foreach ($res['identifier'] as $id) {
+            if (isset($res['data']['identifier'])) {
+                foreach ($res['data']['identifier'] as $id) {
                     if ($id['system'] === 'https://fhir.kemkes.go.id/id/nik') {
                         $nikFound = $id['value'];
                     }
                 }
             }
             if ($nikFound) {
-                $stmt = $pdo->prepare("REPLACE INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:nik, :ihs)");
-                $stmt->execute(['nik' => $nikFound, 'ihs' => $ihsNumber]);
+                try {
+                    $stmt = $pdo->prepare("REPLACE INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:nik, :ihs)");
+                    $stmt->execute(['nik' => $nikFound, 'ihs' => $ihsNumber]);
+                } catch (PDOException $dbEx) {
+                    if (isset($log)) {
+                        $log->warning("Failed to save local IHS mapping for NIK {$nikFound}: " . $dbEx->getMessage());
+                    }
+                }
             }
         }
-        jsonResponse(['success' => true, 'data' => $res]);
+        
+        if ($res['success']) {
+            jsonResponse(['success' => true, 'data' => $res['data']]);
+        } else {
+            jsonResponse(['success' => false, 'message' => $res['message'], 'details' => $res['data']], $res['code']);
+        }
     } catch (Exception $e) {
         jsonResponse(['success' => false, 'message' => $e->getMessage()], 500);
     }
