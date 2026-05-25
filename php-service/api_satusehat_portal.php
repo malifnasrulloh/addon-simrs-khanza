@@ -114,15 +114,26 @@ if ($action !== 'login') {
 
 if ($action === 'searchLocal' && $method === 'GET') {
     $no_rm = $_GET['no_rm'] ?? '';
-    if (!$no_rm) jsonResponse(['error' => 'no_rm required'], 400);
+    $nik = $_GET['nik'] ?? '';
+    
+    if (!$no_rm && !$nik) jsonResponse(['error' => 'no_rm or nik required'], 400);
 
-    // Fetch full patient data for dynamic mapping
-    $stmt = $pdo->prepare("SELECT p.no_rkm_medis, p.nm_pasien, p.no_ktp as nik, p.nm_ibu, p.tgl_lahir, 
-                                  p.jk, p.alamat, p.no_tlp, p.stts_nikah, i.ihspasien 
-                           FROM pasien p 
-                           LEFT JOIN satu_sehat_ihs_patient i ON p.no_ktp = i.nikpasien 
-                           WHERE p.no_rkm_medis = :rm LIMIT 1");
-    $stmt->execute(['rm' => $no_rm]);
+    if ($no_rm) {
+        $stmt = $pdo->prepare("SELECT p.no_rkm_medis, p.nm_pasien, p.no_ktp as nik, p.nm_ibu, p.tgl_lahir, 
+                                      p.jk, p.alamat, p.no_tlp, p.stts_nikah, i.ihspasien 
+                               FROM pasien p 
+                               LEFT JOIN satu_sehat_ihs_patient i ON p.no_ktp = i.nikpasien 
+                               WHERE p.no_rkm_medis = :rm LIMIT 1");
+        $stmt->execute(['rm' => $no_rm]);
+    } else {
+        $stmt = $pdo->prepare("SELECT p.no_rkm_medis, p.nm_pasien, p.no_ktp as nik, p.nm_ibu, p.tgl_lahir, 
+                                      p.jk, p.alamat, p.no_tlp, p.stts_nikah, i.ihspasien 
+                               FROM pasien p 
+                               LEFT JOIN satu_sehat_ihs_patient i ON p.no_ktp = i.nikpasien 
+                               WHERE p.no_ktp = :nik LIMIT 1");
+        $stmt->execute(['nik' => $nik]);
+    }
+    
     $pasien = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if ($pasien) {

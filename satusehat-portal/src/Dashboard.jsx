@@ -18,6 +18,7 @@ export default function Dashboard({ token, setToken }) {
   const [showModal, setShowModal] = useState(false);
   const [createPayload, setCreatePayload] = useState(null);
   const [showRawJson, setShowRawJson] = useState(false);
+  const [payloadText, setPayloadText] = useState('');
 
   const handleLogout = () => {
     setToken(null);
@@ -123,23 +124,55 @@ export default function Dashboard({ token, setToken }) {
     };
   };
 
-  const prepareCreate = () => {
-    // If they searched by RM, we have rich local data
-    if (activeTab === 'rm' && result) {
-      setCreatePayload(mapLocalToFHIR(result));
-    } else {
-      // Basic fallback if searching directly by NIK
-      setCreatePayload({
-        resourceType: "Patient",
-        meta: { profile: ["https://fhir.kemkes.go.id/r4/StructureDefinition/Patient"] },
-        identifier: [{ use: "official", system: "https://fhir.kemkes.go.id/id/nik", value: nik }],
-        active: true,
-        name: [{ use: "official", text: "" }],
-        gender: "unknown",
-        birthDate: birthdate || ""
-      });
+  const prepareCreate = async () => {
+    setLoading(true);
+    setError('');
+    
+    try {
+      let localPatient = null;
+      
+      // If we searched by RM, result holds the local patient details
+      if (activeTab === 'rm' && result) {
+        localPatient = result;
+      } else {
+        // Search local database by NIK or NIK Ibu to fetch their rich details!
+        const searchNik = activeTab === 'nik' ? nik : nikIbu;
+        if (searchNik) {
+          try {
+            const data = await fetchApi(`${API_BASE}?action=searchLocal&nik=${searchNik}`);
+            if (data.success && data.data) {
+              localPatient = data.data;
+            }
+          } catch (e) {
+            console.warn("Patient not found in local database for creation mapping", e);
+          }
+        }
+      }
+      
+      let payloadObj = null;
+      if (localPatient) {
+        payloadObj = mapLocalToFHIR(localPatient);
+      } else {
+        // Basic fallback if patient is not in the local database at all
+        payloadObj = {
+          resourceType: "Patient",
+          meta: { profile: ["https://fhir.kemkes.go.id/r4/StructureDefinition/Patient"] },
+          identifier: [{ use: "official", system: "https://fhir.kemkes.go.id/id/nik", value: activeTab === 'nik' ? nik : nikIbu }],
+          active: true,
+          name: [{ use: "official", text: "" }],
+          gender: "unknown",
+          birthDate: birthdate || ""
+        };
+      }
+      
+      setCreatePayload(payloadObj);
+      setPayloadText(JSON.stringify(payloadObj, null, 2));
+      setShowModal(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
     }
-    setShowModal(true);
   };
 
   const handleCreateConfirm = async () => {
@@ -147,10 +180,17 @@ export default function Dashboard({ token, setToken }) {
     setError('');
     
     try {
+      let finalPayload = null;
+      try {
+        finalPayload = JSON.parse(payloadText);
+      } catch (e) {
+        throw new Error("Invalid JSON structure. Please fix any syntax errors in your payload.");
+      }
+      
       const data = await fetchApi(`${API_BASE}?action=createPatient`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(createPayload)
+        body: JSON.stringify(finalPayload)
       });
       setResult(data.data);
       setShowModal(false);
@@ -159,7 +199,6 @@ export default function Dashboard({ token, setToken }) {
       setActiveTab('nik');
     } catch (err) {
       setError(err.message);
-      setShowModal(false);
     } finally {
       setLoading(false);
     }
@@ -334,14 +373,8 @@ export default function Dashboard({ token, setToken }) {
             <textarea 
               className="form-control"
               style={{ height: '300px', fontFamily: 'monospace', fontSize: '0.85rem', marginBottom: '1rem' }}
-              value={JSON.stringify(createPayload, null, 2)}
-              onChange={(e) => {
-                try {
-                  setCreatePayload(JSON.parse(e.target.value));
-                } catch(err) {
-                  // allow temporary invalid json while typing
-                }
-              }}
+              value={payloadText}
+              onChange={(e) => setPayloadText(e.target.value)}
             />
             
             <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
