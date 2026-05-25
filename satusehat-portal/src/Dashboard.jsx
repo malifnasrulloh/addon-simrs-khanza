@@ -15,8 +15,8 @@ export default function Dashboard({ token, setToken }) {
   const username = userClaims.user || 'Admin';
   const role = userClaims.role || 'user';
 
-  const [activeTab, setActiveTab] = useState('rm'); 
-  
+  const [activeTab, setActiveTab] = useState('rm');
+
   const [noRm, setNoRm] = useState('');
   const [nik, setNik] = useState('');
   const [nikIbu, setNikIbu] = useState('');
@@ -25,7 +25,7 @@ export default function Dashboard({ token, setToken }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
-  
+
   const [createMode, setCreateMode] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [createPayload, setCreatePayload] = useState(null);
@@ -40,7 +40,7 @@ export default function Dashboard({ token, setToken }) {
   const [syncedCount, setSyncedCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
   const [cancelRequested, setCancelRequested] = useState(false);
-  
+
   const cancelRef = useRef(false);
 
   const fetchSyncStats = async () => {
@@ -66,7 +66,7 @@ export default function Dashboard({ token, setToken }) {
     setSyncProgress(0);
     setSyncedCount(0);
     setFailedCount(0);
-    
+
     const initialLogs = [{ time: new Date().toLocaleTimeString(), text: 'Starting batch sync process...', type: 'info' }];
     setSyncLogs(initialLogs);
 
@@ -187,7 +187,7 @@ export default function Dashboard({ token, setToken }) {
       } else {
         const query = activeTab === 'nik' ? `&nik=${nik}` : `&nik_ibu=${nikIbu}&birthdate=${birthdate}`;
         const data = await fetchApi(`${API_BASE}?action=searchSatuSehat${query}`);
-        
+
         if (data.data.entry && data.data.entry.length > 0) {
           setResult(data.data.entry[0].resource);
         } else {
@@ -215,9 +215,9 @@ export default function Dashboard({ token, setToken }) {
         }
       ],
       active: true,
-      name: [{ 
-        use: "official", 
-        text: patientData.nm_pasien || "N/A" 
+      name: [{
+        use: "official",
+        text: patientData.nm_pasien || "N/A"
       }],
       telecom: [
         {
@@ -261,10 +261,10 @@ export default function Dashboard({ token, setToken }) {
   const prepareCreate = async () => {
     setLoading(true);
     setError('');
-    
+
     try {
       let localPatient = null;
-      
+
       // If we searched by RM, result holds the local patient details
       if (activeTab === 'rm' && result) {
         localPatient = result;
@@ -282,7 +282,7 @@ export default function Dashboard({ token, setToken }) {
           }
         }
       }
-      
+
       let payloadObj = null;
       if (localPatient) {
         payloadObj = mapLocalToFHIR(localPatient);
@@ -298,7 +298,7 @@ export default function Dashboard({ token, setToken }) {
           birthDate: birthdate || ""
         };
       }
-      
+
       setCreatePayload(payloadObj);
       setPayloadText(JSON.stringify(payloadObj, null, 2));
       setShowModal(true);
@@ -312,7 +312,7 @@ export default function Dashboard({ token, setToken }) {
   const handleCreateConfirm = async () => {
     setLoading(true);
     setError('');
-    
+
     try {
       let finalPayload = null;
       try {
@@ -320,7 +320,7 @@ export default function Dashboard({ token, setToken }) {
       } catch (e) {
         throw new Error("Invalid JSON structure. Please fix any syntax errors in your payload.");
       }
-      
+
       const data = await fetchApi(`${API_BASE}?action=createPatient`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -392,11 +392,11 @@ export default function Dashboard({ token, setToken }) {
 
         {activeTab === 'sync' && (
           <div className="sync-dashboard-container" style={{ textAlign: 'left' }}>
-            <h2 style={{ marginTop: 0, color: 'var(--primary-color)' }}>🔄 Background Patient IHS Synchronization</h2>
+            <h2 style={{ marginTop: 0, color: 'var(--primary-color)' }}>Background Patient IHS Synchronization</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
               Directly monitor mapping coverage and run visual throttled batches to complete missing SatuSehat IHS patient identifiers.
             </p>
-            
+
             {syncStats && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
                 <div style={{ padding: '1rem', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
@@ -413,7 +413,7 @@ export default function Dashboard({ token, setToken }) {
                 </div>
               </div>
             )}
-            
+
             {syncStats && (
               <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)', marginBottom: '1.5rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.5rem', color: 'var(--text-muted)' }}>
@@ -423,9 +423,9 @@ export default function Dashboard({ token, setToken }) {
                   </span>
                 </div>
                 <div style={{ height: '8px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '4px', overflow: 'hidden' }}>
-                  <div style={{ 
-                    height: '100%', 
-                    background: 'linear-gradient(90deg, var(--primary-color), #4ade80)', 
+                  <div style={{
+                    height: '100%',
+                    background: 'linear-gradient(90deg, var(--primary-color), #4ade80)',
                     width: `${syncStats.total_patients > 0 ? (syncStats.mapped_patients / syncStats.total_patients) * 100 : 0}%`,
                     transition: 'width 0.5s ease'
                   }}></div>
@@ -443,7 +443,7 @@ export default function Dashboard({ token, setToken }) {
                   {cancelRequested ? 'Cancelling...' : 'Cancel Sync'}
                 </button>
               )}
-              
+
               {syncing && (
                 <div style={{ display: 'flex', gap: '1rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
                   <span>Synced: <strong style={{ color: '#4ade80' }}>{syncedCount}</strong></span>
@@ -466,15 +466,15 @@ export default function Dashboard({ token, setToken }) {
 
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <div style={{ fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '0.5rem', color: 'var(--text-muted)' }}>Activity Log Console</div>
-              <div 
-                style={{ 
-                  height: '250px', 
-                  background: '#1e1e2e', 
-                  border: '1px solid var(--border-color)', 
-                  borderRadius: '6px', 
-                  padding: '1rem', 
-                  fontFamily: 'monospace', 
-                  fontSize: '0.8rem', 
+              <div
+                style={{
+                  height: '250px',
+                  background: '#1e1e2e',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '6px',
+                  padding: '1rem',
+                  fontFamily: 'monospace',
+                  fontSize: '0.8rem',
                   overflowY: 'auto',
                   display: 'flex',
                   flexDirection: 'column',
@@ -488,8 +488,8 @@ export default function Dashboard({ token, setToken }) {
                   syncLogs.map((log, index) => (
                     <div key={index} style={{ display: 'flex', gap: '0.5rem' }}>
                       <span style={{ color: '#585b70' }}>[{log.time}]</span>
-                      <span style={{ 
-                        color: log.type === 'success' ? '#a6e3a1' : (log.type === 'error' ? '#f38ba8' : '#cdd6f4') 
+                      <span style={{
+                        color: log.type === 'success' ? '#a6e3a1' : (log.type === 'error' ? '#f38ba8' : '#cdd6f4')
                       }}>{log.text}</span>
                     </div>
                   ))
@@ -500,7 +500,7 @@ export default function Dashboard({ token, setToken }) {
         )}
 
         {error && <div className="error-msg" style={{ marginTop: '1rem', textAlign: 'left' }}>{error}</div>}
-        
+
         {createMode && activeTab !== 'sync' && (
           <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '8px' }}>
             <p style={{ margin: '0 0 1rem 0' }}>This patient does not exist in Satu Sehat.</p>
@@ -553,13 +553,13 @@ export default function Dashboard({ token, setToken }) {
               </>
             )}
           </div>
-          
+
           {activeTab === 'rm' && !result.ihspasien && (
             <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-color)' }}>
               <p style={{ marginBottom: '1rem', fontSize: '0.9rem' }}>This patient's IHS Number is not mapped locally. Search in Satu Sehat to map it, or Create a new record.</p>
               <div style={{ display: 'flex', gap: '1rem' }}>
-                <button 
-                  className="btn btn-secondary" 
+                <button
+                  className="btn btn-secondary"
                   style={{ width: 'auto' }}
                   onClick={() => {
                     setActiveTab('nik');
@@ -569,8 +569,8 @@ export default function Dashboard({ token, setToken }) {
                 >
                   Find in Satu Sehat via NIK
                 </button>
-                <button 
-                  className="btn btn-secondary" 
+                <button
+                  className="btn btn-secondary"
                   style={{ width: 'auto', borderColor: 'var(--danger)', color: 'var(--danger)' }}
                   onClick={prepareCreate}
                 >
@@ -579,10 +579,10 @@ export default function Dashboard({ token, setToken }) {
               </div>
             </div>
           )}
-          
+
           <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-color)', textAlign: 'left' }}>
-            <button 
-              className="btn btn-secondary" 
+            <button
+              className="btn btn-secondary"
               style={{ width: 'auto' }}
               onClick={() => setShowRawJson(!showRawJson)}
             >
@@ -617,14 +617,14 @@ export default function Dashboard({ token, setToken }) {
             <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
               Please review the auto-generated JSON payload mapped from your SIMRS database. You can manually edit it before submitting.
             </p>
-            
-            <textarea 
+
+            <textarea
               className="form-control"
               style={{ height: '300px', fontFamily: 'monospace', fontSize: '0.85rem', marginBottom: '1rem' }}
               value={payloadText}
               onChange={(e) => setPayloadText(e.target.value)}
             />
-            
+
             <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
               <button className="btn btn-secondary" style={{ width: 'auto' }} onClick={() => setShowModal(false)}>Cancel</button>
               <button className="btn" style={{ width: 'auto' }} onClick={handleCreateConfirm} disabled={loading}>
