@@ -3,6 +3,9 @@ header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
 header('Content-Type: application/json');
+header('X-Frame-Options: DENY');
+header('X-Content-Type-Options: nosniff');
+header('Referrer-Policy: strict-origin-when-cross-origin');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit(0);
@@ -30,12 +33,11 @@ try {
         [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
     );
     $client = new SatuSehatClient($config, $log);
-    
-    // Secret for JWT (Fallback to hardcoded if not in env for simplicity)
-    $jwtSecret = getenv('JWT_SECRET') ?: 'simrs-khanza-secret-super-secure-key';
+    $jwtSecret = $config->jwtSecret;
 
 } catch (Exception $e) {
-    jsonResponse(['error' => 'Initialization failed', 'message' => $e->getMessage()], 500);
+    error_log("SatuSehat Portal Initialization failed: " . $e->getMessage());
+    jsonResponse(['error' => 'Initialization failed', 'message' => 'An internal server error occurred.'], 500);
 }
 
 // RATE LIMITER: 60 requests per minute per IP

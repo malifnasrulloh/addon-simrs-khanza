@@ -36,6 +36,7 @@ class SatuSehatConfig
     public readonly string $logLevel;
     public readonly int    $logRetentionDays;
     public readonly string $timezone;
+    public readonly string $jwtSecret;
 
     public function __construct(string $envPath)
     {
@@ -69,6 +70,7 @@ class SatuSehatConfig
         $this->logDir           = $this->get('LOG_DIR', 'logs');
         $this->logLevel         = strtoupper($this->get('LOG_LEVEL', 'INFO'));
         $this->logRetentionDays = (int) $this->get('LOG_RETENTION_DAYS', '30');
+        $this->jwtSecret        = $this->get('JWT_SECRET', 'simrs-khanza-secret-super-secure-key');
     }
 
     private function get(string $key, string $default = ''): string
