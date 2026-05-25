@@ -42,7 +42,11 @@ class Logger
         $this->prefix  = $serviceName;
 
         if (!is_dir($this->logDir) && !mkdir($this->logDir, 0755, true)) {
-            fwrite(STDERR, "[FATAL] Cannot create log directory: {$this->logDir}\n");
+            if (defined('STDERR')) {
+                fwrite(STDERR, "[FATAL] Cannot create log directory: {$this->logDir}\n");
+            } else {
+                error_log("[FATAL] Cannot create log directory: {$this->logDir}");
+            }
             exit(1);
         }
 
@@ -95,8 +99,10 @@ class Logger
 
         file_put_contents($this->logFile, $line . PHP_EOL, FILE_APPEND | LOCK_EX);
 
-        $stream = ($level === 'ERROR' || $level === 'WARNING') ? STDERR : STDOUT;
-        fwrite($stream, $line . PHP_EOL);
+        if (defined('STDERR') && defined('STDOUT')) {
+            $stream = ($level === 'ERROR' || $level === 'WARNING') ? STDERR : STDOUT;
+            fwrite($stream, $line . PHP_EOL);
+        }
     }
 
     public function debug(string $msg): void
