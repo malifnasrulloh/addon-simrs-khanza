@@ -114,7 +114,7 @@ class SatuSehatObservationTTVProcessor
                     $noRawat, 
                     $tglObs, 
                     $jamObs, 
-                    $p['stts'], 
+                    $p['status_lanjut'], 
                     $idObservation
                 );
 
@@ -137,7 +137,7 @@ class SatuSehatObservationTTVProcessor
                             $noRawat, 
                             $tglObs, 
                             $jamObs, 
-                            $p['stts'], 
+                            $p['status_lanjut'], 
                             $idObservation
                         );
                         $this->db->updateObservationLocalState($ttvTypeKey, $noRawat, $tglObs, $jamObs, 'sent');
