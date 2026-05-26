@@ -136,6 +136,11 @@ class SatuSehatDatabase
         unset($this->sqlite);
     }
 
+    public function getMysql(): PDO
+    {
+        return $this->mysql;
+    }
+
     // ─── STATE TRACKING ────────────────────────────────────────────────────────
 
     public function getLocalState(string $noRawat): ?string
@@ -1782,5 +1787,378 @@ class SatuSehatDatabase
                 'id2' => $idMedicationStatement
             ]);
         }
+    }
+
+    public function printSyncDiagnostics(string $resourceType, string $dateFrom, string $dateTo): void
+    {
+        $this->log->info("🔍 [DIAGNOSTICS] Calculating synchronization metrics...");
+        $df = $dateFrom;
+        $dt = $dateTo;
+
+        try {
+            switch (strtolower($resourceType)) {
+                case 'encounter':
+                    $stmtTotal = $this->mysql->prepare("SELECT COUNT(*) FROM reg_periksa WHERE tgl_registrasi BETWEEN :df AND :dt");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtUnpaid = $this->mysql->prepare("SELECT COUNT(*) FROM reg_periksa WHERE tgl_registrasi BETWEEN :df AND :dt AND status_bayar = 'Belum Bayar'");
+                    $stmtUnpaid->execute(['df' => $df, 'dt' => $dt]);
+                    $unpaid = (int) $stmtUnpaid->fetchColumn();
+
+                    $stmtUnmapped = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM reg_periksa rp
+                        INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
+                        LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt 
+                          AND rp.status_bayar = 'Sudah Bayar'
+                          AND smlr.id_lokasi_satusehat IS NULL
+                    ");
+                    $stmtUnmapped->execute(['df' => $df, 'dt' => $dt]);
+                    $unmapped = (int) $stmtUnmapped->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM reg_periksa rp
+                        INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $unpaid - $unmapped - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Patient Registrations in SIMRS : {$total}");
+                    $this->log->info("   ├─ Unpaid (Filtered Out)               : {$unpaid}");
+                    $this->log->info("   ├─ Unmapped Clinics (Filtered Out)     : {$unmapped}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
+                case 'episode_of_care':
+                    $stmtTotal = $this->mysql->prepare("SELECT COUNT(*) FROM diagnosa_pasien dp INNER JOIN reg_periksa rp ON dp.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoEnc = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM diagnosa_pasien dp
+                        INNER JOIN reg_periksa rp ON dp.no_rawat = rp.no_rawat
+                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND sse.id_encounter IS NULL
+                    ");
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt]);
+                    $noEnc = (int) $stmtNoEnc->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM satu_sehat_episode_of_care eoc
+                        INNER JOIN reg_periksa rp ON eoc.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $noEnc - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total EpisodeOfCare Records in SIMRS: {$total}");
+                    $this->log->info("   ├─ Blocked (No Parent Encounter Created): {$noEnc}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
+                case 'condition':
+                    $stmtTotal = $this->mysql->prepare("SELECT COUNT(*) FROM diagnosa_pasien dp INNER JOIN reg_periksa rp ON dp.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoEnc = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM diagnosa_pasien dp
+                        INNER JOIN reg_periksa rp ON dp.no_rawat = rp.no_rawat
+                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND sse.id_encounter IS NULL
+                    ");
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt]);
+                    $noEnc = (int) $stmtNoEnc->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM satu_sehat_condition ssc
+                        INNER JOIN reg_periksa rp ON ssc.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $noEnc - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Diagnoses (Condition) in SIMRS: {$total}");
+                    $this->log->info("   ├─ Blocked (No Parent Encounter Created): {$noEnc}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
+                case 'observationttv':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT 
+                            (SELECT COUNT(*) FROM pemeriksaan_ralan pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt) +
+                            (SELECT COUNT(*) FROM pemeriksaan_ranap pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2)
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt, 'df2' => $df, 'dt2' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoEnc = $this->mysql->prepare("
+                        SELECT 
+                            (SELECT COUNT(*) FROM pemeriksaan_ralan pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND sse.id_encounter IS NULL) +
+                            (SELECT COUNT(*) FROM pemeriksaan_ranap pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2 AND sse.id_encounter IS NULL)
+                    ");
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt, 'df2' => $df, 'dt2' => $dt]);
+                    $noEnc = (int) $stmtNoEnc->fetchColumn();
+
+                    $this->log->info("   ├─ Total Vital Signs Records in SIMRS   : {$total}");
+                    $this->log->info("   └─ Blocked (No Parent Encounter Created): {$noEnc}");
+                    break;
+
+                case 'procedure':
+                    $stmtTotal = $this->mysql->prepare("SELECT COUNT(*) FROM prosedur_pasien pp INNER JOIN reg_periksa rp ON pp.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoEnc = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM prosedur_pasien pp
+                        INNER JOIN reg_periksa rp ON pp.no_rawat = rp.no_rawat
+                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND sse.id_encounter IS NULL
+                    ");
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt]);
+                    $noEnc = (int) $stmtNoEnc->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM satu_sehat_procedure ssp
+                        INNER JOIN reg_periksa rp ON ssp.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $noEnc - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Procedures in SIMRS           : {$total}");
+                    $this->log->info("   ├─ Blocked (No Parent Encounter Created): {$noEnc}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
+                case 'allergy_intolerance':
+                    $stmtTotal = $this->mysql->prepare("SELECT COUNT(*) FROM alergi_pasien ap INNER JOIN reg_periksa rp ON ap.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoEnc = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM alergi_pasien ap
+                        INNER JOIN reg_periksa rp ON ap.no_rawat = rp.no_rawat
+                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND sse.id_encounter IS NULL
+                    ");
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt]);
+                    $noEnc = (int) $stmtNoEnc->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM satu_sehat_allergy_intolerance ssa
+                        INNER JOIN reg_periksa rp ON ssa.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $noEnc - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Allergy Records in SIMRS      : {$total}");
+                    $this->log->info("   ├─ Blocked (No Parent Encounter Created): {$noEnc}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
+                case 'immunization':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM detail_pemberian_obat dpo
+                        INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtUnmapped = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM detail_pemberian_obat dpo
+                        INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                        LEFT JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND smv.kode_brng IS NULL
+                    ");
+                    $stmtUnmapped->execute(['df' => $df, 'dt' => $dt]);
+                    $unmapped = (int) $stmtUnmapped->fetchColumn();
+
+                    $stmtNoEnc = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM detail_pemberian_obat dpo
+                        INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                        INNER JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng
+                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND sse.id_encounter IS NULL
+                    ");
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt]);
+                    $noEnc = (int) $stmtNoEnc->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM satu_sehat_immunization ssi
+                        INNER JOIN reg_periksa rp ON ssi.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $this->log->info("   ├─ Total Drug Administrations in SIMRS : {$total}");
+                    $this->log->info("   ├─ Unmapped Vaccines (Filtered Out)    : {$unmapped}");
+                    $this->log->info("   ├─ Blocked (No Parent Encounter Created): {$noEnc}");
+                    $this->log->info("   └─ Already Synced to Satu Sehat        : {$synced}");
+                    break;
+
+                case 'medication':
+                    $total = (int) $this->mysql->query("SELECT COUNT(*) FROM databarang")->fetchColumn();
+                    $unmapped = (int) $this->mysql->query("
+                        SELECT COUNT(*) FROM databarang db
+                        LEFT JOIN satu_sehat_mapping_obat ssmo ON db.kode_brng = ssmo.kode_brng
+                        WHERE ssmo.kode_brng IS NULL
+                    ")->fetchColumn();
+                    $synced = (int) $this->mysql->query("SELECT COUNT(*) FROM satu_sehat_medication")->fetchColumn();
+                    $pending = $total - $unmapped - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Drugs in SIMRS databarang     : {$total}");
+                    $this->log->info("   ├─ Unmapped to Satu Sehat (Filtered)   : {$unmapped}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending Sync / Ready to Master Sync : {$pending}");
+                    break;
+
+                case 'medication_request':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM resep_dokter rd
+                        INNER JOIN resep_obat ro ON rd.no_resep = ro.no_resep
+                        INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoEnc = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM resep_dokter rd
+                        INNER JOIN resep_obat ro ON rd.no_resep = ro.no_resep
+                        INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat
+                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND sse.id_encounter IS NULL
+                    ");
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt]);
+                    $noEnc = (int) $stmtNoEnc->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT 
+                            (SELECT COUNT(*) FROM satu_sehat_medicationrequest ssmr INNER JOIN resep_obat ro ON ssmr.no_resep = ro.no_resep INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt) +
+                            (SELECT COUNT(*) FROM satu_sehat_medicationrequest_racikan ssmrr INNER JOIN resep_obat ro ON ssmrr.no_resep = ro.no_resep INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2)
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt, 'df2' => $df, 'dt2' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $this->log->info("   ├─ Total Prescriptions (Resep) in SIMRS: {$total}");
+                    $this->log->info("   ├─ Blocked (No Parent Encounter Created): {$noEnc}");
+                    $this->log->info("   └─ Already Synced to Satu Sehat        : {$synced}");
+                    break;
+
+                case 'medication_dispense':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM detail_pemberian_obat dpo
+                        INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoEnc = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM detail_pemberian_obat dpo
+                        INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND sse.id_encounter IS NULL
+                    ");
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt]);
+                    $noEnc = (int) $stmtNoEnc->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM satu_sehat_medicationdispense ssm
+                        INNER JOIN reg_periksa rp ON ssm.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $this->log->info("   ├─ Total Drug Dispenses in SIMRS       : {$total}");
+                    $this->log->info("   ├─ Blocked (No Parent Encounter Created): {$noEnc}");
+                    $this->log->info("   └─ Already Synced to Satu Sehat        : {$synced}");
+                    break;
+
+                case 'medication_statement':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM resep_dokter rd
+                        INNER JOIN resep_obat ro ON rd.no_resep = ro.no_resep
+                        INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoEnc = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM resep_dokter rd
+                        INNER JOIN resep_obat ro ON rd.no_resep = ro.no_resep
+                        INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat
+                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND sse.id_encounter IS NULL
+                    ");
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt]);
+                    $noEnc = (int) $stmtNoEnc->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT 
+                            (SELECT COUNT(*) FROM satu_sehat_medicationstatement ssms INNER JOIN resep_obat ro ON ssms.no_resep = ro.no_resep INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt) +
+                            (SELECT COUNT(*) FROM satu_sehat_medicationstatement_racikan ssmsr INNER JOIN resep_obat ro ON ssmsr.no_resep = ro.no_resep INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2)
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt, 'df2' => $df, 'dt2' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $this->log->info("   ├─ Total MedicationStatements in SIMRS : {$total}");
+                    $this->log->info("   ├─ Blocked (No Parent Encounter Created): {$noEnc}");
+                    $this->log->info("   └─ Already Synced to Satu Sehat        : {$synced}");
+                    break;
+
+                case 'patient':
+                    $total = (int) $this->mysql->query("SELECT COUNT(*) FROM pasien")->fetchColumn();
+                    $validNik = (int) $this->mysql->query("SELECT COUNT(*) FROM pasien WHERE no_ktp REGEXP '^[0-9]{16}$'")->fetchColumn();
+                    $invalidNik = $total - $validNik;
+                    
+                    $synced = (int) $this->mysql->query("SELECT COUNT(*) FROM satu_sehat_ihs_patient WHERE ihspasien IS NOT NULL AND ihspasien <> ''")->fetchColumn();
+                    
+                    $pending = (int) $this->mysql->query("
+                        SELECT COUNT(*) FROM pasien p 
+                        LEFT JOIN satu_sehat_ihs_patient i ON p.no_ktp = i.nikpasien 
+                        WHERE i.ihspasien IS NULL AND p.no_ktp REGEXP '^[0-9]{16}$'
+                    ")->fetchColumn();
+
+                    $this->log->info("   ├─ Total Patients in SIMRS             : {$total}");
+                    $this->log->info("   ├─ Patients with Valid 16-digit NIK    : {$validNik}");
+                    $this->log->info("   ├─ Invalid/Missing NIK (Filtered Out)  : {$invalidNik}");
+                    $this->log->info("   ├─ Already Synced / Mapped IHS Numbers : {$synced}");
+                    $this->log->info("   └─ Pending Sync / Ready to Sync        : {$pending}");
+                    break;
+            }
+        } catch (\Throwable $e) {
+            $this->log->warning("   [DIAGNOSTICS] Failed to calculate diagnostic metrics: " . $e->getMessage());
+        }
+        $this->log->info("──────────────────────────────────────────────────────────────");
     }
 }

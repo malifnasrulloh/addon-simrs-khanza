@@ -119,6 +119,9 @@ if ($config->lookbackDays > 0) {
     $dateTo = $config->dateTo;
 }
 
+// Run Diagnostics
+$db->printSyncDiagnostics('procedure', $dateFrom, $dateTo);
+
 // 1. Fetch pending records
 $activeRecords = $db->fetchPendingProcedureActive($dateFrom, $dateTo);
 $updateRecords = $db->fetchPendingProcedureUpdate($dateFrom, $dateTo);

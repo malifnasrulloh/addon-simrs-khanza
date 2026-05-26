@@ -120,6 +120,9 @@ if ($config->lookbackDays > 0) {
     $dateTo = $config->dateTo;
 }
 
+// Run Diagnostics
+$db->printSyncDiagnostics('allergy_intolerance', $dateFrom, $dateTo);
+
 // 1. Fetch pending records
 $activeRecords = $db->fetchPendingAllergyActive($dateFrom, $dateTo);
 $updateRecords = $db->fetchPendingAllergyUpdate($dateFrom, $dateTo);

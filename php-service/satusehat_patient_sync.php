@@ -18,17 +18,14 @@ if (php_sapi_name() !== 'cli') {
 require_once BASE_DIR . '/lib/Logger.php';
 require_once BASE_DIR . '/lib/satusehat/Config.php';
 require_once BASE_DIR . '/lib/satusehat/SatuSehatClient.php';
+require_once BASE_DIR . '/lib/satusehat/Database.php';
 
 try {
     $config = new SatuSehatConfig(BASE_DIR . '/.env');
     $log = new Logger($config->logDir, 'satusehat_patient_sync', $config->logLevel, true);
-    $pdo = new PDO(
-        "mysql:host={$config->dbHost};port={$config->dbPort};dbname={$config->dbName}",
-        $config->dbUser,
-        $config->dbPass,
-        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-    );
     $client = new SatuSehatClient($config, $log);
+    $db = new SatuSehatDatabase($config, $log, $client);
+    $pdo = $db->getMysql();
 } catch (Exception $e) {
     fwrite(STDERR, "[FATAL] Initialization failed: {$e->getMessage()}\n");
     exit(1);
@@ -37,6 +34,9 @@ try {
 $log->info("==================================================================");
 $log->info(" Starting Bulk Patient IHS Synchronization");
 $log->info("==================================================================");
+
+// Run Diagnostics
+$db->printSyncDiagnostics('patient', '', '');
 
 // Fetch patients with a valid NIK (16 digits) but no IHS number yet
 $stmt = $pdo->prepare("

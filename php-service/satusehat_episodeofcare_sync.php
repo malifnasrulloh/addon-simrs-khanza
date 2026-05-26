@@ -119,6 +119,9 @@ if ($config->lookbackDays > 0) {
     $dateTo = $config->dateTo;
 }
 
+// Run Diagnostics
+$db->printSyncDiagnostics('episode_of_care', $dateFrom, $dateTo);
+
 // 1. Fetch pending records
 $activeRecords = $db->fetchPendingEocActive($dateFrom, $dateTo);
 $finishedRecords = $db->fetchPendingEocFinished($dateFrom, $dateTo);

@@ -119,6 +119,9 @@ if ($config->lookbackDays > 0) {
     $dateTo = $config->dateTo;
 }
 
+// Run Diagnostics
+$db->printSyncDiagnostics('observationttv', $dateFrom, $dateTo);
+
 // 1. Fetch pending records for all vital signs
 $definitions = ObservationTTVDictionary::getDefinitions();
 $allPendingRecords = [];

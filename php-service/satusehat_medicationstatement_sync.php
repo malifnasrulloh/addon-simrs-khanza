@@ -110,6 +110,9 @@ try {
 
 $startTime = microtime(true);
 
+// Run Diagnostics
+$db->printSyncDiagnostics('medication_statement', $config->dateFrom, $config->dateTo);
+
 // 1. Fetch pending records
 $activeRecords = $db->fetchPendingMedicationStatementActive($config->dateFrom, $config->dateTo);
 $updateRecords = $db->fetchPendingMedicationStatementUpdate($config->dateFrom, $config->dateTo);

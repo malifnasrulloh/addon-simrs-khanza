@@ -119,6 +119,9 @@ if ($config->lookbackDays > 0) {
     $dateTo = $config->dateTo;
 }
 
+// Run Diagnostics
+$db->printSyncDiagnostics('encounter', $dateFrom, $dateTo);
+
 // 1. Fetch pending records
 $arrivedRecords = $db->fetchPendingArrived($dateFrom, $dateTo);
 $inProgressRecords = $db->fetchPendingInProgress($dateFrom, $dateTo);

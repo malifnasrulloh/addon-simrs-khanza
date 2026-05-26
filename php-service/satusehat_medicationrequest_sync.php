@@ -119,6 +119,9 @@ if ($config->lookbackDays > 0) {
     $dateTo = $config->dateTo;
 }
 
+// Run Diagnostics
+$db->printSyncDiagnostics('medication_request', $dateFrom, $dateTo);
+
 // 1. Fetch pending records
 $activeRecords = $db->fetchPendingMedicationRequestActive($dateFrom, $dateTo);
 $updateRecords = $db->fetchPendingMedicationRequestUpdate($dateFrom, $dateTo);
