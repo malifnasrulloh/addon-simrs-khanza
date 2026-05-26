@@ -1190,4 +1190,73 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    public static function clinicalImpression(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $idClinicalImpression = ''
+    ): array {
+        // Replace newlines with <br> and clean tabs
+        $description = str_replace(["\r\n", "\r", "\n", "\n\r"], "<br>", $p['keluhan_pemeriksaan']);
+        $description = str_replace("\t", " ", $description);
+
+        $summary = str_replace(["\r\n", "\r", "\n", "\n\r"], "<br>", $p['penilaian']);
+        $summary = str_replace("\t", " ", $summary);
+
+        $effectiveDateTime = $p['tgl_perawatan'] . 'T' . $p['jam_rawat'] . '+07:00';
+
+        $payload = [
+            'resourceType' => 'ClinicalImpression',
+            'status' => 'completed',
+            'description' => $description,
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Kunjungan ' . $p['nm_pasien'] . ' pada tanggal ' . $p['tgl_registrasi'] . ' dengan nomor kunjungan ' . $p['no_rawat']
+            ],
+            'effectiveDateTime' => $effectiveDateTime,
+            'date' => $effectiveDateTime,
+            'assessor' => [
+                'reference' => 'Practitioner/' . $idDokter
+            ],
+            'summary' => $summary,
+            'finding' => [
+                [
+                    'itemCodeableConcept' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://hl7.org/fhir/sid/icd-10',
+                                'code'    => $p['kd_penyakit'],
+                                'display' => $p['nm_penyakit']
+                            ]
+                        ]
+                    ],
+                    'itemReference' => [
+                        'reference' => 'Condition/' . $p['id_condition']
+                    ]
+                ]
+            ],
+            'prognosisCodeableConcept' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.kemkes.go.id/CodeSystem/clinical-term',
+                            'code'    => 'PR000001',
+                            'display' => 'Prognosis'
+                        ]
+                    ]
+                ]
+            ]
+        ];
+
+        if (!empty($idClinicalImpression)) {
+            $payload['id'] = $idClinicalImpression;
+        }
+
+        return $payload;
+    }
 }

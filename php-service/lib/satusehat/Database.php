@@ -124,6 +124,13 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for Clinical Impression state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS clinical_impression_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -1789,6 +1796,183 @@ class SatuSehatDatabase
         }
     }
 
+    // ─── CLINICAL IMPRESSION STATE TRACKING ──────────────────────────────────────
+
+    public function getClinicalImpressionLocalState(string $noRawat, string $tglPerawatan, string $jamRawat, string $status): ?string
+    {
+        $compositeKey = $noRawat . '_' . $tglPerawatan . '_' . $jamRawat . '_' . $status;
+        $stmt = $this->sqlite->prepare("SELECT status FROM clinical_impression_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateClinicalImpressionLocalState(string $noRawat, string $tglPerawatan, string $jamRawat, string $status, string $localStatus): void
+    {
+        $compositeKey = $noRawat . '_' . $tglPerawatan . '_' . $jamRawat . '_' . $status;
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO clinical_impression_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $localStatus]);
+    }
+
+    // ─── CLINICAL IMPRESSION MYSQL OPERATIONS ───────────────────────────────────
+
+    public function fetchPendingClinicalImpressionActive(string $dateFrom, string $dateTo): array
+    {
+        $ralanSql = "
+            SELECT 
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp as nik_pasien, rp.stts,
+                'Ralan' as status_lanjut,
+                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
+                sse.id_encounter, 
+                CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
+                pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
+                pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
+                ssc.id_condition, '' as id_clinicalimpression
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ralan'
+            INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
+            INNER JOIN pemeriksaan_ralan pem ON pem.no_rawat = rp.no_rawat
+            INNER JOIN pegawai peg ON pem.nip = peg.nik
+            LEFT JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
+                AND ssci.tgl_perawatan = pem.tgl_perawatan
+                AND ssci.jam_rawat = pem.jam_rawat
+                AND ssci.status = 'Ralan'
+            WHERE pem.penilaian <> ''
+              AND rp.tgl_registrasi BETWEEN :df AND :dt
+              AND ssci.id_clinicalimpression IS NULL
+        ";
+
+        $ranapSql = "
+            SELECT 
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp as nik_pasien, rp.stts,
+                'Ranap' as status_lanjut,
+                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
+                sse.id_encounter, 
+                CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
+                pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
+                pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
+                ssc.id_condition, '' as id_clinicalimpression
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ranap'
+            INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
+            INNER JOIN pemeriksaan_ranap pem ON pem.no_rawat = rp.no_rawat
+            INNER JOIN pegawai peg ON pem.nip = peg.nik
+            LEFT JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
+                AND ssci.tgl_perawatan = pem.tgl_perawatan
+                AND ssci.jam_rawat = pem.jam_rawat
+                AND ssci.status = 'Ranap'
+            WHERE pem.penilaian <> ''
+              AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+              AND ssci.id_clinicalimpression IS NULL
+        ";
+
+        $stmtRalan = $this->mysql->prepare($ralanSql);
+        $stmtRalan->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $ralan = $stmtRalan->fetchAll();
+
+        $stmtRanap = $this->mysql->prepare($ranapSql);
+        $stmtRanap->execute(['df2' => $dateFrom, 'dt2' => $dateTo]);
+        $ranap = $stmtRanap->fetchAll();
+
+        return array_merge($ralan, $ranap);
+    }
+
+    public function fetchPendingClinicalImpressionUpdate(string $dateFrom, string $dateTo): array
+    {
+        $ralanSql = "
+            SELECT 
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp as nik_pasien, rp.stts,
+                'Ralan' as status_lanjut,
+                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
+                sse.id_encounter, 
+                CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
+                pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
+                pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
+                ssc.id_condition, ssci.id_clinicalimpression
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ralan'
+            INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
+            INNER JOIN pemeriksaan_ralan pem ON pem.no_rawat = rp.no_rawat
+            INNER JOIN pegawai peg ON pem.nip = peg.nik
+            INNER JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
+                AND ssci.tgl_perawatan = pem.tgl_perawatan
+                AND ssci.jam_rawat = pem.jam_rawat
+                AND ssci.status = 'Ralan'
+            WHERE pem.penilaian <> ''
+              AND rp.tgl_registrasi BETWEEN :df AND :dt
+        ";
+
+        $ranapSql = "
+            SELECT 
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp as nik_pasien, rp.stts,
+                'Ranap' as status_lanjut,
+                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
+                sse.id_encounter, 
+                CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
+                pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
+                pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
+                ssc.id_condition, ssci.id_clinicalimpression
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ranap'
+            INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
+            INNER JOIN pemeriksaan_ranap pem ON pem.no_rawat = rp.no_rawat
+            INNER JOIN pegawai peg ON pem.nip = peg.nik
+            INNER JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
+                AND ssci.tgl_perawatan = pem.tgl_perawatan
+                AND ssci.jam_rawat = pem.jam_rawat
+                AND ssci.status = 'Ranap'
+            WHERE pem.penilaian <> ''
+              AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+        ";
+
+        $stmtRalan = $this->mysql->prepare($ralanSql);
+        $stmtRalan->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $ralan = $stmtRalan->fetchAll();
+
+        $stmtRanap = $this->mysql->prepare($ranapSql);
+        $stmtRanap->execute(['df2' => $dateFrom, 'dt2' => $dateTo]);
+        $ranap = $stmtRanap->fetchAll();
+
+        return array_merge($ralan, $ranap);
+    }
+
+    public function saveClinicalImpression(
+        string $noRawat, 
+        string $tglPerawatan, 
+        string $jamRawat, 
+        string $status, 
+        string $idClinicalImpression
+    ): bool {
+        $sql = "INSERT INTO satu_sehat_clinicalimpression (no_rawat, tgl_perawatan, jam_rawat, status, id_clinicalimpression) 
+                VALUES (:nr, :tgl, :jam, :st, :id) 
+                ON DUPLICATE KEY UPDATE id_clinicalimpression = :id2";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'nr'  => $noRawat,
+            'tgl' => $tglPerawatan,
+            'jam' => $jamRawat,
+            'st'  => $status,
+            'id'  => $idClinicalImpression,
+            'id2' => $idClinicalImpression
+        ]);
+    }
+
     public function printSyncDiagnostics(string $resourceType, string $dateFrom, string $dateTo): void
     {
         $this->log->info("🔍 [DIAGNOSTICS] Calculating synchronization metrics...");
@@ -2133,6 +2317,85 @@ class SatuSehatDatabase
 
                     $this->log->info("   ├─ Total MedicationStatements in SIMRS : {$total}");
                     $this->log->info("   ├─ Blocked (No Parent Encounter Created): {$noEnc}");
+                    $this->log->info("   └─ Already Synced to Satu Sehat        : {$synced}");
+                    break;
+
+                case 'clinical_impression':
+                    // Total assessments
+                    $stmtTotalRalan = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM pemeriksaan_ralan pr 
+                        INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat 
+                        WHERE pr.penilaian <> '' AND rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtTotalRalan->execute(['df' => $df, 'dt' => $dt]);
+                    $totalRalan = (int) $stmtTotalRalan->fetchColumn();
+
+                    $stmtTotalRanap = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM pemeriksaan_ranap pr 
+                        INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat 
+                        WHERE pr.penilaian <> '' AND rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtTotalRanap->execute(['df' => $df, 'dt' => $dt]);
+                    $totalRanap = (int) $stmtTotalRanap->fetchColumn();
+
+                    $total = $totalRalan + $totalRanap;
+
+                    // Blocked due to missing parent Encounter
+                    $stmtNoEncRalan = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM pemeriksaan_ralan pr 
+                        INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat 
+                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE pr.penilaian <> '' AND rp.tgl_registrasi BETWEEN :df AND :dt AND sse.id_encounter IS NULL
+                    ");
+                    $stmtNoEncRalan->execute(['df' => $df, 'dt' => $dt]);
+                    $noEncRalan = (int) $stmtNoEncRalan->fetchColumn();
+
+                    $stmtNoEncRanap = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM pemeriksaan_ranap pr 
+                        INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat 
+                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE pr.penilaian <> '' AND rp.tgl_registrasi BETWEEN :df AND :dt AND sse.id_encounter IS NULL
+                    ");
+                    $stmtNoEncRanap->execute(['df' => $df, 'dt' => $dt]);
+                    $noEncRanap = (int) $stmtNoEncRanap->fetchColumn();
+
+                    $noEnc = $noEncRalan + $noEncRanap;
+
+                    // Blocked due to missing Condition (but has Encounter)
+                    $stmtNoCondRalan = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM pemeriksaan_ralan pr 
+                        INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat 
+                        INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ralan'
+                        WHERE pr.penilaian <> '' AND rp.tgl_registrasi BETWEEN :df AND :dt AND ssc.id_condition IS NULL
+                    ");
+                    $stmtNoCondRalan->execute(['df' => $df, 'dt' => $dt]);
+                    $noCondRalan = (int) $stmtNoCondRalan->fetchColumn();
+
+                    $stmtNoCondRanap = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM pemeriksaan_ranap pr 
+                        INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat 
+                        INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ranap'
+                        WHERE pr.penilaian <> '' AND rp.tgl_registrasi BETWEEN :df AND :dt AND ssc.id_condition IS NULL
+                    ");
+                    $stmtNoCondRanap->execute(['df' => $df, 'dt' => $dt]);
+                    $noCondRanap = (int) $stmtNoCondRanap->fetchColumn();
+
+                    $noCond = $noCondRalan + $noCondRanap;
+
+                    // Synced
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM satu_sehat_clinicalimpression ssci
+                        INNER JOIN reg_periksa rp ON ssci.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $this->log->info("   ├─ Total ClinicalAssessments in SIMRS  : {$total} (Ralan: {$totalRalan}, Ranap: {$totalRanap})");
+                    $this->log->info("   ├─ Blocked (No Parent Encounter Mapped): {$noEnc}");
+                    $this->log->info("   ├─ Blocked (No Parent Condition Mapped): {$noCond}");
                     $this->log->info("   └─ Already Synced to Satu Sehat        : {$synced}");
                     break;
 
