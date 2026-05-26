@@ -57,7 +57,7 @@ class ObservationTTVDictionary
                 'state_id_col' => 'id_observation',
                 'type'         => 'quantity',
                 'system'       => 'http://loinc.org',
-                'code'         => '2708-6',
+                'code'         => '59408-5',
                 'display'      => 'Oxygen saturation in Arterial blood',
                 'unit'         => '%',
                 'unit_display' => '%'
@@ -79,7 +79,7 @@ class ObservationTTVDictionary
                 'state_id_col' => 'id_observation',
                 'type'         => 'quantity',
                 'system'       => 'http://loinc.org',
-                'code'         => '2946-3',
+                'code'         => '29463-7',
                 'display'      => 'Body weight',
                 'unit'         => 'kg',
                 'unit_display' => 'kg'
@@ -101,7 +101,7 @@ class ObservationTTVDictionary
                 'state_id_col' => 'id_observation',
                 'type'         => 'blood_pressure', // Special component structure
                 'system'       => 'http://loinc.org',
-                'code'         => '85354-9',
+                'code'         => '35094-2',
                 'display'      => 'Blood pressure panel with all children optional',
             ],
             'gcs' => [
@@ -117,10 +117,12 @@ class ObservationTTVDictionary
                 'db_column'    => 'kesadaran', // Enum in DB
                 'state_table'  => 'satu_sehat_observationttvkesadaran',
                 'state_id_col' => 'id_observation',
-                'type'         => 'codeable_concept', // Requires mapping to snomed
+                'type'         => 'kesadaran_text', // Handled differently in Java (just text inside valueCodeableConcept)
+                'category_code'=> 'exam',
+                'category_display' => 'Exam',
                 'system'       => 'http://snomed.info/sct',
-                'code'         => '130987000', // Hardcoded base code from Java
-                'display'      => 'Acute confusion', // We dynamically alter based on mapping
+                'code'         => '1104441000000107',
+                'display'      => 'ACVPU (Alert Confusion Voice Pain Unresponsive) scale score',
             ],
         ];
     }

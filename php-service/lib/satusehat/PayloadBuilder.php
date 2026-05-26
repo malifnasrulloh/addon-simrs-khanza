@@ -329,6 +329,9 @@ class SatuSehatPayloadBuilder
     {
         $waktuObservasi = $p['tgl_observasi'] . 'T' . $p['jam_observasi'] . '+07:00';
 
+        $categoryCode = $def['category_code'] ?? 'vital-signs';
+        $categoryDisplay = $def['category_display'] ?? 'Vital Signs';
+
         $payload = [
             'resourceType' => 'Observation',
             'status' => 'final',
@@ -337,8 +340,8 @@ class SatuSehatPayloadBuilder
                     'coding' => [
                         [
                             'system'  => 'http://terminology.hl7.org/CodeSystem/observation-category',
-                            'code'    => 'vital-signs',
-                            'display' => 'Vital Signs'
+                            'code'    => $categoryCode,
+                            'display' => $categoryDisplay
                         ]
                     ]
                 ]
@@ -364,7 +367,7 @@ class SatuSehatPayloadBuilder
             ],
             'encounter' => [
                 'reference' => 'Encounter/' . $p['id_encounter'],
-                'display'   => "Pemeriksaan Fisik " . $p['nm_pasien'] . " pada " . $waktuObservasi
+                'display'   => "Pemeriksaan Fisik " . str_replace("Ralan", "Rawat Jalan/IGD", str_replace("Ranap", "Rawat Inap", $p['nm_poli'] ?? '')) . ", Pasien " . $p['nm_pasien'] . " Pada Tanggal " . $p['tgl_observasi'] . " Jam " . $p['jam_observasi']
             ],
             'effectiveDateTime' => $waktuObservasi,
             'issued' => $waktuObservasi
@@ -385,7 +388,7 @@ class SatuSehatPayloadBuilder
             // GCS
             $payload['valueString'] = $val;
         } elseif ($def['type'] === 'codeable_concept') {
-            // Kesadaran -> needs mapping
+            // Unused currently but kept for legacy
             $map = ObservationTTVDictionary::mapKesadaran($val);
             $payload['valueCodeableConcept'] = [
                 'coding' => [
@@ -395,6 +398,16 @@ class SatuSehatPayloadBuilder
                         'display' => $map['display']
                     ]
                 ]
+            ];
+        } elseif ($def['type'] === 'kesadaran_text') {
+            // Kesadaran strictly matched to Java output
+            $textVal = str_replace(
+                ['Compos Mentis', 'Somnolence', 'Sopor', 'Coma'],
+                ['Alert', 'Voice', 'Pain', 'Unresponsive'],
+                $val
+            );
+            $payload['valueCodeableConcept'] = [
+                'text' => $textVal
             ];
         } elseif ($def['type'] === 'blood_pressure') {
             // Tensi component structure
