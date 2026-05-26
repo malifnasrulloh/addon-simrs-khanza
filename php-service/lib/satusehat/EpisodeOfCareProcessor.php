@@ -110,7 +110,7 @@ class SatuSehatEpisodeOfCareProcessor
 
             if ($result['success'] && isset($result['data']['id'])) {
                 $idEpisode = $result['data']['id'];
-                $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, 'active', $idEpisode);
+                $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $idEpisode);
                 $this->db->updateEocLocalState($noRawat, 'active');
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created EpisodeOfCare {$idEpisode}");
                 $this->successCount++;
@@ -123,7 +123,7 @@ class SatuSehatEpisodeOfCareProcessor
                     $idEpisode = $this->resolveDuplicateEpisode($idPasien, $type->code, $noRawat);
 
                     if ($idEpisode) {
-                        $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, 'active', $idEpisode);
+                        $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $idEpisode);
                         $this->db->updateEocLocalState($noRawat, 'active');
                         $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered EpisodeOfCare {$idEpisode} from BPJS");
                         $this->successCount++;
@@ -193,7 +193,7 @@ class SatuSehatEpisodeOfCareProcessor
             $result = $this->api->put("/EpisodeOfCare/{$p['id_episode_of_care']}", $payload);
 
             if ($result['success']) {
-                $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, 'finished', $p['id_episode_of_care']);
+                $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $p['id_episode_of_care']);
                 $this->db->updateEocLocalState($noRawat, 'finished');
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to finished");
                 $this->successCount++;
