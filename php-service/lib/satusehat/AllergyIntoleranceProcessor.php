@@ -110,7 +110,7 @@ class SatuSehatAllergyIntoleranceProcessor
                 $allergyData,
                 $idPasien,
                 $idPraktisi,
-                $this->config->idSatuSehat
+                $this->config->orgId
             );
 
             $this->log->info("[PHASE 1] {$noRawat}: POST /AllergyIntolerance (Code: {$allergyData['coding_code']})");
@@ -198,7 +198,7 @@ class SatuSehatAllergyIntoleranceProcessor
                 $allergyData,
                 $idPasien,
                 $idPraktisi,
-                $this->config->idSatuSehat,
+                $this->config->orgId,
                 $a['id_allergy_intolerance']
             );
 

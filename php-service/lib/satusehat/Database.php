@@ -262,9 +262,9 @@ class SatuSehatDatabase
 
     public function saveEncounter(string $noRawat, string $idEncounter): bool
     {
-        $sql = "INSERT INTO satu_sehat_encounter (no_rawat, id_encounter) VALUES (:nr, :id) ON DUPLICATE KEY UPDATE id_encounter = :id";
+        $sql = "INSERT INTO satu_sehat_encounter (no_rawat, id_encounter) VALUES (:nr, :id) ON DUPLICATE KEY UPDATE id_encounter = :id2";
         $stmt = $this->mysql->prepare($sql);
-        return $stmt->execute(['nr' => $noRawat, 'id' => $idEncounter]);
+        return $stmt->execute(['nr' => $noRawat, 'id' => $idEncounter, 'id2' => $idEncounter]);
     }
 
     // ─── IHS LOOKUPS ───────────────────────────────────────────────────────────
@@ -298,8 +298,8 @@ class SatuSehatDatabase
             $ihsId = $result['data']['entry'][0]['resource']['id'];
             $this->log->info("[API] Found IHS Patient ID: {$ihsId}. Saving to DB...");
             
-            $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:n, :i) ON DUPLICATE KEY UPDATE ihspasien = :i");
-            $insert->execute(['n' => $nik, 'i' => $ihsId]);
+            $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:n, :i) ON DUPLICATE KEY UPDATE ihspasien = :i2");
+            $insert->execute(['n' => $nik, 'i' => $ihsId, 'i2' => $ihsId]);
             return $ihsId;
         }
 
@@ -329,8 +329,8 @@ class SatuSehatDatabase
             $ihsId = $result['data']['entry'][0]['resource']['id'];
             $this->log->info("[API] Found IHS Practitioner ID: {$ihsId}. Saving to DB...");
             
-            $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_practitioner (nikpegawai, ihspegawai) VALUES (:n, :i) ON DUPLICATE KEY UPDATE ihspegawai = :i");
-            $insert->execute(['n' => $nik, 'i' => $ihsId]);
+            $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_practitioner (nikpegawai, ihspegawai) VALUES (:n, :i) ON DUPLICATE KEY UPDATE ihspegawai = :i2");
+            $insert->execute(['n' => $nik, 'i' => $ihsId, 'i2' => $ihsId]);
             return $ihsId;
         }
 
@@ -414,13 +414,15 @@ class SatuSehatDatabase
     {
         $sql = "INSERT INTO satu_sehat_episode_of_care (no_rawat, kd_penyakit, status, id_episode_of_care) 
                 VALUES (:nr, :kd, :st, :id) 
-                ON DUPLICATE KEY UPDATE id_episode_of_care = :id, status = :st";
+                ON DUPLICATE KEY UPDATE id_episode_of_care = :id2, status = :st2";
         $stmt = $this->mysql->prepare($sql);
         return $stmt->execute([
-            'nr' => $noRawat,
-            'kd' => $kdPenyakit,
-            'st' => $status,
-            'id' => $idEpisode
+            'nr'  => $noRawat,
+            'kd'  => $kdPenyakit,
+            'st'  => $status,
+            'id'  => $idEpisode,
+            'id2' => $idEpisode,
+            'st2' => $status
         ]);
     }
 
@@ -500,13 +502,14 @@ class SatuSehatDatabase
     {
         $sql = "INSERT INTO satu_sehat_condition (no_rawat, kd_penyakit, status, id_condition) 
                 VALUES (:nr, :kd, :st, :id) 
-                ON DUPLICATE KEY UPDATE id_condition = :id";
+                ON DUPLICATE KEY UPDATE id_condition = :id2";
         $stmt = $this->mysql->prepare($sql);
         return $stmt->execute([
-            'nr' => $noRawat,
-            'kd' => $kdPenyakit,
-            'st' => $status,
-            'id' => $idCondition
+            'nr'  => $noRawat,
+            'kd'  => $kdPenyakit,
+            'st'  => $status,
+            'id'  => $idCondition,
+            'id2' => $idCondition
         ]);
     }
 
@@ -606,14 +609,15 @@ class SatuSehatDatabase
         // Table schema: no_rawat, tgl_perawatan, jam_rawat, status, id_observation
         $sql = "INSERT INTO {$stTable} (no_rawat, tgl_perawatan, jam_rawat, status, {$idCol}) 
                 VALUES (:nr, :tgl, :jam, :st, :id) 
-                ON DUPLICATE KEY UPDATE {$idCol} = :id";
+                ON DUPLICATE KEY UPDATE {$idCol} = :id2";
         $stmt = $this->mysql->prepare($sql);
         return $stmt->execute([
             'nr'  => $noRawat,
             'tgl' => $tgl,
             'jam' => $jam,
             'st'  => $statusRawat,
-            'id'  => $idObservation
+            'id'  => $idObservation,
+            'id2' => $idObservation
         ]);
     }
 
@@ -701,13 +705,14 @@ class SatuSehatDatabase
     {
         $sql = "INSERT INTO satu_sehat_procedure (no_rawat, kode, status, id_procedure) 
                 VALUES (:nr, :kd, :st, :id) 
-                ON DUPLICATE KEY UPDATE id_procedure = :id";
+                ON DUPLICATE KEY UPDATE id_procedure = :id2";
         $stmt = $this->mysql->prepare($sql);
         return $stmt->execute([
-            'nr' => $noRawat,
-            'kd' => $kode,
-            'st' => $status,
-            'id' => $idProcedure
+            'nr'  => $noRawat,
+            'kd'  => $kode,
+            'st'  => $status,
+            'id'  => $idProcedure,
+            'id2' => $idProcedure
         ]);
     }
 
@@ -829,14 +834,15 @@ class SatuSehatDatabase
     {
         $sql = "INSERT INTO satu_sehat_allergy_intolerance (no_rawat, tgl_perawatan, jam_rawat, status, id_allergy_intolerance) 
                 VALUES (:nr, :tgl, :jam, :st, :id) 
-                ON DUPLICATE KEY UPDATE id_allergy_intolerance = :id";
+                ON DUPLICATE KEY UPDATE id_allergy_intolerance = :id2";
         $stmt = $this->mysql->prepare($sql);
         return $stmt->execute([
             'nr'  => $noRawat,
             'tgl' => $tglPerawatan,
             'jam' => $jamRawat,
             'st'  => $statusRawat,
-            'id'  => $idAllergy
+            'id'  => $idAllergy,
+            'id2' => $idAllergy
         ]);
     }
 
@@ -1004,7 +1010,7 @@ class SatuSehatDatabase
     {
         $sql = "INSERT INTO satu_sehat_immunization (no_rawat, tgl_perawatan, jam, kode_brng, no_batch, no_faktur, id_immunization) 
                 VALUES (:nr, :tgl, :jam, :kode_brng, :no_batch, :no_faktur, :id) 
-                ON DUPLICATE KEY UPDATE id_immunization = :id";
+                ON DUPLICATE KEY UPDATE id_immunization = :id2";
         $stmt = $this->mysql->prepare($sql);
         return $stmt->execute([
             'nr'        => $noRawat,
@@ -1013,7 +1019,8 @@ class SatuSehatDatabase
             'kode_brng' => $kodeBrng,
             'no_batch'  => $noBatch,
             'no_faktur' => $noFaktur,
-            'id'        => $idImmunization
+            'id'        => $idImmunization,
+            'id2'       => $idImmunization
         ]);
     }
 
@@ -1085,11 +1092,12 @@ class SatuSehatDatabase
     {
         $sql = "INSERT INTO satu_sehat_medication (kode_brng, id_medication) 
                 VALUES (:kb, :id) 
-                ON DUPLICATE KEY UPDATE id_medication = :id";
+                ON DUPLICATE KEY UPDATE id_medication = :id2";
         $stmt = $this->mysql->prepare($sql);
         return $stmt->execute([
-            'kb' => $kodeBrng,
-            'id' => $idMedication
+            'kb'  => $kodeBrng,
+            'id'  => $idMedication,
+            'id2' => $idMedication
         ]);
     }
 
@@ -1248,23 +1256,25 @@ class SatuSehatDatabase
         if ($isRacikan) {
             $sql = "INSERT INTO satu_sehat_medicationrequest_racikan (no_resep, kode_brng, no_racik, id_medicationrequest) 
                     VALUES (:nr, :kb, :nrc, :id) 
-                    ON DUPLICATE KEY UPDATE id_medicationrequest = :id";
+                    ON DUPLICATE KEY UPDATE id_medicationrequest = :id2";
             $stmt = $this->mysql->prepare($sql);
             return $stmt->execute([
                 'nr'  => $noResep,
                 'kb'  => $kodeBrng,
                 'nrc' => $noRacik,
-                'id'  => $idMedicationRequest
+                'id'  => $idMedicationRequest,
+                'id2' => $idMedicationRequest
             ]);
         } else {
             $sql = "INSERT INTO satu_sehat_medicationrequest (no_resep, kode_brng, id_medicationrequest) 
                     VALUES (:nr, :kb, :id) 
-                    ON DUPLICATE KEY UPDATE id_medicationrequest = :id";
+                    ON DUPLICATE KEY UPDATE id_medicationrequest = :id2";
             $stmt = $this->mysql->prepare($sql);
             return $stmt->execute([
-                'nr' => $noResep,
-                'kb' => $kodeBrng,
-                'id' => $idMedicationRequest
+                'nr'  => $noResep,
+                'kb'  => $kodeBrng,
+                'id'  => $idMedicationRequest,
+                'id2' => $idMedicationRequest
             ]);
         }
     }
@@ -1479,16 +1489,17 @@ class SatuSehatDatabase
     ): bool {
         $sql = "INSERT INTO satu_sehat_medicationdispense (no_rawat, tgl_perawatan, jam, kode_brng, no_batch, no_faktur, id_medicationdispanse) 
                 VALUES (:nr, :tp, :jm, :kb, :nb, :nf, :id) 
-                ON DUPLICATE KEY UPDATE id_medicationdispanse = :id";
+                ON DUPLICATE KEY UPDATE id_medicationdispanse = :id2";
         $stmt = $this->mysql->prepare($sql);
         return $stmt->execute([
-            'nr' => $noRawat,
-            'tp' => $tglPerawatan,
-            'jm' => $jam,
-            'kb' => $kodeBrng,
-            'nb' => $noBatch,
-            'nf' => $noFaktur,
-            'id' => $idMedicationDispense
+            'nr'  => $noRawat,
+            'tp'  => $tglPerawatan,
+            'jm'  => $jam,
+            'kb'  => $kodeBrng,
+            'nb'  => $noBatch,
+            'nf'  => $noFaktur,
+            'id'  => $idMedicationDispense,
+            'id2' => $idMedicationDispense
         ]);
     }
 
@@ -1750,23 +1761,25 @@ class SatuSehatDatabase
         if ($isRacikan) {
             $sql = "INSERT INTO satu_sehat_medicationstatement_racikan (no_resep, kode_brng, no_racik, id_medicationstatement) 
                     VALUES (:nr, :kb, :nrc, :id) 
-                    ON DUPLICATE KEY UPDATE id_medicationstatement = :id";
+                    ON DUPLICATE KEY UPDATE id_medicationstatement = :id2";
             $stmt = $this->mysql->prepare($sql);
             return $stmt->execute([
                 'nr'  => $noResep,
                 'kb'  => $kodeBrng,
                 'nrc' => $noRacik,
-                'id'  => $idMedicationStatement
+                'id'  => $idMedicationStatement,
+                'id2' => $idMedicationStatement
             ]);
         } else {
             $sql = "INSERT INTO satu_sehat_medicationstatement (no_resep, kode_brng, id_medicationstatement) 
                     VALUES (:nr, :kb, :id) 
-                    ON DUPLICATE KEY UPDATE id_medicationstatement = :id";
+                    ON DUPLICATE KEY UPDATE id_medicationstatement = :id2";
             $stmt = $this->mysql->prepare($sql);
             return $stmt->execute([
-                'nr' => $noResep,
-                'kb' => $kodeBrng,
-                'id' => $idMedicationStatement
+                'nr'  => $noResep,
+                'kb'  => $kodeBrng,
+                'id'  => $idMedicationStatement,
+                'id2' => $idMedicationStatement
             ]);
         }
     }

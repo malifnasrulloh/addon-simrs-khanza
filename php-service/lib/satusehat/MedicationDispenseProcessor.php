@@ -89,7 +89,7 @@ class SatuSehatMedicationDispenseProcessor
             }
 
             // Look up Patient ID
-            $idPasien = $this->api->getPatientIhsId($p['no_ktp']);
+            $idPasien = $this->db->getIhsPatient($p['no_ktp']);
             if (!$idPasien) {
                 $this->log->warning("[PHASE 1] [SKIPPED] Patient No.RM: {$p['no_rkm_medis']} (No.KTP: {$p['no_ktp']}) has no valid IHS ID.");
                 $this->failCount++;
@@ -97,7 +97,7 @@ class SatuSehatMedicationDispenseProcessor
             }
 
             // Look up Practitioner ID
-            $idDokter = $this->api->getPractitionerIhsId($p['ktppraktisi']);
+            $idDokter = $this->db->getIhsPractitioner($p['ktppraktisi']);
             if (!$idDokter) {
                 $this->log->warning("[PHASE 1] [SKIPPED] Practitioner Name: {$p['nama']} (No.KTP: {$p['ktppraktisi']}) has no valid IHS ID.");
                 $this->failCount++;
@@ -184,7 +184,7 @@ class SatuSehatMedicationDispenseProcessor
             }
 
             // Look up Patient ID
-            $idPasien = $this->api->getPatientIhsId($p['no_ktp']);
+            $idPasien = $this->db->getIhsPatient($p['no_ktp']);
             if (!$idPasien) {
                 $this->log->warning("[PHASE 2] [SKIPPED] Patient No.RM: {$p['no_rkm_medis']} has no valid IHS ID.");
                 $this->failCount++;
@@ -192,7 +192,7 @@ class SatuSehatMedicationDispenseProcessor
             }
 
             // Look up Practitioner ID
-            $idDokter = $this->api->getPractitionerIhsId($p['ktppraktisi']);
+            $idDokter = $this->db->getIhsPractitioner($p['ktppraktisi']);
             if (!$idDokter) {
                 $this->log->warning("[PHASE 2] [SKIPPED] Practitioner Name: {$p['nama']} has no valid IHS ID.");
                 $this->failCount++;
