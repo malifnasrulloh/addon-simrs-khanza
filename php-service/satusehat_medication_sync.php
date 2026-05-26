@@ -83,7 +83,7 @@ try {
 }
 
 $logLevel = $isVerbose ? 'DEBUG' : $config->logLevel;
-$log = new Logger($config->logDir, 'satusehat', $logLevel, $isVerbose);
+$log = new Logger($config->logDir, 'satusehat_medication', $logLevel, $isVerbose);
 $log->cleanOldLogs($config->logRetentionDays);
 
 $log->info("══════════════════════════════════════════════════════════════");
