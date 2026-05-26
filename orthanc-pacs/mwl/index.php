@@ -31,7 +31,7 @@ if ($tz = getenv('TZ')) {
 define('WL_DIR',                '/var/lib/orthanc/worklists/');
 define('DUMP2DCM',              '/usr/bin/dump2dcm');
 define('TMP_DIR',               '/tmp/mwl_dump/');
-define('MODALITY_MAP_JSON',     __DIR__ . '/modality_mapping.json');
+define('MODALITY_MAP_JSON',     __DIR__ . '/mapping_tindakan_radiologi.iyem');
 define('DASHBOARD_REFRESH_SEC', (int)(getenv('MWL_DASHBOARD_REFRESH_SEC') ?: getenv('MWL_RELOAD_SEC') ?: 300));
 define('STALE_DAYS',            (int)(getenv('MWL_STALE_DAYS') ?: 2));
 define('DEFAULT_AET',           'ORTHANC');
@@ -76,13 +76,23 @@ if (!is_dir(TMP_DIR)) {
  * combined with date and a CRC32 hash to ensure uniqueness while remaining
  * idempotent for the same input seed.
  */
-function generateStudyUid(string $seed, string $date): string {
-    $root     = DICOM_UID_ROOT;
-    $datePart = str_replace('-', '', $date);
-    $hashPart = sprintf('%010u', abs(crc32($seed)));
-    $uid      = "{$root}.{$datePart}.{$hashPart}";
-
-    return substr($uid, 0, 64);
+function generateStudyUid(string $patientId, string $acsn): string {
+    $cleanPid  = preg_replace('/[^0-9]/', '', $patientId);
+    if ($cleanPid === '') {
+        $cleanPid = '0';
+    }
+    $cleanAcsn = preg_replace('/[^0-9]/', '', $acsn);
+    if ($cleanAcsn === '') {
+        $cleanAcsn = '0';
+    }
+    $studyUid = "1.3.6.1.4.1.53234.1.{$cleanPid}.{$cleanAcsn}";
+    if (strlen($studyUid) > 64) {
+        $studyUid = substr($studyUid, 0, 64);
+    }
+    if (str_ends_with($studyUid, '.')) {
+        $studyUid = rtrim($studyUid, '.');
+    }
+    return $studyUid;
 }
 
 /**
@@ -276,6 +286,23 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
     // --- Load Modality Configuration ---
     $modalityConfig = loadModalityConfig();
 
+    // --- Query Institution Name Dynamically ---
+    $instName = '';
+    try {
+        $instStmt = $pdo->query("SELECT nama_instansi FROM setting LIMIT 1");
+        if ($instStmt) {
+            $instVal = $instStmt->fetchColumn();
+            if ($instVal) {
+                $instName = dicomSanitize($instVal);
+            }
+        }
+    } catch (\Exception $e) {
+        error_log('MWL Warning: Failed to query InstitutionName from setting table: ' . $e->getMessage());
+    }
+    if ($instName === '') {
+        $instName = dicomSanitize(INSTITUTION_NAME ?: 'SIMRS KHANZA');
+    }
+
     // --- Query Radiology Orders ---
     // Matches the original SIMRS Khanza query structure with penjab JOIN
     $sql = "SELECT p.noorder, p.no_rawat, r.no_rkm_medis, ps.nm_pasien,
@@ -332,7 +359,7 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $diagnosa    = dicomSanitize($row['diagnosa_klinis']);
         $birthDate   = dicomDate($row['tgl_lahir'] ?? '');
         $patientSex  = mapSex($row['jk'] ?? '');
-        $studyUid    = generateStudyUid($noorder, $row['tgl_permintaan']);
+        $studyUid    = generateStudyUid($row['no_rkm_medis'], $noorder);
         $tglDicom    = dicomDate($row['tgl_permintaan']);
         $jamDicom    = dicomTime($row['jam_permintaan'] ?? '');
 
@@ -349,12 +376,17 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
 
         // Specific Character Set — tells DICOM readers this is ASCII
         $dump .= "(0008,0005) CS [ISO_IR 6]\n";
+        $dump .= "(0008,0020) DA [{$tglDicom}]\n";
+        $dump .= "(0008,0030) TM [{$jamDicom}]\n";
 
         // Accession Number — matches original: uses noorder as accession
         $dump .= "(0008,0050) SH [{$noorder}]\n";
 
         // Referring Physician's Name
         $dump .= "(0008,0090) PN [{$nmDokter}]\n";
+        if ($instName !== '') {
+            $dump .= "(0008,0080) LO [{$instName}]\n";
+        }
 
         // Patient Module
         $dump .= "(0010,0010) PN [{$nmPasien}]\n";
@@ -364,6 +396,7 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
 
         // Study Instance UID
         $dump .= "(0020,000d) UI [{$studyUid}]\n";
+        $dump .= "(0032,1032) PN [{$nmDokter}]\n";
 
         // Requested Procedure Description
         $dump .= "(0032,1060) LO [{$nmPerawatan}]\n";
@@ -385,6 +418,9 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $dump .= "(0040,0007) LO [{$nmPerawatan}]\n";
         $dump .= "(0040,0009) SH [{$noorder}]\n";
         $dump .= "(0040,0010) SH [{$nmPoli}]\n";
+        if ($diagnosa !== '') {
+            $dump .= "(0040,0400) LT [{$diagnosa}]\n";
+        }
         $dump .= "(fffe,e00d) -\n";
         $dump .= "(fffe,e0dd) -\n";
 

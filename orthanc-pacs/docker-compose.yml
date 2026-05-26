@@ -78,6 +78,8 @@ services:
       MWL_INSTITUTION_NAME: ${MWL_INSTITUTION_NAME:-}
     depends_on:
       - orthanc
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD-SHELL", "curl -so /dev/null -w '%{http_code}' http://localhost:8080/ | grep -qE '^(200|401)$'"]
       interval: 30s
