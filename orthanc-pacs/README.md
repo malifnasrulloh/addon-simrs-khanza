@@ -1,180 +1,152 @@
-# Orthanc PACS & MWL Sync
+# Orthanc PACS & Modality Worklist (MWL) Synchronization
 
-A production-ready Orthanc PACS server with automated DICOM Modality Worklist (MWL) synchronization for [SIMRS Khanza](https://github.com/mas-elkhanza/SIMRS-Khanza/).
+A professional, enterprise-grade Orthanc PACS server integration with dual-mode DICOM Modality Worklist (MWL) synchronization for [SIMRS Khanza](https://github.com/mas-elkhanza/SIMRS-Khanza/).
 
-> **Acknowledgment:** Thank you to [mas-elkhanza](https://github.com/mas-elkhanza/) for the base MWL code and the SIMRS Khanza project.
+> **Acknowledgment:** Special thanks to mas-elkhanza and the SIMRS Khanza developer ecosystem for the base MWL script logic.
 
-## Architecture
+---
+
+## ─── 🏛️ Dual-Mode Architecture ───
+
+This PACS module features a state-of-the-art dual-mode synchronization design. Systems administrators can toggle between a real-time, in-memory Python C-FIND SCP plugin or a filesystem-based flat-file generator depending on infrastructure needs.
 
 ```
-┌──────────────┐         ┌──────────────────┐         ┌──────────────┐
-│  SIMRS DB    │◄────────│   simrs-mwl      │────────►│  Orthanc     │
-│  (External)  │  SQL    │  (PHP Daemon +   │  .wl    │  PACS Server │
-│              │         │   Dashboard)     │  files  │              │
-└──────────────┘         └──────────────────┘         └──────┬───────┘
-                                                             │
-                                                      ┌──────┴───────┐
-                                                      │  MariaDB     │
-                                                      │  (Internal)  │
-                                                      └──────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                              PRODUCTION MODE                           │
+│                      (Dynamic Real-Time C-FIND SCP)                    │
+│                                                                        │
+│  ┌──────────────┐          SQL          ┌──────────────────────────┐   │
+│  │  SIMRS DB    │◄──────────────────────│   Orthanc PACS Server    │   │
+│  │  (External)  │                       │   (Dynamic Python Plugin)│   │
+│  └──────────────┘                       └────────────┬─────────────┘   │
+│                                                      │ C-FIND SCP      │
+│                                                      ▼                 │
+│                                             [ DICOM Modality ]         │
+└────────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────────┐
+│                           LEGACY FALLBACK MODE                         │
+│                         (Static Flat-File MWL)                         │
+│                                                                        │
+│  ┌──────────────┐   SQL    ┌──────────────┐  .wl   ┌────────────────┐  │
+│  │  SIMRS DB    │◄─────────│  simrs-mwl   │───────►│  Orthanc PACS  │  │
+│  │  (External)  │          │ (PHP Daemon) │  files │  (C++ Plugin)  │  │
+│  └──────────────┘          └──────────────┘        └────────┬───────┘  │
+│                                                             │ C-FIND   │
+│                                                             ▼          │
+│                                                     [ DICOM Modality ] │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **simrs-mwl** queries the SIMRS Khanza database for radiology orders every N seconds, generates DICOM worklist files, and writes them to a shared volume.
-- **Orthanc** reads the worklist directory and serves MWL C-FIND responses to modalities.
-- **MariaDB** stores Orthanc's internal index (studies, series, instances).
+### 🎛️ Mode Comparison & Toggling
 
-## Prerequisites
+| Feature | Mode A: Dynamic Python SCP (Recommended) | Mode B: Static PHP Daemon (Fallback) |
+| :--- | :--- | :--- |
+| **Data Flow** | Direct in-memory C-FIND query execution. | Periodic DB scanning, writes `.wl` files to disk. |
+| **Sync Latency** | **0 seconds (Instant real-time)** | 10+ seconds (determined by cron interval). |
+| **Disk Overhead** | **None** (zero physical writes, preserves SSD lifespan).| High (continuous disk writes and cleanup loops). |
+| **Offline Support**| Fully pre-baked inside an immutable container. | Relies on internal cleanups and storage sharing. |
+| **Status** | **Production standard** | Disabled (maintained as developer fallback). |
 
-- Docker and Docker Compose v2+
-- Network access to the SIMRS Khanza database (MariaDB/MySQL)
+#### How to Toggle Modes in `docker-compose.yml`:
+Open `docker-compose.yml` and toggle the following environment switches under the `orthanc` service:
 
-## Quick Start
+* **To Enable Dynamic Python SCP (Production Standard)**:
+  ```yaml
+  PYTHON_PLUGIN_ENABLED: "true"
+  WORKLISTS_PLUGIN_ENABLED: "false"
+  ```
+* **To Enable Static PHP Daemon (Legacy Fallback)**:
+  ```yaml
+  PYTHON_PLUGIN_ENABLED: "false"
+  WORKLISTS_PLUGIN_ENABLED: "true"
+  ```
 
-```bash
-# 1. Clone and enter directory
-cd orthanc-pacs
+---
 
-# 2. Copy and edit the environment file
-cp .env.example .env
-nano .env
+## ─── 🚀 Core Integration Features ───
 
-# 3. Update modality AE Title mappings
-nano mwl/modality_aet.json
+### 🧬 Deterministic ISO 2.25 DICOM OIDs
+Rather than utilizing arbitrary or sequential study ID generators, both sync paths apply a globally unique, deterministic ISO `2.25` root branch based on RFC 4122 UUID Version 3:
+$$2.25.[\text{unsigned-128bit-decimal-UUID-from-PatientID-and-AccessionNumber}]$$
+This guarantees character-for-character OID matching between pre-acquisition worklists, SIMRS Satu Sehat Java bridges, and post-acquisition Orthanc modifier engines, while strictly maintaining UIDs well within the standard DICOM 64-character limit.
 
-# 4. Deploy
-docker compose up -d --build
+### 🌐 3-Tier AE Title Lookup Configuration
+Modality configuration is unified under [mapping_tindakan_radiologi.iyem](file:///home/malifnasrulloh/Downloads/addon-simrs-khanza/orthanc-pacs/orthanc-config/mapping_tindakan_radiologi.iyem). On incoming queries, Orthanc automatically evaluates:
+1. Individual **Procedure Mappings** (binds custom radiologic codes to specific AETs like `CR_STATION`).
+2. General **Modality Category Mappings** (e.g., all `CR` actions fallback to a primary CR station AET).
+3. Universal **Default Fallbacks** if no matching rule exists.
 
-# 5. Check logs
-docker compose logs -f simrs-mwl
-```
+### 📋 Full DICOM Standard Compliance
+Sync pipelines compile complete nested sequence attributes, including:
+* **Study Date & Time** `(0008,0020)` / `(0008,0030)`
+* **Institution Name** `(0008,0080)` (dynamically queried from the SIMRS production `setting` table)
+* **Referring & Requesting Physician** `(0008,0090)` / `(0032,1032)`
+* **SPS Comments & Reason for Procedure** `(0040,0400)` / `(0040,1002)` mapped directly to the patient's clinical diagnosis.
 
-## Access
+---
 
-| Service         | URL                               | Default Credentials |
-|-----------------|-----------------------------------|---------------------|
-| Orthanc Explorer | `http://<server>:8042`           | Set in `.env` (`ORTHANC_WEB_USER` / `ORTHANC_WEB_PASS`) |
-| MWL Dashboard    | `http://<server>:8081`           | Set in `.env` (`MWL_WEB_USER` / `MWL_WEB_PASS`) |
-
-## Configuration Reference
-
-All configuration is managed through the `.env` file — no need to enter any container.
-
-### Orthanc Internal Database
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `MARIADB_ROOT_PASSWORD` | MariaDB root password | *(required)* |
-| `MARIADB_DATABASE` | Database name for Orthanc index | `orthanc_db` |
-| `MARIADB_USER` | Database user | *(required)* |
-| `MARIADB_PASSWORD` | Database password | *(required)* |
-
-### SIMRS Khanza Database
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `SIMRS_DB_HOST` | SIMRS database hostname/IP | *(required)* |
-| `SIMRS_DB_PORT` | SIMRS database port | `3306` |
-| `SIMRS_DB_USER` | SIMRS database user | *(required)* |
-| `SIMRS_DB_PASS` | SIMRS database password | *(required)* |
-| `SIMRS_DB_NAME` | SIMRS database name | `sik` |
-
-### Orthanc PACS
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ORTHANC_AET` | DICOM Application Entity Title | `ORTHANC` |
-| `ORTHANC_HTTP_PORT` | Orthanc web UI port | `8042` |
-| `ORTHANC_DICOM_PORT` | DICOM protocol port | `4242` |
-| `ORTHANC_WEB_USER` | Orthanc Explorer username | `admin` |
-| `ORTHANC_WEB_PASS` | Orthanc Explorer password | `changeme` |
-
-### MWL Service
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `MWL_DASHBOARD_PORT` | Dashboard web port | `8081` |
-| `MWL_WEB_USER` | Dashboard username | `admin` |
-| `MWL_WEB_PASS` | Dashboard password | `changeme` |
-| `MWL_SYNC_INTERVAL` | Seconds between sync cycles | `10` |
-| `MWL_DASHBOARD_REFRESH_SEC` | Dashboard auto-refresh interval (seconds) | `300` |
-| `MWL_STALE_DAYS` | Days to keep old worklist files | `2` |
-| `MWL_INSTITUTION_NAME` | Hospital/institution name for DICOM metadata | *(empty)* |
-| `DICOM_UID_ROOT` | OID root for DICOM UID generation | `2.25` |
-
-### General
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TZ` | Timezone | `Asia/Jakarta` |
-
-## Project Structure
+## ─── 📂 Directory Structure ───
 
 ```
 orthanc-pacs/
-├── .env.example              # Environment template (copy to .env)
-├── .dockerignore             # Docker build exclusions
-├── .gitignore                # Git exclusions
-├── docker-compose.yml        # Production orchestration
-├── docker-compose.override.yml  # Dev overrides (source mount)
-├── LICENSE                   # MIT License
-├── README.md
+├── Dockerfile                  # Builds custom Orthanc image with pre-baked pymysql
+├── docker-compose.yml          # Production orchestration stack (Orthanc + MariaDB)
+├── .env.example                # Configuration template (copy to .env)
+├── README.md                   # System integration documentation
 ├── orthanc-config/
-│   └── orthanc.json          # Orthanc base configuration
+│   ├── orthanc.json            # Orthanc configuration and AET find authorization
+│   ├── mapping_tindakan_radiologi.iyem # Unified procedure & AET mappings
+│   └── worklist_plugin.py      # Real-time C-FIND SCP Python plugin
 └── mwl/
-    ├── Dockerfile            # MWL service image
-    ├── entrypoint.sh         # Container startup script
-    ├── index.php             # MWL generator + dashboard
-    └── modality_aet.json     # Modality → AE Title mapping
+    ├── Dockerfile              # Static PHP daemon container image
+    ├── entrypoint.sh           # Daemon cron bootstrapper
+    ├── index.php               # PHP flat-file MWL generator + dashboard
+    └── mapping_tindakan_radiologi.iyem # PHP-side lookup definitions
 ```
 
-## Features
+---
 
-- **Automated MWL Sync** — Background daemon generates DICOM worklist files from SIMRS radiology orders
-- **Full DICOM Compliance** — Includes complete Scheduled Procedure Step Sequence with all mandatory tags
-- **Web Dashboard** — Real-time monitoring with stats cards and auto-refresh
-- **Stale Cleanup** — Automatically removes expired worklist files
-- **Security** — Authentication on both Orthanc and dashboard, network isolation between services
-- **Externalized Config** — Every setting configurable via `.env` without entering containers
-- **Production Docker** — Pinned images, healthchecks, proper entrypoint, network segmentation
+## ─── 🛠️ Quick Deployment (Production) ───
 
-## Modality Configuration
-
-Edit `mwl/modality_aet.json` to map modality types to their AE Titles:
-
-```json
-{
-  "CR": { "aet": "CR_STATION", "host": "192.168.1.100", "port": 104 },
-  "CT": { "aet": "CT_STATION", "host": "192.168.1.101", "port": 104 }
-}
-```
-
-Orthanc must also know about these modalities. Edit `orthanc-config/orthanc.json` to register them under `DicomModalities`.
-
-## Troubleshooting
-
-| Symptom | Solution |
-|---------|----------|
-| `ERROR: Database connection failed` in logs | Check `SIMRS_DB_*` variables in `.env`, ensure DB is reachable |
-| Modality can't find worklist entries | Verify `modality_aet.json` AET matches the modality's configured AET |
-| Dashboard shows 401 Unauthorized | Check `MWL_WEB_USER` / `MWL_WEB_PASS` in `.env` |
-| Orthanc Explorer unreachable | Check `ORTHANC_HTTP_PORT` and `ORTHANC_WEB_USER` / `ORTHANC_WEB_PASS` |
-| `dump2dcm` errors in logs | Verify DCMTK is installed in container: `docker compose exec simrs-mwl dump2dcm --version` |
-
-## Development
-
-For live code editing during development, the `docker-compose.override.yml` mounts the `./mwl` directory into the container:
-
+### 1. Configure the Environment
+Copy the configuration template and update your credentials, making sure `host.docker.internal` gateway routing is configured to reach your host's SIMRS database:
 ```bash
-# Override is loaded automatically
+cp .env.example .env
+nano .env
+```
+
+### 2. Configure Procedure Mappings
+Edit the mapping file to link your radiology procedure codes (`kd_jenis_prw`) to correct Modality letters and Station AE Titles:
+```bash
+nano orthanc-config/mapping_tindakan_radiologi.iyem
+```
+
+### 3. Deploy the Stack
+Compile the custom, pre-baked Docker container and start the background services:
+```bash
 docker compose up -d --build
 ```
+The custom `Dockerfile` automatically downloads and configures the native system dependencies (`python3-pymysql`) in less than 60 seconds, delivering a highly responsive, offline-ready PACS container.
 
-To disable the override for production:
-
+### 4. Verify Real-time Handshakes
+You can immediately trigger a test query from any host machine using DCMTK's `findscu` client:
 ```bash
-docker compose -f docker-compose.yml up -d --build
+findscu -v -W -k 0010,0010="" -k 0008,0050="" -k 0010,0020="" localhost 4242
+```
+Look at your container logs to watch the instant, real-time database query handshake process:
+```bash
+docker compose logs -f orthanc
 ```
 
-## License
+---
 
-[MIT](LICENSE)
+## ─── 🔒 Security & Performance Guidelines ───
+* **No Outbound WAN Dependency**: Mode A relies entirely on native Debian pre-baked system packages. Once built, the stack can run perfectly on air-gapped hospital intranets with no external internet connection.
+* **Network Segmentation**: Orthanc and its internal MariaDB index database are locked within a secure, custom Docker backend network, protecting patient logs from external port scans.
+* **Strict AET Query Authorization**: C-FIND queries are registered under permitted `DicomModalities` in `orthanc.json`, preventing unauthorized network access to patient indices.
+
+---
+
+## ─── ⚖️ License ───
+MIT License. Dedicated to MAS-Elkhanza and the open-source clinical development community.
