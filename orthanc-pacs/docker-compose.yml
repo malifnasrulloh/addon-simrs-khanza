@@ -18,7 +18,10 @@ services:
       retries: 5
 
   orthanc:
-    image: orthancteam/orthanc:26.4.2-full
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: local-orthanc-pacs:latest
     restart: unless-stopped
     ports:
       - "${ORTHANC_DICOM_PORT:-4242}:4242"
@@ -42,10 +45,21 @@ services:
       MYSQL_SERVER_INDEX_PLUGIN_ENABLED: "true"
       ORTHANC_EXPLORER_2_ENABLED: "true"
       DICOM_WEB_PLUGIN_ENABLED: "true"
-      WORKLISTS_PLUGIN_ENABLED: "true"
+      WORKLISTS_PLUGIN_ENABLED: "false"
+      PYTHON_PLUGIN_ENABLED: "true"
+      ORTHANC__PYTHON_SCRIPT: "/etc/orthanc/worklist_plugin.py"
+
+      # --- Python DB Credentials ---
+      DB_HOST: host.docker.internal
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASS: ""
+      DB_NAME: sik
     depends_on:
       orthanc-db:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - orthanc-storage:/var/lib/orthanc/db
       - orthanc-worklists:/var/lib/orthanc/worklists

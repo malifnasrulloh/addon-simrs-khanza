@@ -77,22 +77,40 @@ if (!is_dir(TMP_DIR)) {
  * idempotent for the same input seed.
  */
 function generateStudyUid(string $patientId, string $acsn): string {
-    $cleanPid  = preg_replace('/[^0-9]/', '', $patientId);
-    if ($cleanPid === '') {
-        $cleanPid = '0';
+    $source = "PATIENT:" . trim($patientId) . "|ACCESSION:" . trim($acsn);
+    $md5 = md5($source, true);
+    $bytes = unpack("C*", $md5);
+    $bytes[7] = ($bytes[7] & 0x0f) | 0x30;
+    $bytes[9] = ($bytes[9] & 0x3f) | 0x80;
+    $hex = "";
+    foreach ($bytes as $b) {
+        $hex .= sprintf("%02x", $b);
     }
-    $cleanAcsn = preg_replace('/[^0-9]/', '', $acsn);
-    if ($cleanAcsn === '') {
-        $cleanAcsn = '0';
+    return "2.25." . hexToDec($hex);
+}
+
+function hexToDec(string $hex): string {
+    $hex = ltrim($hex, "0");
+    if ($hex === "") {
+        return "0";
     }
-    $studyUid = "1.3.6.1.4.1.53234.1.{$cleanPid}.{$cleanAcsn}";
-    if (strlen($studyUid) > 64) {
-        $studyUid = substr($studyUid, 0, 64);
+    $dec = "";
+    while ($hex !== "") {
+        $q = "";
+        $r = 0;
+        $len = strlen($hex);
+        for ($i = 0; $i < $len; $i++) {
+            $val = $r * 16 + hexdec($hex[$i]);
+            $digit = intdiv($val, 10);
+            $r = $val % 10;
+            if ($q !== "" || $digit > 0) {
+                $q .= dechex($digit);
+            }
+        }
+        $dec = strval($r) . $dec;
+        $hex = $q;
     }
-    if (str_ends_with($studyUid, '.')) {
-        $studyUid = rtrim($studyUid, '.');
-    }
-    return $studyUid;
+    return $dec;
 }
 
 /**

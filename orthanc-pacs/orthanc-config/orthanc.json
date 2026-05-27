@@ -9,12 +9,14 @@
   "AuthenticationEnabled" : true,
   "RegisteredUsers" : {},
   "RemoteAccessAllowed" : true,
+  "DicomAlwaysAllowFind" : true,
 
   "DicomModalities" : {
+    "FINDSCU": [ "FINDSCU", "host.docker.internal", 104 ]
   },
 
   "Worklists" : {
-    "Enable" : true,
+    "Enable" : false,
     "Database" : "/var/lib/orthanc/worklists",
     "FilterQueryArguments" : false
   },
@@ -22,5 +24,9 @@
   "Plugins" : [
     "/usr/share/orthanc/plugins",
     "/usr/local/share/orthanc/plugins"
+  ],
+
+  "PythonScripts" : [
+    "/etc/orthanc/worklist_plugin.py"
   ]
 }
