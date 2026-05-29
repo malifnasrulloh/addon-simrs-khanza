@@ -67,7 +67,11 @@ class SatuSehatConfig
         $this->dateFrom     = $this->get('SATUSEHAT_DATE_FROM', date('Y-m-d'));
         $this->dateTo       = $this->get('SATUSEHAT_DATE_TO', date('Y-m-d'));
 
-        $this->logDir           = $this->get('LOG_DIR', 'logs');
+        $logDir = $this->get('LOG_DIR', 'logs');
+        if (!str_starts_with($logDir, '/')) {
+            $logDir = (defined('BASE_DIR') ? BASE_DIR : dirname(__DIR__, 2)) . '/' . $logDir;
+        }
+        $this->logDir           = $logDir;
         $this->logLevel         = strtoupper($this->get('LOG_LEVEL', 'INFO'));
         $this->logRetentionDays = (int) $this->get('LOG_RETENTION_DAYS', '30');
         $this->jwtSecret        = $this->get('JWT_SECRET', 'simrs-khanza-secret-super-secure-key');
