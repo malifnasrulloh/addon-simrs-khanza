@@ -26,6 +26,7 @@ class MobileJknConfig
     public readonly int    $lookbackDays;
     public readonly bool   $includeNonJkn;
     public readonly bool   $skipFarmasiNoResep;
+    public readonly bool   $deferRobotInfer;
 
     // ─── Database ──────────────────────────────────────────────────────────
     public readonly string $dbHost;
@@ -83,6 +84,7 @@ class MobileJknConfig
         $this->lookbackDays       = max(1, (int) $this->get('MOBILEJKN_LOOKBACK_DAYS', '6'));
         $this->includeNonJkn      = filter_var($this->get('MOBILEJKN_INCLUDE_NON_JKN', 'true'), FILTER_VALIDATE_BOOLEAN);
         $this->skipFarmasiNoResep = filter_var($this->get('MOBILEJKN_SKIP_FARMASI_NO_RESEP', 'false'), FILTER_VALIDATE_BOOLEAN);
+        $this->deferRobotInfer    = filter_var($this->get('MOBILEJKN_DEFER_ROBOT_INFER', 'true'), FILTER_VALIDATE_BOOLEAN);
 
         // ── Logging ─────────────────────────────────────────────────────
         $this->logDir           = $this->get('LOG_DIR', 'logs');
