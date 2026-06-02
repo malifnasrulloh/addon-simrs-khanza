@@ -1272,4 +1272,90 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    public static function buildAcsn(string $noorder, string $kdJenisPrw): string
+    {
+        $base = str_replace('PR', '', $noorder) . $kdJenisPrw;
+        return preg_replace('/[^a-zA-Z0-9_\-]/', '_', $base);
+    }
+
+    public static function serviceRequestRadiologi(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $orgId,
+        string $idServiceRequest = ''
+    ): array {
+        $acsn = self::buildAcsn($p['noorder'], $p['kd_jenis_prw']);
+        
+        $time = !empty($p['jam_permintaan']) && $p['jam_permintaan'] !== '00:00:00' 
+            ? $p['jam_permintaan'] 
+            : '00:00:00';
+        $authoredOn = $p['tgl_permintaan'] . 'T' . $time . '+07:00';
+        $tglJam = $p['tgl_permintaan'] . ' ' . $time;
+
+        $payload = [
+            'resourceType' => 'ServiceRequest',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/acsn/' . $orgId,
+                    'value'  => $acsn
+                ]
+            ],
+            'status' => 'active',
+            'intent' => 'order',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://snomed.info/sct',
+                            'code'    => '363679005',
+                            'display' => 'Imaging'
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['system']) ? $p['system'] : 'http://snomed.info/sct',
+                        'code'    => !empty($p['code']) ? $p['code'] : '',
+                        'display' => !empty($p['display']) ? $p['display'] : $p['nm_perawatan']
+                    ]
+                ],
+                'text' => $p['nm_perawatan']
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Permintaan ' . $p['nm_perawatan'] . ' atas nama pasien ' . $p['nm_pasien'] .
+                               ' No.RM ' . $p['no_rkm_medis'] . ' No.Rawat ' . $p['no_rawat'] .
+                               ', pada tanggal ' . $tglJam
+            ],
+            'authoredOn' => $authoredOn,
+            'requester' => [
+                'reference' => 'Practitioner/' . $idDokter,
+                'display'   => $p['nama']
+            ],
+            'performer' => [
+                [
+                    'reference' => 'Organization/' . $orgId,
+                    'display'   => 'Ruang Radiologi/Petugas Radiologi'
+                ]
+            ],
+            'reasonCode' => [
+                [
+                    'text' => !empty($p['diagnosa_klinis']) ? $p['diagnosa_klinis'] : '-'
+                ]
+            ]
+        ];
+
+        if (!empty($idServiceRequest) && $idServiceRequest !== '-') {
+            $payload['id'] = $idServiceRequest;
+        }
+
+        return $payload;
+    }
 }

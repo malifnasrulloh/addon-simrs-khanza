@@ -1975,6 +1975,84 @@ class SatuSehatDatabase
         ]);
     }
 
+    // ─── SERVICEREQUEST RADIOLOGI MYSQL OPERATIONS ──────────────────────────────
+
+    public function fetchPendingServiceRequestRadiologiActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT 
+                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
+                p.tgl_lahir, p.jk, rp.kd_dokter, peg.nama, peg.no_ktp as nik_praktisi,
+                sse.id_encounter, pr.noorder, pr.tgl_permintaan, pr.jam_permintaan, 
+                pr.diagnosa_klinis, jpr.nm_perawatan,
+                IFNULL(smr.code, '') as code, IFNULL(smr.system, '') as system, IFNULL(smr.display, '') as display,
+                ppr.kd_jenis_prw, '' as id_servicerequest
+            FROM permintaan_radiologi pr
+            INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN pegawai peg ON peg.nik = rp.kd_dokter
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+            INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+            LEFT JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
+            LEFT JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder 
+                AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
+            WHERE pr.tgl_permintaan BETWEEN :df AND :dt
+              AND (ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '' OR ssr.id_servicerequest = '-')
+            GROUP BY ppr.noorder, ppr.kd_jenis_prw
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function fetchPendingServiceRequestRadiologiUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT 
+                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
+                p.tgl_lahir, p.jk, rp.kd_dokter, peg.nama, peg.no_ktp as nik_praktisi,
+                sse.id_encounter, pr.noorder, pr.tgl_permintaan, pr.jam_permintaan, 
+                pr.diagnosa_klinis, jpr.nm_perawatan,
+                IFNULL(smr.code, '') as code, IFNULL(smr.system, '') as system, IFNULL(smr.display, '') as display,
+                ppr.kd_jenis_prw, ssr.id_servicerequest
+            FROM permintaan_radiologi pr
+            INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN pegawai peg ON peg.nik = rp.kd_dokter
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+            INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+            LEFT JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
+            INNER JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder 
+                AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
+            WHERE pr.tgl_permintaan BETWEEN :df AND :dt
+              AND ssr.id_servicerequest IS NOT NULL AND ssr.id_servicerequest <> '' AND ssr.id_servicerequest <> '-'
+            GROUP BY ppr.noorder, ppr.kd_jenis_prw
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function saveServiceRequestRadiologi(
+        string $noorder, 
+        string $kdJenisPrw, 
+        string $idServiceRequest
+    ): bool {
+        $sql = "INSERT INTO satu_sehat_servicerequest_radiologi (noorder, kd_jenis_prw, id_servicerequest) 
+                VALUES (:noorder, :kd, :id) 
+                ON DUPLICATE KEY UPDATE id_servicerequest = :id2";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'noorder' => $noorder,
+            'kd'      => $kdJenisPrw,
+            'id'      => $idServiceRequest,
+            'id2'     => $idServiceRequest
+        ]);
+    }
+
+
     public function printSyncDiagnostics(string $resourceType, string $dateFrom, string $dateTo): void
     {
         $this->log->info("🔍 [DIAGNOSTICS] Calculating synchronization metrics...");
@@ -2399,6 +2477,45 @@ class SatuSehatDatabase
                     $this->log->info("   ├─ Blocked (No Parent Encounter Mapped): {$noEnc}");
                     $this->log->info("   ├─ Blocked (No Parent Condition Mapped): {$noCond}");
                     $this->log->info("   └─ Already Synced to Satu Sehat        : {$synced}");
+                    break;
+
+                case 'servicerequest_radiologi':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT COUNT(*) 
+                        FROM permintaan_pemeriksaan_radiologi ppr
+                        INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder
+                        WHERE pr.tgl_permintaan BETWEEN :df AND :dt
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoEnc = $this->mysql->prepare("
+                        SELECT COUNT(*) 
+                        FROM permintaan_pemeriksaan_radiologi ppr
+                        INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder
+                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
+                        WHERE pr.tgl_permintaan BETWEEN :df AND :dt AND sse.id_encounter IS NULL
+                    ");
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt]);
+                    $noEnc = (int) $stmtNoEnc->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*) 
+                        FROM satu_sehat_servicerequest_radiologi ssr
+                        INNER JOIN permintaan_radiologi pr ON ssr.noorder = pr.noorder
+                        WHERE pr.tgl_permintaan BETWEEN :df AND :dt
+                          AND ssr.id_servicerequest IS NOT NULL AND ssr.id_servicerequest <> '' AND ssr.id_servicerequest <> '-'
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $noEnc - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Radiology Requests in SIMRS   : {$total}");
+                    $this->log->info("   ├─ Blocked (No Parent Encounter Mapped): {$noEnc}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
                     break;
 
                 case 'patient':
