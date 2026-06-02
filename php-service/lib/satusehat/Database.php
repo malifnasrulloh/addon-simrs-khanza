@@ -289,6 +289,7 @@ class SatuSehatDatabase
 
     public function getIhsPatient(string $nik): ?string
     {
+        $nik = trim($nik);
         if (!$this->isValidNik($nik)) {
             $this->log->debug("[DB] Invalid Patient NIK format: '{$nik}' (skipping IHS lookup)");
             return null;
@@ -320,6 +321,7 @@ class SatuSehatDatabase
 
     public function getIhsPractitioner(string $nik): ?string
     {
+        $nik = trim($nik);
         if (!$this->isValidNik($nik)) {
             $this->log->debug("[DB] Invalid Practitioner NIK format: '{$nik}' (skipping IHS lookup)");
             return null;

@@ -177,6 +177,11 @@ class SatuSehatClient
             return ['success' => false, 'code' => 0, 'message' => "cURL error: {$error}", 'data' => []];
         }
 
+        if ($response === false || $response === '') {
+            $this->log->error("[API] Empty or invalid response from Satu Sehat (HTTP {$httpCode})");
+            return ['success' => false, 'code' => $httpCode, 'message' => 'Empty or invalid response from API', 'data' => []];
+        }
+
         $data = json_decode($response, true);
         if (json_last_error() !== JSON_ERROR_NONE) {
             $this->log->error("[API] Invalid JSON response (HTTP {$httpCode}): " . substr($response, 0, 300));

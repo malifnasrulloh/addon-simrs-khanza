@@ -199,7 +199,7 @@ class SatuSehatClinicalImpressionProcessor
             // Check if finding itemReference code matches
             $resCode = $res['finding'][0]['itemCodeableConcept']['coding'][0]['code'] ?? '';
             
-            if ($resCode === $kdPenyakit) {
+            if (strcasecmp(trim($resCode), trim($kdPenyakit)) === 0) {
                 return $res['id'];
             }
         }

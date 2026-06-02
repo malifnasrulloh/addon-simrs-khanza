@@ -198,7 +198,7 @@ class SatuSehatConditionProcessor
             // Look for matching ICD-10 code
             $resCode = $res['code']['coding'][0]['code'] ?? '';
             
-            if ($resCode === $kdPenyakit) {
+            if (strcasecmp(trim($resCode), trim($kdPenyakit)) === 0) {
                 return $res['id']; // Found the matching duplicate!
             }
         }

@@ -300,7 +300,7 @@ class SatuSehatPayloadBuilder
                 'coding' => [
                     [
                         'system'  => 'http://hl7.org/fhir/sid/icd-10',
-                        'code'    => $p['kd_penyakit'],
+                        'code'    => strtoupper(trim($p['kd_penyakit'])),
                         'display' => $p['nm_penyakit']
                     ]
                 ]
@@ -1243,7 +1243,7 @@ class SatuSehatPayloadBuilder
                         'coding' => [
                             [
                                 'system'  => 'http://hl7.org/fhir/sid/icd-10',
-                                'code'    => $p['kd_penyakit'],
+                                'code'    => strtoupper(trim($p['kd_penyakit'])),
                                 'display' => $p['nm_penyakit']
                             ]
                         ]
