@@ -144,9 +144,9 @@ $log->info("[INIT] Found {$totalActive} active and {$totalUpdate} update allergi
 if ($isParallel && $totalPending > 1) {
     $log->info("[CONCURRENCY] Splitting work among {$numWorkers} parallel workers...");
 
-    // Split arrays into chunks
-    $activeChunks = array_chunk($activeRecords, (int) ceil($totalActive / $numWorkers)) ?: [];
-    $updateChunks = array_chunk($updateRecords, (int) ceil($totalUpdate / $numWorkers)) ?: [];
+    // Split arrays into chunks safely
+    $activeChunks = $totalActive > 0 ? (array_chunk($activeRecords, (int) ceil($totalActive / $numWorkers)) ?: []) : [];
+    $updateChunks = $totalUpdate > 0 ? (array_chunk($updateRecords, (int) ceil($totalUpdate / $numWorkers)) ?: []) : [];
 
     $workers = [];
     $db->close(); // Close DB handle before fork to avoid shared-connection issues!
@@ -173,7 +173,7 @@ if ($isParallel && $totalPending > 1) {
                 exit(1);
             }
 
-            $dictionary = new SatuSehatAllergyDictionary(BASE_DIR . '/lib/satusehat/dictionary_allergy.iyem');
+            $dictionary = new SatuSehatAllergyDictionary(BASE_DIR . '/lib/satusehat/dictionary_allergy.iyem', $log);
             $processor = new SatuSehatAllergyIntoleranceProcessor($childDb, $childClient, $config, $log, $dictionary);
             $stats = $processor->run($actChunk, $updChunk);
 
@@ -209,7 +209,7 @@ if ($isParallel && $totalPending > 1) {
 
 } else {
     // ── SINGLE PROCESS FALLBACK ──
-    $dictionary = new SatuSehatAllergyDictionary(BASE_DIR . '/lib/satusehat/dictionary_allergy.iyem');
+    $dictionary = new SatuSehatAllergyDictionary(BASE_DIR . '/lib/satusehat/dictionary_allergy.iyem', $log);
     $processor = new SatuSehatAllergyIntoleranceProcessor($db, $client, $config, $log, $dictionary);
     try {
         $stats = $processor->run($activeRecords, $updateRecords);

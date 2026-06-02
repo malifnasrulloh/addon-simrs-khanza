@@ -45,7 +45,6 @@ $stmt = $pdo->prepare("
     LEFT JOIN satu_sehat_ihs_patient i ON p.no_ktp = i.nikpasien 
     WHERE i.ihspasien IS NULL 
       AND p.no_ktp REGEXP '^[0-9]{16}$'
-    LIMIT 100
 ");
 $stmt->execute();
 $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);

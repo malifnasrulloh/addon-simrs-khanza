@@ -143,9 +143,9 @@ $log->info("[INIT] Found {$totalActive} active and {$totalFinished} finished epi
 if ($isParallel && $totalPending > 1) {
     $log->info("[CONCURRENCY] Splitting work among {$numWorkers} parallel workers...");
 
-    // Split arrays into chunks
-    $activeChunks = array_chunk($activeRecords, (int) ceil($totalActive / $numWorkers)) ?: [];
-    $finishedChunks = array_chunk($finishedRecords, (int) ceil($totalFinished / $numWorkers)) ?: [];
+    // Split arrays into chunks safely
+    $activeChunks = $totalActive > 0 ? (array_chunk($activeRecords, (int) ceil($totalActive / $numWorkers)) ?: []) : [];
+    $finishedChunks = $totalFinished > 0 ? (array_chunk($finishedRecords, (int) ceil($totalFinished / $numWorkers)) ?: []) : [];
 
     $workers = [];
     $db->close(); // Close DB handle before fork to avoid shared-connection issues!

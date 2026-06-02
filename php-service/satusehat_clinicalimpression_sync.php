@@ -143,9 +143,9 @@ $log->info("[INIT] Found {$totalActive} active and {$totalUpdate} update clinica
 if ($isParallel && $totalPending > 1) {
     $log->info("[CONCURRENCY] Splitting work among {$numWorkers} parallel workers...");
 
-    // Split arrays into chunks
-    $activeChunks = array_chunk($activeRecords, (int) ceil($totalActive / $numWorkers)) ?: [];
-    $updateChunks = array_chunk($updateRecords, (int) ceil($totalUpdate / $numWorkers)) ?: [];
+    // Split arrays into chunks safely
+    $activeChunks = $totalActive > 0 ? (array_chunk($activeRecords, (int) ceil($totalActive / $numWorkers)) ?: []) : [];
+    $updateChunks = $totalUpdate > 0 ? (array_chunk($updateRecords, (int) ceil($totalUpdate / $numWorkers)) ?: []) : [];
 
     $workers = [];
     $db->close(); // Close DB handle before fork to avoid shared-connection issues!
