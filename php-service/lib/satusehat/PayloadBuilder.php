@@ -1493,6 +1493,98 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    public static function observationRadiologi(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $orgId,
+        string $idObservation = ''
+    ): array {
+        $time = !empty($p['jam_hasil']) && $p['jam_hasil'] !== '00:00:00' 
+            ? $p['jam_hasil'] 
+            : '00:00:00';
+        $dateTimeStr = $p['tgl_hasil'] . 'T' . $time . '+07:00';
+
+        // Sanitizing valueString
+        $conclusion = str_replace(["\r\n", "\r", "\n"], '<br>', $p['hasil']);
+        $conclusion = str_replace("\t", ' ', $conclusion);
+
+        $payload = [
+            'resourceType' => 'Observation',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/observation/' . $orgId,
+                    'value'  => $p['noorder'] . '.' . $p['kd_jenis_prw']
+                ]
+            ],
+            'status' => 'final',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/observation-category',
+                            'code'    => 'imaging',
+                            'display' => 'Imaging'
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['system']) ? $p['system'] : '',
+                        'code'    => !empty($p['code']) ? $p['code'] : '',
+                        'display' => !empty($p['display']) ? $p['display'] : ''
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Hasil Pemeriksaan Radiologi ' . $p['nm_perawatan'] . ' No.Rawat ' . $p['no_rawat'] . ', Atas Nama Pasien ' . $p['nm_pasien'] . ', Pada Tanggal ' . $p['tgl_hasil'] . ' ' . $time
+            ],
+            'effectiveDateTime' => $dateTimeStr,
+            'issued'            => $dateTimeStr,
+            'performer' => [
+                [
+                    'reference' => 'Practitioner/' . $idDokter
+                ],
+                [
+                    'reference' => 'Organization/' . $orgId
+                ]
+            ],
+            'basedOn' => [
+                [
+                    'reference' => 'ServiceRequest/' . $p['id_servicerequest']
+                ]
+            ],
+            'bodySite' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['sampel_system']) ? $p['sampel_system'] : '',
+                        'code'    => !empty($p['sampel_code']) ? $p['sampel_code'] : '',
+                        'display' => !empty($p['sampel_display']) ? $p['sampel_display'] : ''
+                    ]
+                ]
+            ],
+            'derivedFrom' => [
+                [
+                    'reference' => 'ImagingStudy/' . $p['id_imaging']
+                ]
+            ],
+            'valueString' => $conclusion
+        ];
+
+        if (!empty($idObservation) && $idObservation !== '-') {
+            $payload['id'] = $idObservation;
+        }
+
+        return $payload;
+    }
 }
+
 
 

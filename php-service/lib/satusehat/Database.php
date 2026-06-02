@@ -2206,6 +2206,90 @@ class SatuSehatDatabase
         ]);
     }
 
+    // ─── OBSERVATION RADIOLOGI MYSQL OPERATIONS ─────────────────────────────────
+
+    public function fetchPendingObservationRadiologiActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT DISTINCT 
+                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
+                pr.noorder, pr.tgl_hasil, pr.jam_hasil, jpr.nm_perawatan,
+                smr.code, smr.system, smr.display, hr.hasil, ppr.kd_jenis_prw,
+                sssp.id_specimen, prad.kd_dokter, peg.nama as nm_dokter, peg.no_ktp as nik_praktisi,
+                sse.id_encounter, '' as id_observation,
+                smr.sampel_code, smr.sampel_system, smr.sampel_display,
+                ssi.id_servicerequest, ssi.id_imaging
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN permintaan_radiologi pr ON pr.no_rawat = rp.no_rawat
+            INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+            INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+            INNER JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
+            INNER JOIN satu_sehat_specimen_radiologi sssp ON sssp.noorder = ppr.noorder AND sssp.kd_jenis_prw = ppr.kd_jenis_prw
+            INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil AND prad.dokter_perujuk = pr.dokter_perujuk
+            INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam
+            INNER JOIN satu_sehat_imagingstudy_radiologi ssi ON sssp.noorder = ssi.noorder AND sssp.kd_jenis_prw = ssi.kd_jenis_prw
+            LEFT JOIN satu_sehat_observation_radiologi sso ON sssp.noorder = sso.noorder AND sssp.kd_jenis_prw = sso.kd_jenis_prw
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            INNER JOIN pegawai peg ON prad.kd_dokter = peg.nik
+            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+              AND (sso.id_observation IS NULL OR sso.id_observation = '' OR sso.id_observation = '-')
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function fetchPendingObservationRadiologiUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT DISTINCT 
+                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
+                pr.noorder, pr.tgl_hasil, pr.jam_hasil, jpr.nm_perawatan,
+                smr.code, smr.system, smr.display, hr.hasil, ppr.kd_jenis_prw,
+                sssp.id_specimen, prad.kd_dokter, peg.nama as nm_dokter, peg.no_ktp as nik_praktisi,
+                sse.id_encounter, sso.id_observation,
+                smr.sampel_code, smr.sampel_system, smr.sampel_display,
+                ssi.id_servicerequest, ssi.id_imaging
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN permintaan_radiologi pr ON pr.no_rawat = rp.no_rawat
+            INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+            INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+            INNER JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
+            INNER JOIN satu_sehat_specimen_radiologi sssp ON sssp.noorder = ppr.noorder AND sssp.kd_jenis_prw = ppr.kd_jenis_prw
+            INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil AND prad.dokter_perujuk = pr.dokter_perujuk
+            INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam
+            INNER JOIN satu_sehat_imagingstudy_radiologi ssi ON sssp.noorder = ssi.noorder AND sssp.kd_jenis_prw = ssi.kd_jenis_prw
+            INNER JOIN satu_sehat_observation_radiologi sso ON sssp.noorder = sso.noorder AND sssp.kd_jenis_prw = sso.kd_jenis_prw
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            INNER JOIN pegawai peg ON prad.kd_dokter = peg.nik
+            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+              AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function saveObservationRadiologi(
+        string $noorder, 
+        string $kdJenisPrw, 
+        string $idObservation
+    ): bool {
+        $sql = "INSERT INTO satu_sehat_observation_radiologi (noorder, kd_jenis_prw, id_observation) 
+                VALUES (:noorder, :kd, :id) 
+                ON DUPLICATE KEY UPDATE id_observation = :id2";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'noorder' => $noorder,
+            'kd'      => $kdJenisPrw,
+            'id'      => $idObservation,
+            'id2'     => $idObservation
+        ]);
+    }
+
+
 
 
 
@@ -2817,6 +2901,108 @@ class SatuSehatDatabase
 
                     $this->log->info("   ├─ Total Specimen Radiologi in SIMRS   : {$total}");
                     $this->log->info("   ├─ Blocked (No ServiceRequest Mapped)  : {$noReq}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
+                case 'observation_radiologi':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM hasil_radiologi hr
+                        INNER JOIN periksa_radiologi prad ON hr.no_rawat = prad.no_rawat AND hr.tgl_periksa = prad.tgl_periksa AND hr.jam = prad.jam
+                        INNER JOIN permintaan_radiologi pr ON pr.no_rawat = prad.no_rawat AND pr.tgl_hasil = prad.tgl_periksa AND pr.jam_hasil = prad.jam AND pr.dokter_perujuk = prad.dokter_perujuk
+                        INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+                        INNER JOIN reg_periksa rp ON rp.no_rawat = pr.no_rawat
+                        INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+                        INNER JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoEnc = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM hasil_radiologi hr
+                        INNER JOIN periksa_radiologi prad ON hr.no_rawat = prad.no_rawat AND hr.tgl_periksa = prad.tgl_periksa AND hr.jam = prad.jam
+                        INNER JOIN permintaan_radiologi pr ON pr.no_rawat = prad.no_rawat AND pr.tgl_hasil = prad.tgl_periksa AND pr.jam_hasil = prad.jam AND pr.dokter_perujuk = prad.dokter_perujuk
+                        INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+                        INNER JOIN reg_periksa rp ON rp.no_rawat = pr.no_rawat
+                        INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+                        INNER JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
+                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt 
+                          AND (sse.id_encounter IS NULL OR sse.id_encounter = '' OR sse.id_encounter = '-')
+                    ");
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt]);
+                    $noEnc = (int) $stmtNoEnc->fetchColumn();
+
+                    $stmtNoReq = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM hasil_radiologi hr
+                        INNER JOIN periksa_radiologi prad ON hr.no_rawat = prad.no_rawat AND hr.tgl_periksa = prad.tgl_periksa AND hr.jam = prad.jam
+                        INNER JOIN permintaan_radiologi pr ON pr.no_rawat = prad.no_rawat AND pr.tgl_hasil = prad.tgl_periksa AND pr.jam_hasil = prad.jam AND pr.dokter_perujuk = prad.dokter_perujuk
+                        INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+                        INNER JOIN reg_periksa rp ON rp.no_rawat = pr.no_rawat
+                        INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+                        INNER JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
+                        LEFT JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt 
+                          AND (ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '' OR ssr.id_servicerequest = '-')
+                    ");
+                    $stmtNoReq->execute(['df' => $df, 'dt' => $dt]);
+                    $noReq = (int) $stmtNoReq->fetchColumn();
+
+                    $stmtNoSpec = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM hasil_radiologi hr
+                        INNER JOIN periksa_radiologi prad ON hr.no_rawat = prad.no_rawat AND hr.tgl_periksa = prad.tgl_periksa AND hr.jam = prad.jam
+                        INNER JOIN permintaan_radiologi pr ON pr.no_rawat = prad.no_rawat AND pr.tgl_hasil = prad.tgl_periksa AND pr.jam_hasil = prad.jam AND pr.dokter_perujuk = prad.dokter_perujuk
+                        INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+                        INNER JOIN reg_periksa rp ON rp.no_rawat = pr.no_rawat
+                        INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+                        INNER JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
+                        LEFT JOIN satu_sehat_specimen_radiologi sssp ON sssp.noorder = ppr.noorder AND sssp.kd_jenis_prw = ppr.kd_jenis_prw
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt 
+                          AND (sssp.id_specimen IS NULL OR sssp.id_specimen = '' OR sssp.id_specimen = '-')
+                    ");
+                    $stmtNoSpec->execute(['df' => $df, 'dt' => $dt]);
+                    $noSpec = (int) $stmtNoSpec->fetchColumn();
+
+                    $stmtNoImg = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM hasil_radiologi hr
+                        INNER JOIN periksa_radiologi prad ON hr.no_rawat = prad.no_rawat AND hr.tgl_periksa = prad.tgl_periksa AND hr.jam = prad.jam
+                        INNER JOIN permintaan_radiologi pr ON pr.no_rawat = prad.no_rawat AND pr.tgl_hasil = prad.tgl_periksa AND pr.jam_hasil = prad.jam AND pr.dokter_perujuk = prad.dokter_perujuk
+                        INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+                        INNER JOIN reg_periksa rp ON rp.no_rawat = pr.no_rawat
+                        INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+                        INNER JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
+                        LEFT JOIN satu_sehat_imagingstudy_radiologi ssi ON ssi.noorder = ppr.noorder AND ssi.kd_jenis_prw = ppr.kd_jenis_prw
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt 
+                          AND (ssi.id_imaging IS NULL OR ssi.id_imaging = '' OR ssi.id_imaging = '-')
+                    ");
+                    $stmtNoImg->execute(['df' => $df, 'dt' => $dt]);
+                    $noImg = (int) $stmtNoImg->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM satu_sehat_observation_radiologi sso
+                        INNER JOIN permintaan_radiologi pr ON sso.noorder = pr.noorder
+                        INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                          AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Observations in SIMRS         : {$total}");
+                    $this->log->info("   ├─ Blocked (No Parent Encounter Mapped): {$noEnc}");
+                    $this->log->info("   ├─ Blocked (No ServiceRequest Mapped)  : {$noReq}");
+                    $this->log->info("   ├─ Blocked (No Specimen Mapped)        : {$noSpec}");
+                    $this->log->info("   ├─ Blocked (No ImagingStudy Mapped)    : {$noImg}");
                     $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
                     $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
                     break;
