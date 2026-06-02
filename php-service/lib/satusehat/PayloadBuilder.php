@@ -1358,4 +1358,92 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    public static function diagnosticReportRadiologi(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $orgId,
+        string $idDiagnosticReport = ''
+    ): array {
+        $time = !empty($p['jam_hasil']) && $p['jam_hasil'] !== '00:00:00' 
+            ? $p['jam_hasil'] 
+            : '00:00:00';
+        $dateTimeStr = $p['tgl_hasil'] . 'T' . $time . '+07:00';
+
+        $conclusion = !empty($p['hasil']) ? $p['hasil'] : '';
+        $conclusion = str_replace(["\r\n", "\r", "\n", "\n\r"], '<br>', $conclusion);
+        $conclusion = str_replace("\t", ' ', $conclusion);
+
+        $payload = [
+            'resourceType' => 'DiagnosticReport',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/diagnostic/' . $orgId . '/rad',
+                    'use'    => 'official',
+                    'value'  => $p['noorder'] . '.' . $p['kd_jenis_prw']
+                ]
+            ],
+            'status' => 'final',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/v2-0074',
+                            'code'    => 'RAD',
+                            'display' => 'Radiology'
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['system']) ? $p['system'] : 'http://snomed.info/sct',
+                        'code'    => !empty($p['code']) ? $p['code'] : '',
+                        'display' => !empty($p['display']) ? $p['display'] : $p['nm_perawatan']
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter']
+            ],
+            'effectiveDateTime' => $dateTimeStr,
+            'issued'            => $dateTimeStr,
+            'performer' => [
+                [
+                    'reference' => 'Practitioner/' . $idDokter
+                ],
+                [
+                    'reference' => 'Organization/' . $orgId
+                ]
+            ],
+            'imagingStudy' => [
+                [
+                    'reference' => 'ImagingStudy/' . $p['id_imaging']
+                ]
+            ],
+            'result' => [
+                [
+                    'reference' => 'Observation/' . $p['id_observation']
+                ]
+            ],
+            'basedOn' => [
+                [
+                    'reference' => 'ServiceRequest/' . $p['id_servicerequest']
+                ]
+            ],
+            'conclusion' => $conclusion
+        ];
+
+        if (!empty($idDiagnosticReport) && $idDiagnosticReport !== '-') {
+            $payload['id'] = $idDiagnosticReport;
+        }
+
+        return $payload;
+    }
 }
+
