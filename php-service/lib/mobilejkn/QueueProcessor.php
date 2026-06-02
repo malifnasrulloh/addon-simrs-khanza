@@ -330,13 +330,26 @@ class QueueProcessor
             }
         }
 
-        // Bidirectional auto-healing: sync sent task state from BPJS to local DB
-        $this->syncTaskStateFromBpjs($kodebooking, $noRawat, $state, $label);
-
-        // Determine jenisresep once per patient (per BPJS spec)
+        // Determine prescription info once per patient (per BPJS spec)
         $noResep    = $this->db->fetchNoResep($noRawat);
         $isRacikan  = !empty($noResep) ? $this->db->isRacikan($noResep) : false;
         $jenisresep = empty($noResep) ? 'Tidak ada' : ($isRacikan ? 'Racikan' : 'Non racikan');
+
+        // Smart-Bypass Caching: check if patient's active milestones are already fully completed locally
+        $isCompleted = ($state['3'] === 'Sudah' && $state['4'] === 'Sudah' && $state['5'] === 'Sudah');
+        if ($isCompleted) {
+            $hasPrescription = !empty($noResep);
+            if ($hasPrescription || !$this->config->skipFarmasiNoResep) {
+                $isCompleted = ($state['6'] === 'Sudah' && $state['7'] === 'Sudah');
+            }
+        }
+
+        // Bidirectional auto-healing: only sync/double-check BPJS API if patient is NOT fully completed locally and not cancelled
+        if (!$isCompleted && $state['99'] === '') {
+            $this->syncTaskStateFromBpjs($kodebooking, $noRawat, $state, $label);
+        } else {
+            $this->log->debug("[{$label}] {$noRawat}: patient is already completed locally or cancelled — skipping BPJS getlisttask verification");
+        }
 
         // ── Task 3: mulai tunggu poli ─────────────────────────────────────
         if ($state['3'] === '') {
