@@ -1445,5 +1445,54 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    public static function specimenRadiologi(
+        array $p,
+        string $idPasien,
+        string $orgId,
+        string $idSpecimen = ''
+    ): array {
+        $time = !empty($p['jam_sampel']) && $p['jam_sampel'] !== '00:00:00' 
+            ? $p['jam_sampel'] 
+            : '00:00:00';
+        $receivedTime = $p['tgl_sampel'] . 'T' . $time . '+07:00';
+
+        $payload = [
+            'resourceType' => 'Specimen',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/specimen/' . $orgId,
+                    'value'  => $p['noorder'] . '.' . $p['kd_jenis_prw']
+                ]
+            ],
+            'status' => 'available',
+            'type' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['sampel_system']) ? $p['sampel_system'] : '',
+                        'code'    => !empty($p['sampel_code']) ? $p['sampel_code'] : '',
+                        'display' => !empty($p['sampel_display']) ? $p['sampel_display'] : ''
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'request' => [
+                [
+                    'reference' => 'ServiceRequest/' . $p['id_servicerequest']
+                ]
+            ],
+            'receivedTime' => $receivedTime
+        ];
+
+        if (!empty($idSpecimen) && $idSpecimen !== '-') {
+            $payload['id'] = $idSpecimen;
+        }
+
+        return $payload;
+    }
 }
+
 

@@ -2139,6 +2139,74 @@ class SatuSehatDatabase
         ]);
     }
 
+    // ─── SPECIMEN RADIOLOGI MYSQL OPERATIONS ────────────────────────────────────
+
+    public function fetchPendingSpecimenRadiologiActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT DISTINCT 
+                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
+                pr.noorder, pr.tgl_sampel, pr.jam_sampel, jpr.nm_perawatan,
+                smr.sampel_code, smr.sampel_system, smr.sampel_display,
+                ssr.id_servicerequest, ppr.kd_jenis_prw, '' as id_specimen
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN permintaan_radiologi pr ON pr.no_rawat = rp.no_rawat
+            INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+            INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+            INNER JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
+            INNER JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
+            LEFT JOIN satu_sehat_specimen_radiologi sssp ON ssr.noorder = sssp.noorder AND ssr.kd_jenis_prw = sssp.kd_jenis_prw
+            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+              AND (sssp.id_specimen IS NULL OR sssp.id_specimen = '' OR sssp.id_specimen = '-')
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function fetchPendingSpecimenRadiologiUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT DISTINCT 
+                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
+                pr.noorder, pr.tgl_sampel, pr.jam_sampel, jpr.nm_perawatan,
+                smr.sampel_code, smr.sampel_system, smr.sampel_display,
+                ssr.id_servicerequest, ppr.kd_jenis_prw, sssp.id_specimen
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN permintaan_radiologi pr ON pr.no_rawat = rp.no_rawat
+            INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+            INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+            INNER JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
+            INNER JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
+            INNER JOIN satu_sehat_specimen_radiologi sssp ON ssr.noorder = sssp.noorder AND ssr.kd_jenis_prw = sssp.kd_jenis_prw
+            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+              AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function saveSpecimenRadiologi(
+        string $noorder, 
+        string $kdJenisPrw, 
+        string $idSpecimen
+    ): bool {
+        $sql = "INSERT INTO satu_sehat_specimen_radiologi (noorder, kd_jenis_prw, id_specimen) 
+                VALUES (:noorder, :kd, :id) 
+                ON DUPLICATE KEY UPDATE id_specimen = :id2";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'noorder' => $noorder,
+            'kd'      => $kdJenisPrw,
+            'id'      => $idSpecimen,
+            'id2'     => $idSpecimen
+        ]);
+    }
+
+
 
 
     public function printSyncDiagnostics(string $resourceType, string $dateFrom, string $dateTo): void
@@ -2709,6 +2777,50 @@ class SatuSehatDatabase
                     $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
                     $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
                     break;
+
+                case 'specimen_radiologi':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM permintaan_pemeriksaan_radiologi ppr
+                        INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder
+                        INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoReq = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM permintaan_pemeriksaan_radiologi ppr
+                        INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder
+                        INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                        LEFT JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt 
+                          AND (ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '' OR ssr.id_servicerequest = '-')
+                    ");
+                    $stmtNoReq->execute(['df' => $df, 'dt' => $dt]);
+                    $noReq = (int) $stmtNoReq->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM satu_sehat_specimen_radiologi sssp
+                        INNER JOIN permintaan_radiologi pr ON sssp.noorder = pr.noorder
+                        INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                          AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Specimen Radiologi in SIMRS   : {$total}");
+                    $this->log->info("   ├─ Blocked (No ServiceRequest Mapped)  : {$noReq}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
 
 
                 case 'patient':
