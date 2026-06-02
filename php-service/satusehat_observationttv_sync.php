@@ -97,6 +97,7 @@ $log->info("══════════════════════�
 require_once BASE_DIR . '/lib/satusehat/SatuSehatClient.php';
 require_once BASE_DIR . '/lib/satusehat/Database.php';
 require_once BASE_DIR . '/lib/satusehat/PayloadBuilder.php';
+require_once BASE_DIR . '/lib/satusehat/Supervisor.php';
 require_once BASE_DIR . '/lib/satusehat/ObservationTTVProcessor.php';
 
 $client = new SatuSehatClient($config, $log);
@@ -193,19 +194,9 @@ if ($isParallel && $totalPending > 1) {
         }
     }
 
-    // Wait for all workers to finish
-    $allSuccess = true;
-    foreach ($workers as $pid) {
-        pcntl_waitpid($pid, $status);
-        if (pcntl_wifexited($status)) {
-            $exitCode = pcntl_wexitstatus($status);
-            if ($exitCode !== 0) {
-                $allSuccess = false;
-            }
-        } else {
-            $allSuccess = false;
-        }
-    }
+    // Wait for all workers to finish using the Concurrency Supervisor
+    $supervisor = new SatuSehatSupervisor($log);
+    $allSuccess = $supervisor->monitor($workers);
 
     $elapsed = round(microtime(true) - $startTime, 2);
     $log->info("══════════════════════════════════════════════════════════════");
