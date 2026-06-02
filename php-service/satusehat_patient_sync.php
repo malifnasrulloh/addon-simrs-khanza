@@ -70,8 +70,8 @@ foreach ($patients as $idx => $patient) {
         $endpoint = "/Patient?identifier=https://fhir.kemkes.go.id/id/nik|{$nik}";
         $res = $client->get($endpoint);
         
-        if (!empty($res['entry'])) {
-            $resource = $res['entry'][0]['resource'];
+        if ($res['success'] && !empty($res['data']['entry'])) {
+            $resource = $res['data']['entry'][0]['resource'];
             $ihsNumber = $resource['id'];
             
             $insertStmt = $pdo->prepare("REPLACE INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:nik, :ihs)");
