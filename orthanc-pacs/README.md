@@ -48,6 +48,28 @@ This PACS module features a state-of-the-art dual-mode synchronization design. S
 | **Offline Support**| Fully pre-baked inside an immutable container. | Relies on internal cleanups and storage sharing. |
 | **Status** | **Production standard** | Disabled (maintained as developer fallback). |
 
+---
+
+## 🚀 Hardened Real-Time MWL (Python Plugin)
+
+The real-time Python C-FIND plugin has been significantly optimized for production high-concurrency environments.
+
+### Key Improvements:
+- **Connection Pooling**: Utilizes `PooledDB` to maintain persistent database sessions, eliminating TCP handshake overhead for every modality request.
+- **Server-Side SQL Filtering**: Incoming C-FIND query tags (PatientID, AccessionNumber) are dynamically pushed down to the MariaDB engine. The plugin no longer fetches the entire order list into memory.
+- **Credential Protection**: All database and web credentials are now mapped via the `.env` file. No secrets are hardcoded in the `docker-compose.yml` or source code.
+- **Structured Observability**: Features a dedicated `orthanc-mwl` logger that provides request latency metrics (e.g., `Fetched 5 rows in 0.04s`), enabling proactive monitoring of database health.
+- **Safety Guardrails**: Hard `LIMIT 100` and date-range constraints prevent expensive wildcard queries from impacting the SIMRS database performance.
+
+### 🔐 Security & Credential Protection
+Ensure the following variables are correctly set in your `.env` file:
+- `SIMRS_DB_USER` / `SIMRS_DB_PASS`: Dedicated database user for HIS access.
+- `ORTHANC_WEB_USER` / `ORTHANC_WEB_PASS`: Web portal credentials.
+
+For details on the architectural decisions, see [docs/adr/0001-mwl-hardening.md](docs/adr/0001-mwl-hardening.md).
+
+---
+
 #### How to Toggle Modes in `docker-compose.yml`:
 Open `docker-compose.yml` and toggle the following environment switches under the `orthanc` service:
 

@@ -31,7 +31,7 @@ services:
       ORTHANC__NAME: "Orthanc PACS"
       ORTHANC__DICOM_AET: ${ORTHANC_AET:-ORTHANC}
       ORTHANC__AUTHENTICATION_ENABLED: "true"
-      ORTHANC__REGISTERED_USERS: '{"${ORTHANC_WEB_USER:-admin}":"${ORTHANC_WEB_PASS:-changeme}"}'
+      ORTHANC__REGISTERED_USERS: '{"${ORTHANC_WEB_USER}":"${ORTHANC_WEB_PASS}"}'
 
       # --- MySQL Plugin ---
       ORTHANC__MYSQL__ENABLE: "true"
@@ -50,11 +50,11 @@ services:
       ORTHANC__PYTHON_SCRIPT: "/etc/orthanc/worklist_plugin.py"
 
       # --- Python DB Credentials ---
-      DB_HOST: host.docker.internal
-      DB_PORT: 3306
-      DB_USER: root
-      DB_PASS: ""
-      DB_NAME: sik
+      DB_HOST: ${SIMRS_DB_HOST}
+      DB_PORT: ${SIMRS_DB_PORT:-3306}
+      DB_USER: ${SIMRS_DB_USER}
+      DB_PASS: ${SIMRS_DB_PASS}
+      DB_NAME: ${SIMRS_DB_NAME}
     depends_on:
       orthanc-db:
         condition: service_healthy
