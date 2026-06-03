@@ -2936,6 +2936,123 @@ class SatuSehatDatabase
         ]);
     }
 
+    public function fetchPendingDiagnosticReportLabMBActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT DISTINCT 
+                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+                per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
+                sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
+                tl.Pemeriksaan, sml.code, sml.system, sml.display,
+                sssr.id_servicerequest, pdpl.id_template, sssp.id_specimen,
+                sso.id_observation, '' as id_diagnosticreport, skl.kesan,
+                pdpl.kd_jenis_prw
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            INNER JOIN permintaan_labmb pl ON pl.no_rawat = rp.no_rawat
+            INNER JOIN permintaan_detail_permintaan_labmb pdpl ON pdpl.noorder = pl.noorder
+            INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+            INNER JOIN satu_sehat_mapping_lab sml ON sml.id_template = tl.id_template
+            INNER JOIN satu_sehat_servicerequest_lab_mb sssr ON sssr.noorder = pdpl.noorder
+              AND sssr.id_template = pdpl.id_template
+              AND sssr.kd_jenis_prw = pdpl.kd_jenis_prw
+            INNER JOIN satu_sehat_specimen_lab_mb sssp ON sssr.noorder = sssp.noorder
+              AND sssr.id_template = sssp.id_template
+              AND sssr.kd_jenis_prw = sssp.kd_jenis_prw
+            INNER JOIN periksa_lab per ON per.no_rawat = pl.no_rawat
+              AND per.tgl_periksa = pl.tgl_hasil
+              AND per.jam = pl.jam_hasil
+              AND per.dokter_perujuk = pl.dokter_perujuk
+            INNER JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
+              AND per.tgl_periksa = skl.tgl_periksa
+              AND per.jam = skl.jam
+            INNER JOIN satu_sehat_observation_lab_mb sso ON sssp.noorder = sso.noorder
+              AND sssp.id_template = sso.id_template
+              AND sssp.kd_jenis_prw = sso.kd_jenis_prw
+            LEFT JOIN satu_sehat_diagnosticreport_lab_mb ssdr ON sssr.noorder = ssdr.noorder
+              AND sssr.id_template = ssdr.id_template
+              AND sssr.kd_jenis_prw = ssdr.kd_jenis_prw
+            INNER JOIN pegawai peg ON per.kd_dokter = peg.nik
+            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+              AND sssr.id_servicerequest IS NOT NULL AND sssr.id_servicerequest <> '' AND sssr.id_servicerequest <> '-'
+              AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
+              AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
+              AND (ssdr.id_diagnosticreport IS NULL OR ssdr.id_diagnosticreport = '' OR ssdr.id_diagnosticreport = '-')
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function fetchPendingDiagnosticReportLabMBUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT DISTINCT 
+                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+                per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
+                sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
+                tl.Pemeriksaan, sml.code, sml.system, sml.display,
+                sssr.id_servicerequest, pdpl.id_template, sssp.id_specimen,
+                sso.id_observation, ssdr.id_diagnosticreport, skl.kesan,
+                pdpl.kd_jenis_prw
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            INNER JOIN permintaan_labmb pl ON pl.no_rawat = rp.no_rawat
+            INNER JOIN permintaan_detail_permintaan_labmb pdpl ON pdpl.noorder = pl.noorder
+            INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+            INNER JOIN satu_sehat_mapping_lab sml ON sml.id_template = tl.id_template
+            INNER JOIN satu_sehat_servicerequest_lab_mb sssr ON sssr.noorder = pdpl.noorder
+              AND sssr.id_template = pdpl.id_template
+              AND sssr.kd_jenis_prw = pdpl.kd_jenis_prw
+            INNER JOIN satu_sehat_specimen_lab_mb sssp ON sssr.noorder = sssp.noorder
+              AND sssr.id_template = sssp.id_template
+              AND sssr.kd_jenis_prw = sssp.kd_jenis_prw
+            INNER JOIN periksa_lab per ON per.no_rawat = pl.no_rawat
+              AND per.tgl_periksa = pl.tgl_hasil
+              AND per.jam = pl.jam_hasil
+              AND per.dokter_perujuk = pl.dokter_perujuk
+            INNER JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
+              AND per.tgl_periksa = skl.tgl_periksa
+              AND per.jam = skl.jam
+            INNER JOIN satu_sehat_observation_lab_mb sso ON sssp.noorder = sso.noorder
+              AND sssp.id_template = sso.id_template
+              AND sssp.kd_jenis_prw = sso.kd_jenis_prw
+            INNER JOIN satu_sehat_diagnosticreport_lab_mb ssdr ON sssr.noorder = ssdr.noorder
+              AND sssr.id_template = ssdr.id_template
+              AND sssr.kd_jenis_prw = ssdr.kd_jenis_prw
+            INNER JOIN pegawai peg ON per.kd_dokter = peg.nik
+            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+              AND sssr.id_servicerequest IS NOT NULL AND sssr.id_servicerequest <> '' AND sssr.id_servicerequest <> '-'
+              AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
+              AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
+              AND ssdr.id_diagnosticreport IS NOT NULL AND ssdr.id_diagnosticreport <> '' AND ssdr.id_diagnosticreport <> '-'
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function saveDiagnosticReportLabMB(
+        string $noorder, 
+        string $kdJenisPrw, 
+        int $idTemplate, 
+        string $idDiagnosticReport
+    ): bool {
+        $sql = "INSERT INTO satu_sehat_diagnosticreport_lab_mb (noorder, kd_jenis_prw, id_template, id_diagnosticreport) 
+                VALUES (:noorder, :kd, :id_template, :id) 
+                ON DUPLICATE KEY UPDATE id_diagnosticreport = :id2";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'noorder'     => $noorder,
+            'kd'          => $kdJenisPrw,
+            'id_template' => $idTemplate,
+            'id'          => $idDiagnosticReport,
+            'id2'         => $idDiagnosticReport
+        ]);
+    }
+
     public function printSyncDiagnostics(string $resourceType, string $dateFrom, string $dateTo): void
     {
         $this->log->info("🔍 [DIAGNOSTICS] Calculating synchronization metrics...");
@@ -4034,6 +4151,69 @@ class SatuSehatDatabase
                     if ($pending < 0) $pending = 0;
 
                     $this->log->info("   ├─ Total Diagnostic Reports Lab PK     : {$total}");
+                    $this->log->info("   ├─ Blocked (No Parent Observation)     : {$noObs}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
+                case 'diagnosticreport_lab_mb':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM permintaan_detail_permintaan_labmb pdpl
+                        INNER JOIN permintaan_labmb pl ON pdpl.noorder = pl.noorder
+                        INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                        INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+                        INNER JOIN satu_sehat_mapping_lab sml ON sml.id_template = tl.id_template
+                        INNER JOIN periksa_lab per ON per.no_rawat = pl.no_rawat
+                          AND per.tgl_periksa = pl.tgl_hasil
+                          AND per.jam = pl.jam_hasil
+                          AND per.dokter_perujuk = pl.dokter_perujuk
+                        INNER JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
+                          AND per.tgl_periksa = skl.tgl_periksa
+                          AND per.jam = skl.jam
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoObs = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM permintaan_detail_permintaan_labmb pdpl
+                        INNER JOIN permintaan_labmb pl ON pdpl.noorder = pl.noorder
+                        INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                        INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+                        INNER JOIN satu_sehat_mapping_lab sml ON sml.id_template = tl.id_template
+                        INNER JOIN periksa_lab per ON per.no_rawat = pl.no_rawat
+                          AND per.tgl_periksa = pl.tgl_hasil
+                          AND per.jam = pl.jam_hasil
+                          AND per.dokter_perujuk = pl.dokter_perujuk
+                        INNER JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
+                          AND per.tgl_periksa = skl.tgl_periksa
+                          AND per.jam = skl.jam
+                        LEFT JOIN satu_sehat_observation_lab_mb sso ON sso.noorder = pdpl.noorder
+                          AND sso.id_template = pdpl.id_template
+                          AND sso.kd_jenis_prw = pdpl.kd_jenis_prw
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                          AND (sso.id_observation IS NULL OR sso.id_observation = '' OR sso.id_observation = '-')
+                    ");
+                    $stmtNoObs->execute(['df' => $df, 'dt' => $dt]);
+                    $noObs = (int) $stmtNoObs->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM satu_sehat_diagnosticreport_lab_mb ssdr
+                        INNER JOIN permintaan_labmb pl ON ssdr.noorder = pl.noorder
+                        INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                          AND ssdr.id_diagnosticreport IS NOT NULL AND ssdr.id_diagnosticreport <> '' AND ssdr.id_diagnosticreport <> '-'
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Diagnostic Reports Lab MB     : {$total}");
                     $this->log->info("   ├─ Blocked (No Parent Observation)     : {$noObs}");
                     $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
                     $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
