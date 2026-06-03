@@ -182,6 +182,10 @@ class SatuSehatClient
             'Accept: application/json'
         ];
 
+        if ($payload !== null) {
+            $payload = $this->convertPayloadDatesToUtc($payload);
+        }
+
         $maxAttempts = 3;
         $baseDelaySeconds = 1.5;
 
@@ -278,5 +282,25 @@ class SatuSehatClient
         }
 
         return ['success' => false, 'code' => 500, 'message' => 'API execution exhausted all attempts', 'data' => []];
+    }
+
+    /**
+     * Recursively traverse the request payload to find date-time fields and format them as UTC.
+     */
+    private function convertPayloadDatesToUtc(array $payload): array
+    {
+        foreach ($payload as $key => $value) {
+            if (is_array($value)) {
+                $payload[$key] = $this->convertPayloadDatesToUtc($value);
+            } elseif (is_string($value)) {
+                // Matches standard date-time formats with or without timezone offset (+07:00 / +0700)
+                // e.g. "2026-06-03 20:10:07", "2026-06-03T20:10:07+07:00", etc.
+                // Excludes already formatted UTC offsets (+00:00, Z) using negative lookahead
+                if (preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?!\+00:00|\+0000|Z)(?:\+07:00|\+0700)?$/', $value)) {
+                    $payload[$key] = SatuSehatPayloadBuilder::convertLocalToUtc($value);
+                }
+            }
+        }
+        return $payload;
     }
 }

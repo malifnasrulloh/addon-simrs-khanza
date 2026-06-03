@@ -819,8 +819,8 @@ class SatuSehatPayloadBuilder
             }
         }
 
-        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T03:15:30+00:00"
-        $authoredOn = self::convertLocalToUtc($p['tgl_peresepan'] . ' ' . $p['jam_peresepan']);
+        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
+        $authoredOn = str_replace(' ', 'T', $p['tgl_peresepan'] . ' ' . $p['jam_peresepan']) . '+07:00';
 
         // Identifiers
         $isRacikan = (bool)$p['is_racikan'];
@@ -970,9 +970,9 @@ class SatuSehatPayloadBuilder
             }
         }
 
-        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T03:15:30+00:00"
-        $whenPrepared = self::convertLocalToUtc($p['tgl_peresepan'] . ' ' . $p['jam_peresepan']);
-        $whenHandedOver = self::convertLocalToUtc($p['tgl_perawatan'] . ' ' . $p['jam']);
+        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
+        $whenPrepared = str_replace(' ', 'T', $p['tgl_peresepan'] . ' ' . $p['jam_peresepan']) . '+07:00';
+        $whenHandedOver = str_replace(' ', 'T', $p['tgl_perawatan'] . ' ' . $p['jam']) . '+07:00';
 
         // Identifiers: match Java's custom system conventions
         $sys1 = $idMedicationDispense ? 'medicationdispense' : 'prescription';
@@ -1114,8 +1114,8 @@ class SatuSehatPayloadBuilder
             }
         }
 
-        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T03:15:30+00:00"
-        $dateAsserted = self::convertLocalToUtc($p['tgl_penyerahan'] . ' ' . $p['jam_penyerahan']);
+        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
+        $dateAsserted = str_replace(' ', 'T', $p['tgl_penyerahan'] . ' ' . $p['jam_penyerahan']) . '+07:00';
 
         // Identifiers:
         // System: http://sys-ids.kemkes.go.id/medicationstatement/{orgId}
