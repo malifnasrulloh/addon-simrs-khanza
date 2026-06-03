@@ -1707,6 +1707,80 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    public static function observationLab(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $orgId,
+        string $idObservation = ''
+    ): array {
+        $time = !empty($p['jam_hasil']) && $p['jam_hasil'] !== '00:00:00' 
+            ? $p['jam_hasil'] 
+            : '00:00:00';
+        $dateTimeStr = $p['tgl_hasil'] . 'T' . $time . '+07:00';
+
+        $valueString = 'Hasil Lab : ' . $p['nilai'] . ' ' . $p['satuan'] . ', Nilai Rujukan : ' . $p['nilai_rujukan'];
+        if (!empty($p['keterangan'])) {
+            $valueString .= ', Keterangan : ' . $p['keterangan'];
+        }
+        $valueString = str_replace(["\r\n", "\r", "\n"], '<br>', $valueString);
+        $valueString = str_replace("\t", ' ', $valueString);
+
+        $payload = [
+            'resourceType' => 'Observation',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/observation/' . $orgId,
+                    'value'  => $p['noorder'] . '.' . $p['id_template']
+                ]
+            ],
+            'status' => 'final',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/observation-category',
+                            'code'    => 'laboratory',
+                            'display' => 'Laboratory'
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['system']) ? $p['system'] : '',
+                        'code'    => !empty($p['code']) ? $p['code'] : '',
+                        'display' => !empty($p['display']) ? $p['display'] : ''
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'performer' => [
+                [
+                    'reference' => 'Practitioner/' . $idDokter
+                ]
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Hasil Pemeriksaan Lab ' . $p['Pemeriksaan'] . ' No.Rawat ' . $p['no_rawat'] . ', Atas Nama Pasien ' . $p['nm_pasien'] . ', No.RM ' . $p['no_rkm_medis'] . ', Pada Tanggal ' . $p['tgl_hasil'] . ' ' . $time
+            ],
+            'specimen' => [
+                'reference' => 'Specimen/' . $p['id_specimen']
+            ],
+            'effectiveDateTime' => $dateTimeStr,
+            'valueString'       => $valueString
+        ];
+
+        if (!empty($idObservation) && $idObservation !== '-') {
+            $payload['id'] = $idObservation;
+        }
+
+        return $payload;
+    }
 }
 
 
