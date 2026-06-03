@@ -2443,6 +2443,86 @@ class SatuSehatDatabase
         ]);
     }
 
+    // ─── SPECIMEN LAB PK MYSQL OPERATIONS ────────────────────────────────────────
+
+    public function fetchPendingSpecimenLabPKActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT DISTINCT 
+                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+                pl.noorder, pl.tgl_sampel, pl.jam_sampel, tl.Pemeriksaan,
+                sml.sampel_code, sml.sampel_system, sml.sampel_display, sssl.id_servicerequest,
+                pdpl.id_template, '' as id_specimen, pdpl.kd_jenis_prw
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN permintaan_lab pl ON pl.no_rawat = rp.no_rawat
+            INNER JOIN permintaan_detail_permintaan_lab pdpl ON pdpl.noorder = pl.noorder
+            INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+            INNER JOIN satu_sehat_mapping_lab sml ON sml.id_template = tl.id_template
+            INNER JOIN satu_sehat_servicerequest_lab sssl ON sssl.noorder = pdpl.noorder
+              AND sssl.id_template = pdpl.id_template
+              AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
+            LEFT JOIN satu_sehat_specimen_lab sssp ON sssp.noorder = pdpl.noorder
+              AND sssp.id_template = pdpl.id_template
+              AND sssp.kd_jenis_prw = pdpl.kd_jenis_prw
+            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+              AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
+              AND (sssp.id_specimen IS NULL OR sssp.id_specimen = '' OR sssp.id_specimen = '-')
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function fetchPendingSpecimenLabPKUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT DISTINCT 
+                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+                pl.noorder, pl.tgl_sampel, pl.jam_sampel, tl.Pemeriksaan,
+                sml.sampel_code, sml.sampel_system, sml.sampel_display, sssl.id_servicerequest,
+                pdpl.id_template, sssp.id_specimen, pdpl.kd_jenis_prw
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN permintaan_lab pl ON pl.no_rawat = rp.no_rawat
+            INNER JOIN permintaan_detail_permintaan_lab pdpl ON pdpl.noorder = pl.noorder
+            INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+            INNER JOIN satu_sehat_mapping_lab sml ON sml.id_template = tl.id_template
+            INNER JOIN satu_sehat_servicerequest_lab sssl ON sssl.noorder = pdpl.noorder
+              AND sssl.id_template = pdpl.id_template
+              AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
+            INNER JOIN satu_sehat_specimen_lab sssp ON sssp.noorder = pdpl.noorder
+              AND sssp.id_template = pdpl.id_template
+              AND sssp.kd_jenis_prw = pdpl.kd_jenis_prw
+            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+              AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
+              AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function saveSpecimenLabPK(
+        string $noorder, 
+        string $kdJenisPrw, 
+        int $idTemplate, 
+        string $idSpecimen
+    ): bool {
+        $sql = "INSERT INTO satu_sehat_specimen_lab (noorder, kd_jenis_prw, id_template, id_specimen) 
+                VALUES (:noorder, :kd, :id_template, :id) 
+                ON DUPLICATE KEY UPDATE id_specimen = :id2";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'noorder'     => $noorder,
+            'kd'          => $kdJenisPrw,
+            'id_template' => $idTemplate,
+            'id'          => $idSpecimen,
+            'id2'         => $idSpecimen
+        ]);
+    }
+
+
 
 
 
@@ -3253,6 +3333,55 @@ class SatuSehatDatabase
 
                     $this->log->info("   ├─ Total ServiceRequests Lab MB        : {$total}");
                     $this->log->info("   ├─ Blocked (No Parent Encounter Mapped): {$noEnc}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
+                case 'specimen_lab_pk':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM permintaan_detail_permintaan_lab pdpl
+                        INNER JOIN permintaan_lab pl ON pdpl.noorder = pl.noorder
+                        INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                        INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+                        INNER JOIN satu_sehat_mapping_lab sml ON sml.id_template = tl.id_template
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoReq = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM permintaan_detail_permintaan_lab pdpl
+                        INNER JOIN permintaan_lab pl ON pdpl.noorder = pl.noorder
+                        INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                        INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+                        INNER JOIN satu_sehat_mapping_lab sml ON sml.id_template = tl.id_template
+                        LEFT JOIN satu_sehat_servicerequest_lab sssl ON sssl.noorder = pdpl.noorder
+                          AND sssl.id_template = pdpl.id_template
+                          AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt 
+                          AND (sssl.id_servicerequest IS NULL OR sssl.id_servicerequest = '' OR sssl.id_servicerequest = '-')
+                    ");
+                    $stmtNoReq->execute(['df' => $df, 'dt' => $dt]);
+                    $noReq = (int) $stmtNoReq->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM satu_sehat_specimen_lab sssp
+                        INNER JOIN permintaan_lab pl ON sssp.noorder = pl.noorder
+                        INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                          AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Specimens Lab PK              : {$total}");
+                    $this->log->info("   ├─ Blocked (No Parent ServiceRequest)  : {$noReq}");
                     $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
                     $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
                     break;
