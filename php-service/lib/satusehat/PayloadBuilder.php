@@ -1584,7 +1584,83 @@ class SatuSehatPayloadBuilder
 
         return $payload;
     }
+
+    public static function serviceRequestLab(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $orgId,
+        string $idServiceRequest = ''
+    ): array {
+        $time = !empty($p['jam_permintaan']) && $p['jam_permintaan'] !== '00:00:00' 
+            ? $p['jam_permintaan'] 
+            : '00:00:00';
+        $dateTimeStr = $p['tgl_permintaan'] . 'T' . $time . '+07:00';
+
+        $payload = [
+            'resourceType' => 'ServiceRequest',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/servicerequest/' . $orgId,
+                    'value'  => $p['noorder'] . '.' . $p['id_template']
+                ]
+            ],
+            'status' => 'active',
+            'intent' => 'order',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://snomed.info/sct',
+                            'code'    => '108252007',
+                            'display' => 'Laboratory procedure'
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['system']) ? $p['system'] : '',
+                        'code'    => !empty($p['code']) ? $p['code'] : '',
+                        'display' => !empty($p['display']) ? $p['display'] : ''
+                    ]
+                ],
+                'text' => !empty($p['Pemeriksaan']) ? $p['Pemeriksaan'] : ''
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Permintaan ' . $p['Pemeriksaan'] . ' atas nama pasien ' . $p['nm_pasien'] . ' No.RM ' . $p['no_rkm_medis'] . ' No.Rawat ' . $p['no_rawat'] . ', pada tanggal ' . $p['tgl_permintaan'] . ' ' . $time
+            ],
+            'authoredOn' => $dateTimeStr,
+            'requester' => [
+                'reference' => 'Practitioner/' . $idDokter,
+                'display'   => $p['nm_dokter']
+            ],
+            'performer' => [
+                [
+                    'reference' => 'Organization/' . $orgId,
+                    'display'   => 'Ruang Laborat/Petugas Laborat'
+                ]
+            ],
+            'reasonCode' => [
+                [
+                    'text' => !empty($p['diagnosa_klinis']) ? $p['diagnosa_klinis'] : '-'
+                ]
+            ]
+        ];
+
+        if (!empty($idServiceRequest) && $idServiceRequest !== '-') {
+            $payload['id'] = $idServiceRequest;
+        }
+
+        return $payload;
+    }
 }
+
 
 
 
