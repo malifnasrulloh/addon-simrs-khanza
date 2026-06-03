@@ -32,8 +32,13 @@ class SatuSehatPayloadBuilder
         string $idEncounter = ''
     ): array {
         $isRalan = ($p['status_lanjut'] === 'Ralan');
-        $classCode = $isRalan ? 'AMB' : 'IMP';
-        $classDisplay = $isRalan ? 'ambulatory' : 'inpatient encounter';
+        if (($p['kd_poli'] ?? '') === 'IGDK') {
+            $classCode = 'EMER';
+            $classDisplay = 'emergency';
+        } else {
+            $classCode = $isRalan ? 'AMB' : 'IMP';
+            $classDisplay = $isRalan ? 'ambulatory' : 'inpatient encounter';
+        }
         
         $startWaktu = $p['tgl_registrasi'] . 'T' . $p['jam_reg'] . '+07:00';
         $inProgressWaktu = $p['waktu_perawatan'] ?? $startWaktu; // fallback to reg time if missing
