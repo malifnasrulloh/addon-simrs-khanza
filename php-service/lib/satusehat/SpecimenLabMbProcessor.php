@@ -88,7 +88,7 @@ class SatuSehatSpecimenLabMbProcessor
             $payload = SatuSehatPayloadBuilder::specimenLab(
                 $p,
                 $idPasien,
-                $this->config->organizationId
+                $this->config->orgId
             );
 
             $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: POST /Specimen ({$pemeriksaan})");
@@ -154,7 +154,7 @@ class SatuSehatSpecimenLabMbProcessor
             $payload = SatuSehatPayloadBuilder::specimenLab(
                 $p,
                 $idPasien,
-                $this->config->organizationId,
+                $this->config->orgId,
                 $idSpecimen
             );
 
@@ -173,7 +173,7 @@ class SatuSehatSpecimenLabMbProcessor
 
     private function resolveDuplicateSpecimen(string $noorder, int $idTemplate): ?string
     {
-        $orgId = $this->config->organizationId;
+        $orgId = $this->config->orgId;
         $identifier = "{$noorder}.{$idTemplate}";
         $endpoint = "/Specimen?identifier=http://sys-ids.kemkes.go.id/specimen/{$orgId}|{$identifier}";
         $result = $this->api->get($endpoint);

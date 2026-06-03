@@ -57,6 +57,7 @@ class SatuSehatConfig
 
         $this->orgId        = $this->require('SATUSEHAT_ORG_ID');
         $this->clientId     = $this->require('SATUSEHAT_CLIENT_ID');
+
         $this->secretKey    = $this->require('SATUSEHAT_SECRET_KEY');
         $this->authUrl      = rtrim($this->require('SATUSEHAT_AUTH_URL'), '/');
         $this->baseUrl      = rtrim($this->require('SATUSEHAT_BASE_URL'), '/');

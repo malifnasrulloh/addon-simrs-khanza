@@ -89,7 +89,7 @@ class SatuSehatServiceRequestRadiologiProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->organizationId
+                $this->config->orgId
             );
 
             $this->log->info("[PHASE 1] {$noorder} [{$kdJenisPrw}]: POST /ServiceRequest ({$nmPerawatan})");
@@ -157,7 +157,7 @@ class SatuSehatServiceRequestRadiologiProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->organizationId,
+                $this->config->orgId,
                 $idServiceRequest
             );
 
@@ -176,7 +176,7 @@ class SatuSehatServiceRequestRadiologiProcessor
 
     private function resolveDuplicateServiceRequest(string $acsn): ?string
     {
-        $orgId = $this->config->organizationId;
+        $orgId = $this->config->orgId;
         $endpoint = "/ServiceRequest?identifier=http://sys-ids.kemkes.go.id/acsn/{$orgId}|{$acsn}";
         $result = $this->api->get($endpoint);
 

@@ -90,7 +90,7 @@ class SatuSehatServiceRequestLabMbProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->organizationId
+                $this->config->orgId
             );
 
             $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: POST /ServiceRequest ({$pemeriksaan})");
@@ -158,7 +158,7 @@ class SatuSehatServiceRequestLabMbProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->organizationId,
+                $this->config->orgId,
                 $idServiceRequest
             );
 
@@ -177,7 +177,7 @@ class SatuSehatServiceRequestLabMbProcessor
 
     private function resolveDuplicateServiceRequest(string $noorder, int $idTemplate): ?string
     {
-        $orgId = $this->config->organizationId;
+        $orgId = $this->config->orgId;
         $identifier = "{$noorder}.{$idTemplate}";
         $endpoint = "/ServiceRequest?identifier=http://sys-ids.kemkes.go.id/servicerequest/{$orgId}|{$identifier}";
         $result = $this->api->get($endpoint);

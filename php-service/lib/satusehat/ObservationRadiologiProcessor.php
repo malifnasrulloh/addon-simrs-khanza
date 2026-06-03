@@ -89,7 +89,7 @@ class SatuSehatObservationRadiologiProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->organizationId
+                $this->config->orgId
             );
 
             $this->log->info("[PHASE 1] {$noorder} [{$kdJenisPrw}]: POST /Observation ({$nmPerawatan})");
@@ -156,7 +156,7 @@ class SatuSehatObservationRadiologiProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->organizationId,
+                $this->config->orgId,
                 $idObservation
             );
 
@@ -175,7 +175,7 @@ class SatuSehatObservationRadiologiProcessor
 
     private function resolveDuplicateObservation(string $noorder, string $kdJenisPrw): ?string
     {
-        $orgId = $this->config->organizationId;
+        $orgId = $this->config->orgId;
         $identifier = "{$noorder}.{$kdJenisPrw}";
         $endpoint = "/Observation?identifier=http://sys-ids.kemkes.go.id/observation/{$orgId}|{$identifier}";
         $result = $this->api->get($endpoint);

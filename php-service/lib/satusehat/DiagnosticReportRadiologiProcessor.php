@@ -89,7 +89,7 @@ class SatuSehatDiagnosticReportRadiologiProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->organizationId
+                $this->config->orgId
             );
 
             $this->log->info("[PHASE 1] {$noorder} [{$kdJenisPrw}]: POST /DiagnosticReport ({$nmPerawatan})");
@@ -156,7 +156,7 @@ class SatuSehatDiagnosticReportRadiologiProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->organizationId,
+                $this->config->orgId,
                 $idDiagnosticReport
             );
 
@@ -175,7 +175,7 @@ class SatuSehatDiagnosticReportRadiologiProcessor
 
     private function resolveDuplicateDiagnosticReport(string $noorder, string $kdJenisPrw): ?string
     {
-        $orgId = $this->config->organizationId;
+        $orgId = $this->config->orgId;
         $identifier = "{$noorder}.{$kdJenisPrw}";
         $endpoint = "/DiagnosticReport?identifier=http://sys-ids.kemkes.go.id/diagnostic/{$orgId}/rad|{$identifier}";
         $result = $this->api->get($endpoint);
