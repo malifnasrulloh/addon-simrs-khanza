@@ -814,8 +814,8 @@ class SatuSehatPayloadBuilder
             }
         }
 
-        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
-        $authoredOn = str_replace(' ', 'T', $p['tgl_peresepan'] . ' ' . $p['jam_peresepan']) . '+07:00';
+        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T03:15:30+00:00"
+        $authoredOn = self::convertLocalToUtc($p['tgl_peresepan'] . ' ' . $p['jam_peresepan']);
 
         // Identifiers
         $isRacikan = (bool)$p['is_racikan'];
@@ -965,9 +965,9 @@ class SatuSehatPayloadBuilder
             }
         }
 
-        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30Z"
-        $whenPrepared = str_replace(' ', 'T', $p['tgl_peresepan'] . ' ' . $p['jam_peresepan']) . 'Z';
-        $whenHandedOver = str_replace(' ', 'T', $p['tgl_perawatan'] . ' ' . $p['jam']) . 'Z';
+        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T03:15:30+00:00"
+        $whenPrepared = self::convertLocalToUtc($p['tgl_peresepan'] . ' ' . $p['jam_peresepan']);
+        $whenHandedOver = self::convertLocalToUtc($p['tgl_perawatan'] . ' ' . $p['jam']);
 
         // Identifiers: match Java's custom system conventions
         $sys1 = $idMedicationDispense ? 'medicationdispense' : 'prescription';
@@ -1109,8 +1109,8 @@ class SatuSehatPayloadBuilder
             }
         }
 
-        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
-        $dateAsserted = str_replace(' ', 'T', $p['tgl_penyerahan'] . ' ' . $p['jam_penyerahan']) . '+07:00';
+        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T03:15:30+00:00"
+        $dateAsserted = self::convertLocalToUtc($p['tgl_penyerahan'] . ' ' . $p['jam_penyerahan']);
 
         // Identifiers:
         // System: http://sys-ids.kemkes.go.id/medicationstatement/{orgId}
@@ -1864,6 +1864,17 @@ class SatuSehatPayloadBuilder
         }
 
         return $payload;
+    }
+
+    public static function convertLocalToUtc(string $localDateTime): string
+    {
+        try {
+            $dt = new \DateTime($localDateTime, new \DateTimeZone('Asia/Jakarta'));
+            $dt->setTimezone(new \DateTimeZone('UTC'));
+            return $dt->format('Y-m-d\TH:i:s\+00:00');
+        } catch (\Throwable $e) {
+            return str_replace(' ', 'T', $localDateTime) . '+00:00';
+        }
     }
 }
 
