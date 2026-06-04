@@ -429,47 +429,54 @@ class QueueProcessor
                         $state['3'] = 'Sudah';
                         $state['waktu_3'] = $datajam;
                     } elseif ($r['reason'] === 'booking_not_found') {
-                        $this->log->info("[{$label}] {$noRawat} TaskID 3 failed: booking_not_found. Triggering dynamic booking recovery...");
-
-                        // Dynamically resolve /antrean/add payload
-                        $payload = null;
-                        if ($isJkn) {
-                            $bookingData = $this->db->fetchBookingByNoRawat($noRawat);
-                            if ($bookingData) {
-                                $payload = PayloadBuilder::jknBooking($bookingData);
-                            } else {
-                                $nomorRef = $this->db->fetchNomorReferensi($noRawat);
-                                $payload  = PayloadBuilder::onsitePatient($patient, true, $nomorRef);
-                            }
+                        if ($patient['tgl_registrasi'] < date('Y-m-d')) {
+                            $this->log->warning("[{$label}] {$noRawat} TaskID 3 failed: booking_not_found, and tgl_registrasi ({$patient['tgl_registrasi']}) is in the past. Cannot add backdated booking. Marking locally as aborted/cancelled (Task 99).");
+                            $this->db->insertTaskId($noRawat, '99', date('Y-m-d H:i:s'));
+                            $state['99'] = 'Sudah';
+                            $state['3'] = 'Belum';
                         } else {
-                            $payload = PayloadBuilder::onsitePatient($patient, false, '');
-                        }
+                            $this->log->info("[{$label}] {$noRawat} TaskID 3 failed: booking_not_found. Triggering dynamic booking recovery...");
 
-                        if ($payload) {
-                            $this->log->info("[{$label}] {$noRawat}: sending dynamic /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
-                            $addResult = $this->api->addAntrean($payload);
-                            $addCode   = $addResult['code'] ?? '';
-
-                            if ($addResult['success'] || $addCode === '208') {
-                                $this->log->info("[{$label}] {$noRawat}: dynamic /antrean/add recovery accepted (code={$addCode}). Retrying Task ID 3 immediately.");
-                                if ($isJkn && !empty($bookingData['nobooking'])) {
-                                    $this->db->markBookingAsSent($bookingData['nobooking']);
-                                }
-                                // Retry sending Task 3
-                                $retryR = $this->sendTaskId($kodebooking, $noRawat, '3', $datajam, $label, $jenisresep);
-                                if ($retryR['ok']) {
-                                    $state['3'] = 'Sudah';
-                                    $state['waktu_3'] = $datajam;
+                            // Dynamically resolve /antrean/add payload
+                            $payload = null;
+                            if ($isJkn) {
+                                $bookingData = $this->db->fetchBookingByNoRawat($noRawat);
+                                if ($bookingData) {
+                                    $payload = PayloadBuilder::jknBooking($bookingData);
                                 } else {
+                                    $nomorRef = $this->db->fetchNomorReferensi($noRawat);
+                                    $payload  = PayloadBuilder::onsitePatient($patient, true, $nomorRef);
+                                }
+                            } else {
+                                $payload = PayloadBuilder::onsitePatient($patient, false, '');
+                            }
+
+                            if ($payload) {
+                                $this->log->info("[{$label}] {$noRawat}: sending dynamic /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
+                                $addResult = $this->api->addAntrean($payload);
+                                $addCode   = $addResult['code'] ?? '';
+
+                                if ($addResult['success'] || $addCode === '208') {
+                                    $this->log->info("[{$label}] {$noRawat}: dynamic /antrean/add recovery accepted (code={$addCode}). Retrying Task ID 3 immediately.");
+                                    if ($isJkn && !empty($bookingData['nobooking'])) {
+                                        $this->db->markBookingAsSent($bookingData['nobooking']);
+                                    }
+                                    // Retry sending Task 3
+                                    $retryR = $this->sendTaskId($kodebooking, $noRawat, '3', $datajam, $label, $jenisresep);
+                                    if ($retryR['ok']) {
+                                        $state['3'] = 'Sudah';
+                                        $state['waktu_3'] = $datajam;
+                                    } else {
+                                        $state['3'] = 'Belum';
+                                    }
+                                } else {
+                                    $this->log->warning("[{$label}] {$noRawat}: dynamic /antrean/add recovery failed ({$addCode}): {$addResult['message']}");
                                     $state['3'] = 'Belum';
                                 }
                             } else {
-                                $this->log->warning("[{$label}] {$noRawat}: dynamic /antrean/add recovery failed ({$addCode}): {$addResult['message']}");
+                                $this->log->error("[{$label}] {$noRawat}: failed to resolve booking payload for dynamic recovery");
                                 $state['3'] = 'Belum';
                             }
-                        } else {
-                            $this->log->error("[{$label}] {$noRawat}: failed to resolve booking payload for dynamic recovery");
-                            $state['3'] = 'Belum';
                         }
                     } else {
                         $state['3'] = 'Belum';
@@ -481,33 +488,39 @@ class QueueProcessor
         }
 
         // ── Task 4: mulai pelayanan poli ──────────────────────────────────
-        if ($state['3'] === 'Sudah' && $state['4'] === '') {
+        if ($state['99'] === '' && $state['3'] === 'Sudah' && $state['4'] === '') {
             $realTime = $this->db->resolveTask4Waktu($noRawat);
             $prevWaktu = $state['waktu_3'] ?? '';
-            $datajam = $this->tryRealThenRobot($kodebooking, $noRawat, '4', $realTime, $prevWaktu, false, $label, $jenisresep, $allowRobot);
+            $datajam = $this->tryRealThenRobot($kodebooking, $noRawat, '4', $realTime, $prevWaktu, false, $label, $jenisresep, $allowRobot, $patient['tgl_registrasi']);
             if ($datajam !== null) {
                 $state['4'] = 'Sudah';
                 $state['waktu_4'] = $datajam;
-            } elseif ($datajam === null && !empty($realTime)) {
-                $state['4'] = 'Belum';
+            } else {
+                $state = $this->db->loadTaskState($noRawat);
+                if ($state['99'] === '' && !empty($realTime)) {
+                    $state['4'] = 'Belum';
+                }
             }
         }
 
         // ── Task 5: selesai pelayanan poli ────────────────────────────────
-        if ($state['4'] === 'Sudah' && $state['5'] === '') {
+        if ($state['99'] === '' && $state['4'] === 'Sudah' && $state['5'] === '') {
             $realTime = $this->db->resolveTask5Waktu($noRawat);
             $prevWaktu = $state['waktu_4'] ?? '';
-            $datajam = $this->tryRealThenRobot($kodebooking, $noRawat, '5', $realTime, $prevWaktu, false, $label, $jenisresep, $allowRobot);
+            $datajam = $this->tryRealThenRobot($kodebooking, $noRawat, '5', $realTime, $prevWaktu, false, $label, $jenisresep, $allowRobot, $patient['tgl_registrasi']);
             if ($datajam !== null) {
                 $state['5'] = 'Sudah';
                 $state['waktu_5'] = $datajam;
-            } elseif ($datajam === null && !empty($realTime)) {
-                $state['5'] = 'Belum';
+            } else {
+                $state = $this->db->loadTaskState($noRawat);
+                if ($state['99'] === '' && !empty($realTime)) {
+                    $state['5'] = 'Belum';
+                }
             }
         }
 
         // ── Farmasi + Task 6 ──────────────────────────────────────────────
-        if ($state['5'] === 'Sudah' && $state['6'] === '') {
+        if ($state['99'] === '' && $state['5'] === 'Sudah' && $state['6'] === '') {
             // Skip tasks 6/7 if patient has no prescription and config says to skip
             if (empty($noResep) && $this->config->skipFarmasiNoResep) {
                 $this->log->info("[{$label}] {$noRawat} TaskID 6,7: skip — no resep (MOBILEJKN_SKIP_FARMASI_NO_RESEP=true)");
@@ -516,26 +529,32 @@ class QueueProcessor
 
                 $realTime  = $this->db->resolveTask6Waktu($noRawat);
                 $prevWaktu = $state['waktu_5'] ?? '';
-                $datajam   = $this->tryRealThenRobot($kodebooking, $noRawat, '6', $realTime, $prevWaktu, $isRacikan, $label, $jenisresep, $allowRobot);
+                $datajam   = $this->tryRealThenRobot($kodebooking, $noRawat, '6', $realTime, $prevWaktu, $isRacikan, $label, $jenisresep, $allowRobot, $patient['tgl_registrasi']);
                 if ($datajam !== null) {
                     $state['6'] = 'Sudah';
                     $state['waktu_6'] = $datajam;
-                } elseif ($datajam === null && !empty($realTime)) {
-                    $state['6'] = 'Belum';
+                } else {
+                    $state = $this->db->loadTaskState($noRawat);
+                    if ($state['99'] === '' && !empty($realTime)) {
+                        $state['6'] = 'Belum';
+                    }
                 }
             }
         }
 
         // ── Task 7: selesai farmasi ───────────────────────────────────────
-        if ($state['6'] === 'Sudah' && $state['7'] === '') {
+        if ($state['99'] === '' && $state['6'] === 'Sudah' && $state['7'] === '') {
             $realTime  = $this->db->resolveTask7Waktu($noRawat);
             $prevWaktu = $state['waktu_6'] ?? '';
-            $datajam   = $this->tryRealThenRobot($kodebooking, $noRawat, '7', $realTime, $prevWaktu, $isRacikan, $label, $jenisresep, $allowRobot);
+            $datajam   = $this->tryRealThenRobot($kodebooking, $noRawat, '7', $realTime, $prevWaktu, $isRacikan, $label, $jenisresep, $allowRobot, $patient['tgl_registrasi']);
             if ($datajam !== null) {
                 $state['7'] = 'Sudah';
                 $state['waktu_7'] = $datajam;
-            } elseif ($datajam === null && !empty($realTime)) {
-                $state['7'] = 'Belum';
+            } else {
+                $state = $this->db->loadTaskState($noRawat);
+                if ($state['99'] === '' && !empty($realTime)) {
+                    $state['7'] = 'Belum';
+                }
             }
         }
 
@@ -563,8 +582,17 @@ class QueueProcessor
         bool   $isRacikan,
         string $label,
         string $jenisresep = 'Tidak ada',
-        bool   $allowRobot = true
+        bool   $allowRobot = true,
+        string $tanggalPeriksa = ''
     ): ?string {
+        if (!empty($realTime) && !empty($tanggalPeriksa)) {
+            $alignedTime = $this->alignTimeToBookingDate($realTime, $tanggalPeriksa);
+            if (!empty($alignedTime) && $alignedTime !== $realTime) {
+                $this->log->debug("[{$label}] {$noRawat} TaskID {$taskId}: aligning realTime date from '{$realTime}' to '{$alignedTime}' to match appointment schedule");
+                $realTime = $alignedTime;
+            }
+        }
+
         // Attempt 1: use real data if available
         if (!empty($realTime)) {
             $r = $this->sendTaskId($kodebooking, $noRawat, $taskId, $realTime, $label, $jenisresep);
@@ -639,9 +667,17 @@ class QueueProcessor
         $this->db->deleteTaskId($noRawat, $taskId);
         $msg = $result['message'] ?? '';
         $code = $result['code'] ?? '';
+        $msgLower = strtolower($msg);
+
+        // Detect if visit is cancelled/aborted (Task 99) on BPJS side
+        if (str_contains($msgLower, 'taskid terakhir 99') || str_contains($msgLower, 'task id terakhir 99') || (str_contains($msgLower, 'terakhir') && str_contains($msgLower, '99'))) {
+            $this->log->warning("[{$label}] {$noRawat} TaskID {$taskId}: BPJS reported Task 99 (Cancelled) — saving Task 99 locally to stop future retries.");
+            $this->db->insertTaskId($noRawat, '99', date('Y-m-d H:i:s'));
+            $this->failCount++;
+            return ['ok' => false, 'reason' => 'cancelled_on_bpjs'];
+        }
 
         // Detect BPJS time-ordering or booking-not-found rejections
-        $msgLower = strtolower($msg);
         $isNotFound = (
             str_contains($msgLower, 'tidak ditemukan') ||
             str_contains($msgLower, 'tidak terdaftar') ||
@@ -717,9 +753,12 @@ class QueueProcessor
 
         $updatedLocal = false;
 
-        // 1. Sync BPJS -> Local (Add missing tasks locally)
+        // 1. Sync BPJS -> Local (Add missing tasks locally, or heal corrupted/0000-00-00 dates)
         foreach ($bpjsTasks as $tId => $t) {
-            if (($state[$tId] ?? '') !== 'Sudah') {
+            $currentWaktu = (($state[$tId] ?? '') === 'Sudah') ? ($state['waktu_' . $tId] ?? '') : '';
+            $isCorrupted = (($state[$tId] ?? '') === 'Sudah') && (empty($currentWaktu) || str_starts_with($currentWaktu, '0000'));
+
+            if (($state[$tId] ?? '') !== 'Sudah' || $isCorrupted) {
                 $waktuStr = '';
                 if (!empty($t['wakturs'])) {
                     $waktuStr = $this->parseBpjsDatetime((string) $t['wakturs']) ?? '';
@@ -731,8 +770,14 @@ class QueueProcessor
                 }
 
                 if (!empty($waktuStr)) {
+                    if ($isCorrupted) {
+                        $this->db->deleteTaskId($noRawat, $tId);
+                        $this->log->info("[{$label}] {$noRawat} TaskID {$tId}: corrected corrupted/truncated datetime in DB (waktu: {$waktuStr})");
+                    }
                     if ($this->db->insertTaskId($noRawat, $tId, $waktuStr)) {
-                        $this->log->info("[{$label}] {$noRawat} TaskID {$tId}: auto-synced from BPJS (waktu: {$waktuStr})");
+                        if (!$isCorrupted) {
+                            $this->log->info("[{$label}] {$noRawat} TaskID {$tId}: auto-synced from BPJS (waktu: {$waktuStr})");
+                        }
                         $updatedLocal = true;
                     }
                 }
@@ -786,5 +831,18 @@ class QueueProcessor
         }
 
         return null;
+    }
+
+    /**
+     * Aligns the date portion of a realTime timestamp to the scheduled tanggalPeriksa date,
+     * while preserving the original time of day (HH:ii:ss).
+     */
+    private function alignTimeToBookingDate(string $realTime, string $tanggalPeriksa): string
+    {
+        if (empty($realTime) || str_starts_with($realTime, '0000')) {
+            return '';
+        }
+        $timePart = substr($realTime, 11, 8); // Extracts 'HH:ii:ss'
+        return $tanggalPeriksa . ' ' . $timePart;
     }
 }

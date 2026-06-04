@@ -24,7 +24,6 @@ class BpjsAntreanClient
     private Logger $log;
     private int    $batchSize;
     private bool   $dryRun;
-    private CircuitBreaker $cb;
 
     // ─── cURL defaults ─────────────────────────────────────────────────────
     private const CONNECT_TIMEOUT = 3;
@@ -47,18 +46,6 @@ class BpjsAntreanClient
         $this->batchSize = $batchSize;
         $this->log       = $log;
         $this->dryRun    = $dryRun;
-
-        // Initialize file-persistent Circuit Breaker
-        require_once __DIR__ . '/CircuitBreaker.php';
-        $this->cb = new CircuitBreaker($this->log->getLogDir(), $this->log, 5, 10);
-    }
-
-    /**
-     * Get the persistent Circuit Breaker instance.
-     */
-    public function getCircuitBreaker(): CircuitBreaker
-    {
-        return $this->cb;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
