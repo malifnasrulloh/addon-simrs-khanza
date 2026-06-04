@@ -102,6 +102,12 @@ class Logger
         if (defined('STDERR') && defined('STDOUT')) {
             $stream = ($level === 'ERROR' || $level === 'WARNING') ? STDERR : STDOUT;
             fwrite($stream, $line . PHP_EOL);
+        } elseif (php_sapi_name() !== 'cli') {
+            echo $line . PHP_EOL;
+            if (ob_get_level() > 0) {
+                ob_flush();
+            }
+            flush();
         }
     }
 

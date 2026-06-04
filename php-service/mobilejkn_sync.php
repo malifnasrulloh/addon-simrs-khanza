@@ -1,4 +1,3 @@
-#!/usr/bin/env php
 <?php
 /**
  * SIMRS Khanza - Mobile JKN Queue Sync Service
@@ -27,18 +26,36 @@ define('SERVICE_NAME', 'KhanzaMobileJKNSync');
 define('SERVICE_VERSION', '2.0.0');
 define('BASE_DIR', __DIR__);
 
-// Prevent web execution
-if (php_sapi_name() !== 'cli') {
-    http_response_code(403);
-    exit('This script can only be run from the command line.');
+// ─── Load configuration ───────────────────────────────────────────────────
+require_once BASE_DIR . '/lib/mobilejkn/Config.php';
+
+try {
+    $config = new MobileJknConfig(BASE_DIR . '/.env');
+} catch (\RuntimeException $e) {
+    if (php_sapi_name() === 'cli') {
+        fwrite(STDERR, "[FATAL] Configuration error: {$e->getMessage()}\n");
+    } else {
+        http_response_code(500);
+        echo "[FATAL] Configuration error: {$e->getMessage()}\n";
+    }
+    exit(1);
 }
 
-// ─── Parse CLI arguments ───────────────────────────────────────────────────
-$options = getopt('', ['help', 'dry-run', 'verbose']);
+// ─── Web Trigger Setup ─────────────────────────────────────────────────────
+if (php_sapi_name() !== 'cli') {
+    // Web execution setup
+    set_time_limit(0);
+    header('Content-Type: text/plain; charset=utf-8');
+    
+    $isDryRun  = isset($_GET['dry-run']);
+    $isVerbose = isset($_GET['verbose']);
+} else {
+    // ─── Parse CLI arguments ───────────────────────────────────────────────────
+    $options = getopt('', ['help', 'dry-run', 'verbose']);
 
-if (isset($options['help'])) {
-    $ver = SERVICE_VERSION;
-    echo <<<HELP
+    if (isset($options['help'])) {
+        $ver = SERVICE_VERSION;
+        echo <<<HELP
     ╔══════════════════════════════════════════════════════════════╗
     ║  SIMRS Khanza - Mobile JKN Queue Sync Service               ║
     ║  Version {$ver}                                               ║
@@ -67,20 +84,11 @@ if (isset($options['help'])) {
       99  Visit cancelled
 
     HELP;
-    exit(0);
-}
+        exit(0);
+    }
 
-$isDryRun  = isset($options['dry-run']);
-$isVerbose = isset($options['verbose']);
-
-// ─── Load configuration ───────────────────────────────────────────────────
-require_once BASE_DIR . '/lib/mobilejkn/Config.php';
-
-try {
-    $config = new MobileJknConfig(BASE_DIR . '/.env');
-} catch (\RuntimeException $e) {
-    fwrite(STDERR, "[FATAL] Configuration error: {$e->getMessage()}\n");
-    exit(1);
+    $isDryRun  = isset($options['dry-run']);
+    $isVerbose = isset($options['verbose']);
 }
 
 // ─── Logger setup ──────────────────────────────────────────────────────────
