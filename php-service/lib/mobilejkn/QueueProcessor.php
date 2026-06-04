@@ -753,29 +753,30 @@ class QueueProcessor
 
         $updatedLocal = false;
 
-        // 1. Sync BPJS -> Local (Add missing tasks locally, or heal corrupted/0000-00-00 dates)
+        // 1. Sync BPJS -> Local (Add missing tasks locally, heal corrupted, or correct mismatched timestamps)
         foreach ($bpjsTasks as $tId => $t) {
             $currentWaktu = (($state[$tId] ?? '') === 'Sudah') ? ($state['waktu_' . $tId] ?? '') : '';
+
+            $waktuStr = '';
+            if (!empty($t['wakturs'])) {
+                $waktuStr = $this->parseBpjsDatetime((string) $t['wakturs']) ?? '';
+            }
+            if (empty($waktuStr) && !empty($t['waktu'])) {
+                // Fallback to epoch milliseconds
+                $waktuStr = date('Y-m-d H:i:s', (int) round($t['waktu'] / 1000));
+            }
+
             $isCorrupted = (($state[$tId] ?? '') === 'Sudah') && (empty($currentWaktu) || str_starts_with($currentWaktu, '0000'));
+            $isMismatch  = (($state[$tId] ?? '') === 'Sudah') && !empty($waktuStr) && ($currentWaktu !== $waktuStr);
 
-            if (($state[$tId] ?? '') !== 'Sudah' || $isCorrupted) {
-                $waktuStr = '';
-                if (!empty($t['wakturs'])) {
-                    $waktuStr = $this->parseBpjsDatetime((string) $t['wakturs']) ?? '';
-                }
-
-                if (empty($waktuStr) && !empty($t['waktu'])) {
-                    // Fallback to epoch milliseconds
-                    $waktuStr = date('Y-m-d H:i:s', (int) round($t['waktu'] / 1000));
-                }
-
+            if (($state[$tId] ?? '') !== 'Sudah' || $isCorrupted || $isMismatch) {
                 if (!empty($waktuStr)) {
-                    if ($isCorrupted) {
+                    if ($isCorrupted || $isMismatch) {
                         $this->db->deleteTaskId($noRawat, $tId);
-                        $this->log->info("[{$label}] {$noRawat} TaskID {$tId}: corrected corrupted/truncated datetime in DB (waktu: {$waktuStr})");
+                        $this->log->info("[{$label}] {$noRawat} TaskID {$tId}: corrected/aligned datetime in DB (old: '{$currentWaktu}', new: '{$waktuStr}')");
                     }
                     if ($this->db->insertTaskId($noRawat, $tId, $waktuStr)) {
-                        if (!$isCorrupted) {
+                        if (!$isCorrupted && !$isMismatch) {
                             $this->log->info("[{$label}] {$noRawat} TaskID {$tId}: auto-synced from BPJS (waktu: {$waktuStr})");
                         }
                         $updatedLocal = true;
