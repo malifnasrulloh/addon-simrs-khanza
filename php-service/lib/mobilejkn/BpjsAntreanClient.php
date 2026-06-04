@@ -50,7 +50,7 @@ class BpjsAntreanClient
 
         // Initialize file-persistent Circuit Breaker
         require_once __DIR__ . '/CircuitBreaker.php';
-        $this->cb = new CircuitBreaker($this->log->getLogDir(), $this->log);
+        $this->cb = new CircuitBreaker($this->log->getLogDir(), $this->log, 5, 10);
     }
 
     /**
