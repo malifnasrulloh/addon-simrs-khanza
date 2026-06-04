@@ -687,14 +687,9 @@ class QueueProcessor
         // 1. Sync BPJS -> Local (Add missing tasks locally)
         foreach ($bpjsTasks as $tId => $t) {
             if (($state[$tId] ?? '') !== 'Sudah') {
-                $waktuStr = $t['wakturs'] ?? '';
-                if (!empty($waktuStr)) {
-                    // Strip Indonesian timezones to prevent timezone shifting in strtotime
-                    $waktuClean = str_replace([' WIB', ' WITA', ' WIT'], '', $waktuStr);
-                    $ts = strtotime($waktuClean);
-                    if ($ts !== false) {
-                        $waktuStr = date('Y-m-d H:i:s', $ts);
-                    }
+                $waktuStr = '';
+                if (!empty($t['wakturs'])) {
+                    $waktuStr = $this->parseBpjsDatetime((string) $t['wakturs']) ?? '';
                 }
 
                 if (empty($waktuStr) && !empty($t['waktu'])) {
@@ -726,5 +721,37 @@ class QueueProcessor
         if ($updatedLocal) {
             $state = $this->db->loadTaskState($noRawat);
         }
+    }
+
+    /**
+     * Safely parse BPJS datetime formats (d-m-Y H:i:s or Y-m-d H:i:s)
+     * and normalize to standard Y-m-d H:i:s.
+     */
+    private function parseBpjsDatetime(string $waktuStr): ?string
+    {
+        $waktuClean = trim(str_replace([' WIB', ' WITA', ' WIT'], '', $waktuStr));
+        if (empty($waktuClean)) {
+            return null;
+        }
+
+        // Try Y-m-d H:i:s
+        $dt = \DateTime::createFromFormat('Y-m-d H:i:s', $waktuClean);
+        if ($dt && $dt->format('Y-m-d H:i:s') === $waktuClean) {
+            return $waktuClean;
+        }
+
+        // Try d-m-Y H:i:s
+        $dt2 = \DateTime::createFromFormat('d-m-Y H:i:s', $waktuClean);
+        if ($dt2 && $dt2->format('d-m-Y H:i:s') === $waktuClean) {
+            return $dt2->format('Y-m-d H:i:s');
+        }
+
+        // Fallback to strtotime
+        $ts = strtotime($waktuClean);
+        if ($ts !== false) {
+            return date('Y-m-d H:i:s', $ts);
+        }
+
+        return null;
     }
 }
