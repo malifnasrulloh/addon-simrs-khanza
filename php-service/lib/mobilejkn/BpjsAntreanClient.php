@@ -425,7 +425,7 @@ class BpjsAntreanClient
                     $decrypted = $this->decrypt($responseField, $timestamp);
                     $decoded   = json_decode($decrypted, true);
                     $data      = is_array($decoded) ? $decoded : [];
-                    $this->log->debug("[BPJS] {$label} Decrypted data successfully.");
+                    $this->log->debug("[BPJS] {$label} Decrypted: " . json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
                 } catch (\Throwable $e) {
                     $this->log->error("[BPJS] {$label} Decryption failed: " . $e->getMessage());
                     $message = "Decryption failed: " . $e->getMessage();
