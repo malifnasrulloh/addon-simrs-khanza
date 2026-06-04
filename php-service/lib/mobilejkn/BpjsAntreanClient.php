@@ -150,14 +150,6 @@ class BpjsAntreanClient
             $chunkNum = $chunkIdx + 1;
             $this->log->debug("[BATCH] Processing chunk {$chunkNum}/{$totalChunks} (" . count($chunk) . " requests)");
 
-            if ($this->cb->isOpen()) {
-                $this->log->warning("[BATCH] Circuit breaker is OPEN. Aborting execution for remaining " . count($chunk) . " requests.");
-                foreach ($chunk as $req) {
-                    $results[$req['id']] = ['success' => false, 'code' => 'CB_OPEN', 'message' => 'Circuit breaker is open (cooling off)'];
-                }
-                continue;
-            }
-
             if ($this->dryRun) {
                 foreach ($chunk as $req) {
                     $results[$req['id']] = ['success' => true, 'code' => 'DRY', 'message' => 'Dry-run skipped'];
@@ -165,7 +157,35 @@ class BpjsAntreanClient
                 continue;
             }
 
-            $chunkResults = $this->executeMultiCurl($chunk);
+            $remainingRequests = $chunk;
+            $chunkResults      = [];
+            $maxTries          = 5; // 1 initial attempt + 4 retries (5 total tries)
+            $attempt           = 0;
+
+            while (!empty($remainingRequests) && $attempt < $maxTries) {
+                $attempt++;
+                if ($attempt > 1) {
+                    $this->log->info("[BATCH] Retrying " . count($remainingRequests) . " failed requests in chunk {$chunkNum} (Attempt {$attempt}/{$maxTries})...");
+                    sleep(1); // Wait 1 second before retry
+                }
+
+                $attemptResults = $this->executeMultiCurl($remainingRequests);
+
+                $nextRemaining = [];
+                foreach ($attemptResults as $id => $res) {
+                    $chunkResults[$id] = $res;
+                    if ($this->isResultRetryable($res)) {
+                        foreach ($remainingRequests as $req) {
+                            if ($req['id'] === $id) {
+                                $nextRemaining[] = $req;
+                                break;
+                            }
+                        }
+                    }
+                }
+                $remainingRequests = $nextRemaining;
+            }
+
             $results = array_merge($results, $chunkResults);
         }
 
@@ -234,9 +254,6 @@ class BpjsAntreanClient
         } while ($running > 0);
 
         // Collect results
-        $hasSuccess        = false;
-        $hasNetworkFailure = false;
-
         foreach ($handles as $id => $handleData) {
             $ch        = $handleData['ch'];
             $timestamp = $handleData['timestamp'];
@@ -248,16 +265,9 @@ class BpjsAntreanClient
             if ($error) {
                 $this->log->error("[HTTP] {$id}: cURL error: {$error}");
                 $results[$id] = ['success' => false, 'code' => '0', 'message' => "cURL error: {$error}"];
-                $hasNetworkFailure = true;
             } else {
                 $res = $this->parseApiResponse($id, $response, $httpCode, $timestamp);
                 $results[$id] = $res;
-                if ($res['success']) {
-                    $hasSuccess = true;
-                }
-                if ($httpCode >= 500) {
-                    $hasNetworkFailure = true;
-                }
             }
 
             curl_multi_remove_handle($mh, $ch);
@@ -265,13 +275,6 @@ class BpjsAntreanClient
         }
 
         curl_multi_close($mh);
-
-        // Update Circuit Breaker based on multi-curl batch outcome
-        if ($hasSuccess) {
-            $this->cb->recordSuccess();
-        } elseif ($hasNetworkFailure) {
-            $this->cb->recordFailure();
-        }
 
         return $results;
     }
@@ -282,56 +285,92 @@ class BpjsAntreanClient
 
     private function post(string $endpoint, array $payload): array
     {
-        if ($this->cb->isOpen()) {
-            $this->log->warning("[HTTP] Circuit breaker is OPEN. Aborting POST {$endpoint}");
-            return ['success' => false, 'code' => 'CB_OPEN', 'message' => 'Circuit breaker is open (cooling off)'];
-        }
-
         $url       = $this->baseUrl . $endpoint;
         $body      = json_encode($payload, JSON_UNESCAPED_UNICODE);
-        $timestamp = time();
-        $headers   = $this->generateHeaders($timestamp);
+        
+        $maxTries  = 5; // 1 initial attempt + 4 retries (5 total tries)
+        $attempt   = 0;
 
-        $this->log->debug("[HTTP] POST {$url}");
-        $this->log->debug("[HTTP] Body: {$body}");
+        while ($attempt < $maxTries) {
+            $attempt++;
+            $timestamp = time();
+            $headers   = $this->generateHeaders($timestamp);
 
-        if ($this->dryRun) {
-            $this->log->info("[DRY-RUN] Skipped POST {$endpoint}");
-            return ['success' => true, 'code' => 'DRY', 'message' => 'Dry-run skipped'];
-        }
+            $this->log->debug("[HTTP] POST {$url} (Attempt {$attempt}/{$maxTries})");
+            $this->log->debug("[HTTP] Body: {$body}");
 
-        $ch = curl_init();
-        curl_setopt_array($ch, [
-            CURLOPT_URL            => $url,
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => $body,
-            CURLOPT_HTTPHEADER     => $headers,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => self::REQUEST_TIMEOUT,
-            CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => 0,
-            CURLOPT_USERAGENT      => self::USER_AGENT,
-        ]);
-
-        $response = curl_exec($ch);
-        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error    = curl_error($ch);
-        curl_close($ch);
-
-        if ($error || $httpCode >= 500) {
-            if ($error) {
-                $this->log->error("[HTTP] cURL error: {$error}");
+            if ($this->dryRun) {
+                $this->log->info("[DRY-RUN] Skipped POST {$endpoint}");
+                return ['success' => true, 'code' => 'DRY', 'message' => 'Dry-run skipped'];
             }
-            $this->cb->recordFailure();
-            return ['success' => false, 'code' => (string)$httpCode, 'message' => $error ?: "HTTP Status {$httpCode}"];
+
+            $ch = curl_init();
+            curl_setopt_array($ch, [
+                CURLOPT_URL            => $url,
+                CURLOPT_POST           => true,
+                CURLOPT_POSTFIELDS     => $body,
+                CURLOPT_HTTPHEADER     => $headers,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT        => self::REQUEST_TIMEOUT,
+                CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_SSL_VERIFYHOST => 0,
+                CURLOPT_USERAGENT      => self::USER_AGENT,
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error    = curl_error($ch);
+            curl_close($ch);
+
+            if ($error || $httpCode >= 500 || $httpCode === 0) {
+                $errMessage = $error ?: "HTTP Status {$httpCode}";
+                $this->log->warning("[HTTP] POST {$endpoint} (Attempt {$attempt}/{$maxTries}) failed: {$errMessage}");
+                if ($attempt < $maxTries) {
+                    sleep(1);
+                    continue;
+                }
+                return ['success' => false, 'code' => (string)$httpCode, 'message' => $errMessage];
+            }
+
+            $res = $this->parseApiResponse($endpoint, $response, $httpCode, $timestamp);
+            if ($res['success']) {
+                return $res;
+            }
+
+            if ($this->isResultRetryable($res)) {
+                $this->log->warning("[HTTP] POST {$endpoint} (Attempt {$attempt}/{$maxTries}) returned retryable API error: {$res['code']} - {$res['message']}");
+                if ($attempt < $maxTries) {
+                    sleep(1);
+                    continue;
+                }
+            }
+
+            return $res;
         }
 
-        $res = $this->parseApiResponse($endpoint, $response, $httpCode, $timestamp);
+        return ['success' => false, 'code' => '500', 'message' => 'Maximum retry attempts reached'];
+    }
+
+    /**
+     * Determine if an API result/failure is transient and should be retried.
+     */
+    private function isResultRetryable(array $res): bool
+    {
         if ($res['success']) {
-            $this->cb->recordSuccess();
+            return false;
         }
-        return $res;
+
+        $code = (string) ($res['code'] ?? '');
+        if ($code === '0' || $code === 'CB_OPEN' || (int)$code >= 500) {
+            return true;
+        }
+
+        if ($code === '500' || $code === '503' || empty($code)) {
+            return true;
+        }
+
+        return false;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
