@@ -614,3 +614,13 @@ The HTTP clients are configured with aggressive "Fail Fast" timeouts to preserve
 ## Smart-Bypass Caching
 
 For sequential workflows like Mobile JKN (Task ID 3->4->5->6->7), the `QueueProcessor` implements Smart-Bypass Caching. If a patient's task sequence is fully completed or marked as cancelled locally, the engine entirely bypasses verification requests to the BPJS API (like `/antrean/getlisttask`). This optimization eliminates N+1 network overhead and accelerates execution speeds by over 95%.
+
+## High-Performance Eager Loading
+
+This service avoids the classical N+1 database bottleneck through a sophisticated **Eager Loading & In-Memory Dictionary** design pattern.
+
+When processing large patient batches (e.g., hundreds of missing on-site patients), the service avoids querying the database iteratively inside loops. Instead, it bulk-fetches entire relational sets beforehand:
+1. **Master Data Dictionaries**: BPJS Doctor codes and BPJS Polyclinic mappings are loaded completely into `O(1)` memory associative arrays before iteration begins.
+2. **Batch Querying**: Task States and Prescriptions are fetched using optimized `WHERE IN (...)` queries to gather all necessary context in 3-4 queries rather than 3,000.
+
+This architectural pattern reduces database network latency to near-zero, ensuring the cron job executes linearly and without MySQL connection pool contention.

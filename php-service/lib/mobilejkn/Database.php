@@ -182,6 +182,83 @@ SQL;
     }
 
     /**
+     * Eager-loads ALL task states for a batch of patients.
+     * Prevents executing loadTaskState sequentially in a loop.
+     *
+     * @param string[] $noRawats
+     * @return array<string, array> Map of no_rawat => task state array
+     */
+    public function fetchBatchTaskStates(array $noRawats): array
+    {
+        if (empty($noRawats)) return [];
+        $placeholders = implode(',', array_fill(0, count($noRawats), '?'));
+        $sql = "SELECT no_rawat, taskid, statuskirim FROM referensi_mobilejkn_bpjs_taskid WHERE no_rawat IN ($placeholders)";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(array_values($noRawats));
+        
+        // Initialize default empty states
+        $states = [];
+        foreach ($noRawats as $nr) {
+            $states[$nr] = ['3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
+        }
+        
+        $placeholders = implode(',', array_fill(0, count($noRawats), '?'));
+        $sql = "SELECT no_rawat, taskid, SUBSTRING(waktu, 1, 19) as waktu FROM referensi_mobilejkn_bpjs_taskid WHERE no_rawat IN ($placeholders)";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(array_values($noRawats));
+        
+        while ($row = $stmt->fetch()) {
+            $tid = (string) $row['taskid'];
+            $states[$row['no_rawat']][$tid] = 'Sudah';
+            $states[$row['no_rawat']]["waktu_{$tid}"] = $row['waktu'];
+        }
+        return $states;
+    }
+
+    /**
+     * Legacy single-patient state loader.
+     */
+    public function loadTaskState(string $noRawat): array
+    {
+        return $this->fetchBatchTaskStates([$noRawat])[$noRawat];
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Resep / Farmasi
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Eager-loads ALL prescription numbers for a batch of patients.
+     * Prevents sequential SELECT queries inside loops.
+     *
+     * @param string[] $noRawats
+     * @return array<string, string> Map of no_rawat => no_resep
+     */
+    public function fetchBatchNoResep(array $noRawats): array
+    {
+        if (empty($noRawats)) return [];
+        $placeholders = implode(',', array_fill(0, count($noRawats), '?'));
+        $sql = "SELECT no_rawat, no_resep FROM resep_obat WHERE no_rawat IN ($placeholders)";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(array_values($noRawats));
+        
+        $map = [];
+        while ($row = $stmt->fetch()) {
+            $map[$row['no_rawat']] = $row['no_resep'];
+        }
+        return $map;
+    }
+
+    /**
+     * Legacy single-patient prescription lookup.
+     */
+    public function fetchNoResep(string $noRawat): string
+    {
+        $map = $this->fetchBatchNoResep([$noRawat]);
+        return $map[$noRawat] ?? '';
+    }
+
+    /**
      * Fetch SEP reference number for a patient.
      * Java: noskdp first, fallback to no_rujukan.
      */
@@ -200,29 +277,6 @@ SQL;
     // Task ID State — per-patient task tracking
     // Matches Java: referensi_mobilejkn_bpjs_taskid table
     // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * Load all task states for a patient.
-     * Java ANTROL-ROBOT.JAVA lines 246–274: query taskid + SUBSTRING(waktu,1,19)
-     *
-     * @return array ['3'=>'Sudah', '4'=>'', ...] + ['waktu_3'=>'2025-...', ...]
-     */
-    public function loadTaskState(string $noRawat): array
-    {
-        $state = ['3'=>'','4'=>'','5'=>'','6'=>'','7'=>'','99'=>''];
-
-        $sql = "SELECT taskid, SUBSTRING(waktu, 1, 19) as waktu FROM referensi_mobilejkn_bpjs_taskid WHERE no_rawat = :nr";
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['nr' => $noRawat]);
-
-        while ($row = $stmt->fetch()) {
-            $tid = (string) $row['taskid'];
-            $state[$tid] = 'Sudah';
-            $state["waktu_{$tid}"] = $row['waktu'];
-        }
-
-        return $state;
-    }
 
     /**
      * Insert task ID. Uses INSERT IGNORE for idempotency (Java: menyimpantf2).
@@ -260,6 +314,25 @@ SQL;
     }
 
     /**
+     * Eager-loads ALL doctor BPJS mappings into an in-memory O(1) hash map.
+     * Prevents executing a database SELECT query for every single patient 
+     * in the synchronization loop (solving the N+1 problem).
+     *
+     * @return array<string, string> Associative array of ['kd_dokter' => 'kd_dokter_bpjs']
+     */
+    public function fetchAllDokterBpjsMappings(): array
+    {
+        $sql = "SELECT kd_dokter, kd_dokter_bpjs FROM maping_dokter_dpjpvclaim";
+        $stmt = $this->pdo->query($sql);
+        
+        $map = [];
+        while ($row = $stmt->fetch()) {
+            $map[$row['kd_dokter']] = $row['kd_dokter_bpjs'];
+        }
+        return $map;
+    }
+
+    /**
      * Per-patient BPJS doctor mapping lookup.
      * Matches Java robot: Sequel.cariIsi("select maping_dokter_dpjpvclaim.kd_dokter_bpjs ...")
      */
@@ -270,6 +343,23 @@ SQL;
         $stmt->execute(['kd' => $kdDokter]);
         $row = $stmt->fetch();
         return $row['kd_dokter_bpjs'] ?? '';
+    }
+
+    /**
+     * Eager-loads ALL polyclinic BPJS mappings into an in-memory O(1) hash map.
+     *
+     * @return array<string, string> Associative array of ['kd_poli_rs' => 'kd_poli_bpjs']
+     */
+    public function fetchAllPoliBpjsMappings(): array
+    {
+        $sql = "SELECT kd_poli_rs, kd_poli_bpjs FROM maping_poli_bpjs";
+        $stmt = $this->pdo->query($sql);
+        
+        $map = [];
+        while ($row = $stmt->fetch()) {
+            $map[$row['kd_poli_rs']] = $row['kd_poli_bpjs'];
+        }
+        return $map;
     }
 
     /**
@@ -364,18 +454,6 @@ SQL;
         return $row['waktu'] ?? '';
     }
 
-    /**
-     * Get resep_obat.no_resep for a patient.
-     * Java: Sequel.cariIsi("select resep_obat.no_resep from resep_obat where no_rawat=?")
-     */
-    public function fetchNoResep(string $noRawat): string
-    {
-        $sql = "SELECT no_resep FROM resep_obat WHERE no_rawat = :nr LIMIT 1";
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['nr' => $noRawat]);
-        $row = $stmt->fetch();
-        return $row['no_resep'] ?? '';
-    }
 
     /**
      * Check if a prescription is racikan (compounded).

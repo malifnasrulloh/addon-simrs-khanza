@@ -212,13 +212,18 @@ class QueueProcessor
         }
         $this->log->info("[BLOCK 3] Processing {$total} JKN patient(s)...");
 
+        // Eager Load Task States and Prescriptions
+        $noRawats   = array_column($patients, 'no_rawat');
+        $taskStates = $this->db->fetchBatchTaskStates($noRawats);
+        $noResepMap = $this->db->fetchBatchNoResep($noRawats);
+
         foreach ($patients as $idx => $p) {
             $noRawat     = $p['no_rawat'];
             $kodebooking = $p['nobooking'];
             $this->log->info("[BLOCK 3] ── Patient " . ($idx + 1) . "/{$total}: {$noRawat} ──");
 
-            // Load task state from DB (Java lines 246–274)
-            $state = $this->db->loadTaskState($noRawat);
+            // Load task state from pre-fetched dictionary
+            $state = $taskStates[$noRawat] ?? ['3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
 
             // Resolve jadwal for this patient's registration date
             $hari   = $this->db->hariForDate($p['tgl_registrasi']);
@@ -228,8 +233,11 @@ class QueueProcessor
                 continue;
             }
 
+            // Load pre-fetched prescription number
+            $noResep = $noResepMap[$noRawat] ?? '';
+
             // Process task chain: 3 → 4 → 5 → [farmasi] → 6 → 7
-            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 3', true);
+            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 3', true, $noResep);
         }
     }
 
@@ -259,6 +267,14 @@ class QueueProcessor
         }
         $this->log->info("[BLOCK 4] Found {$total} missing on-site patient(s).");
 
+        // Eager Load Master Dictionaries to prevent N+1 Queries
+        $dokterDict = $this->db->fetchAllDokterBpjsMappings();
+        $poliDict   = $this->db->fetchAllPoliBpjsMappings();
+        
+        $noRawats   = array_column($patients, 'no_rawat');
+        $taskStates = $this->db->fetchBatchTaskStates($noRawats);
+        $noResepMap = $this->db->fetchBatchNoResep($noRawats);
+
         foreach ($patients as $idx => $p) {
             $noRawat     = $p['no_rawat'];
             $kodebooking = $noRawat; // Java uses no_rawat as kodebooking for on-site
@@ -275,8 +291,8 @@ class QueueProcessor
             }
 
             // Java: per-patient mapping lookup (lines 718–724)
-            $dokterBpjs = $this->db->fetchDokterBpjs($p['kd_dokter']);
-            $poliBpjs   = $this->db->fetchPoliBpjs($p['kd_poli']);
+            $dokterBpjs = $dokterDict[$p['kd_dokter']] ?? '';
+            $poliBpjs   = $poliDict[$p['kd_poli']] ?? '';
             if (empty($dokterBpjs) || empty($poliBpjs)) {
                 $this->log->debug("[BLOCK 4] {$noRawat}: no BPJS mapping — skipping");
                 continue;
@@ -288,12 +304,15 @@ class QueueProcessor
             $p['kd_dokter_bpjs'] = $dokterBpjs;
             $p['kd_poli_bpjs']   = $poliBpjs;
 
-            // Load existing task state
-            $state = $this->db->loadTaskState($noRawat);
+            // Load existing task state from pre-fetched dictionary
+            $state = $taskStates[$noRawat] ?? ['3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
+
+            // Load pre-fetched prescription number
+            $noResep = $noResepMap[$noRawat] ?? '';
 
             // Directly run the task chain. If the booking is not registered on BPJS yet,
             // Task 3 will automatically detect 'booking_not_found' and register it dynamically.
-            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 4', $isJkn);
+            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 4', $isJkn, $noResep);
         }
     }
 
@@ -314,7 +333,8 @@ class QueueProcessor
         array  $state,
         array  $jadwal,
         string $label,
-        bool   $isJkn
+        bool   $isJkn,
+        string $noResep = ''
     ): void {
         $jamMulai   = $jadwal['jam_mulai'] ?? '08:00:00';
         $jamSelesai = $jadwal['jam_selesai'] ?? '14:00:00';
@@ -330,8 +350,7 @@ class QueueProcessor
             }
         }
 
-        // Determine prescription info once per patient (per BPJS spec)
-        $noResep    = $this->db->fetchNoResep($noRawat);
+        // Determine prescription info once per patient (using eagerly loaded value)
         $isRacikan  = !empty($noResep) ? $this->db->isRacikan($noResep) : false;
         $jenisresep = empty($noResep) ? 'Tidak ada' : ($isRacikan ? 'Racikan' : 'Non racikan');
 
