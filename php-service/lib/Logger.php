@@ -50,7 +50,8 @@ class Logger
             exit(1);
         }
 
-        $this->logFile  = $this->logDir . '/' . $serviceName . '_' . date('Y-m-d') . '.log';
+        $suffix = (php_sapi_name() === 'cli') ? '' : '_web';
+        $this->logFile  = $this->logDir . '/' . $serviceName . '_' . date('Y-m-d') . $suffix . '.log';
         $this->minLevel = self::LEVELS[strtoupper($level)] ?? 1;
         $this->verbose  = $verbose;
     }
@@ -97,7 +98,9 @@ class Logger
         $ts = date('Y-m-d H:i:s');
         $line = "[{$ts}] [{$level}] {$message}";
 
-        file_put_contents($this->logFile, $line . PHP_EOL, FILE_APPEND | LOCK_EX);
+        if (@file_put_contents($this->logFile, $line . PHP_EOL, FILE_APPEND | LOCK_EX) === false) {
+            error_log("SIMRS-MobileJKN Log write failed: " . $line);
+        }
 
         if (defined('STDERR') && defined('STDOUT')) {
             $stream = ($level === 'ERROR' || $level === 'WARNING') ? STDERR : STDOUT;
