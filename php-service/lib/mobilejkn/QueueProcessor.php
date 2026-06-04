@@ -688,6 +688,15 @@ class QueueProcessor
         foreach ($bpjsTasks as $tId => $t) {
             if (($state[$tId] ?? '') !== 'Sudah') {
                 $waktuStr = $t['wakturs'] ?? '';
+                if (!empty($waktuStr)) {
+                    // Strip Indonesian timezones to prevent timezone shifting in strtotime
+                    $waktuClean = str_replace([' WIB', ' WITA', ' WIT'], '', $waktuStr);
+                    $ts = strtotime($waktuClean);
+                    if ($ts !== false) {
+                        $waktuStr = date('Y-m-d H:i:s', $ts);
+                    }
+                }
+
                 if (empty($waktuStr) && !empty($t['waktu'])) {
                     // Fallback to epoch milliseconds
                     $waktuStr = date('Y-m-d H:i:s', (int) round($t['waktu'] / 1000));
