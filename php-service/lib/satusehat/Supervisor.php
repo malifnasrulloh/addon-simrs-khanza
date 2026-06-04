@@ -23,7 +23,7 @@ class SatuSehatSupervisor
     public function __construct(Logger $log, int $timeoutSeconds = 300)
     {
         $this->log = $log;
-        $this->timeoutSeconds = $timeoutSeconds;
+        $this->timeoutSeconds = 9223372036854775807;
     }
 
     /**
