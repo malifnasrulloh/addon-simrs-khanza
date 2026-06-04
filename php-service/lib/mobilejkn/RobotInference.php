@@ -85,6 +85,31 @@ class RobotInference
     }
 
     /**
+     * Infer Task 3 time dynamically.
+     * If patient registered before polyclinic starts, use jam_mulai + small random offset.
+     * If patient registered during polyclinic hours, use jam_reg + small random offset.
+     */
+    public static function inferTask3(string $tglRegistrasi, string $jamReg, string $jamMulai): string
+    {
+        $regTs = strtotime("{$tglRegistrasi} {$jamReg}");
+        $startTs = strtotime("{$tglRegistrasi} {$jamMulai}");
+        
+        if ($regTs === false || $startTs === false) {
+            return "{$tglRegistrasi} {$jamMulai}";
+        }
+        
+        // Base timestamp
+        $baseTs = ($regTs < $startTs) ? $startTs : $regTs;
+        
+        // Add random offset: 2 to 12 minutes, plus random seconds
+        $offsetMinutes = rand(2, 12);
+        $offsetSeconds = rand(0, 59);
+        
+        $inferredTs = $baseTs + ($offsetMinutes * 60) + $offsetSeconds;
+        return date('Y-m-d H:i:s', $inferredTs);
+    }
+
+    /**
      * Get the random minute range for each task transition.
      * Exact values from Java ANTROL-ROBOT.JAVA.
      */

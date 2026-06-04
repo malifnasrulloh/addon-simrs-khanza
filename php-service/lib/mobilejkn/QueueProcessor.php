@@ -376,6 +376,14 @@ class QueueProcessor
                 ? $this->db->resolveTask3WaktuJkn($noRawat, $patient['tgl_registrasi'], $jamMulai)
                 : $this->db->resolveTask3Waktu($noRawat, $patient['tgl_registrasi'], $jamMulai);
 
+            // Auto-heal missing or '00:00:00' (midnight) check-in times for backdated patients
+            // Midnight times cause Task 4 robot inference to generate times like 00:45:00,
+            // which BPJS rejects because it's earlier than the polyclinic jam_mulai.
+            if ((empty($datajam) || str_ends_with($datajam, ' 00:00:00')) && $allowRobot) {
+                $datajam = RobotInference::inferTask3($patient['tgl_registrasi'], $patient['jam_reg'], $jamMulai);
+                $this->log->debug("[{$label}] {$noRawat} TaskID 3: missing/midnight check-in time — auto-inferring to {$datajam}");
+            }
+
             if (!empty($datajam)) {
                 // Future-time gate: don't send if the time hasn't happened yet
                 // e.g., jam_mulai=11:00 but now()=07:41 → wait until 11:00 passes
@@ -661,20 +669,23 @@ class QueueProcessor
     private function syncTaskStateFromBpjs(string $kodebooking, string $noRawat, array &$state, string $label): void
     {
         $res = $this->api->getListTask($kodebooking);
-        if (!$res['success'] || empty($res['data'])) {
+        if (!$res['success'] || !is_array($res['data'])) {
             return;
         }
 
         $tasks = $res['data'];
-        $updatedLocal = false;
-
+        $bpjsTasks = [];
         foreach ($tasks as $t) {
             $tId = (string) ($t['taskid'] ?? '');
-            if (empty($tId)) {
-                continue;
+            if (!empty($tId)) {
+                $bpjsTasks[$tId] = $t;
             }
+        }
 
-            // If local DB doesn't think this task has been sent, but BPJS has it:
+        $updatedLocal = false;
+
+        // 1. Sync BPJS -> Local (Add missing tasks locally)
+        foreach ($bpjsTasks as $tId => $t) {
             if (($state[$tId] ?? '') !== 'Sudah') {
                 $waktuStr = $t['wakturs'] ?? '';
                 if (empty($waktuStr) && !empty($t['waktu'])) {
@@ -688,6 +699,17 @@ class QueueProcessor
                         $updatedLocal = true;
                     }
                 }
+            }
+        }
+
+        // 2. Sync Local -> BPJS (Prune local tasks that BPJS does NOT have)
+        // If BPJS doesn't have it, local DB is out of sync (e.g. booking reset or failed API propagation)
+        $possibleTasks = ['3', '4', '5', '6', '7', '99'];
+        foreach ($possibleTasks as $tId) {
+            if (($state[$tId] ?? '') === 'Sudah' && !isset($bpjsTasks[$tId])) {
+                $this->log->warning("[{$label}] {$noRawat} TaskID {$tId}: local DB has 'Sudah' but BPJS doesn't — pruning local state to trigger recovery");
+                $this->db->deleteTaskId($noRawat, $tId);
+                $updatedLocal = true;
             }
         }
 

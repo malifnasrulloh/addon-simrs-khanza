@@ -191,11 +191,6 @@ SQL;
     public function fetchBatchTaskStates(array $noRawats): array
     {
         if (empty($noRawats)) return [];
-        $placeholders = implode(',', array_fill(0, count($noRawats), '?'));
-        $sql = "SELECT no_rawat, taskid, statuskirim FROM referensi_mobilejkn_bpjs_taskid WHERE no_rawat IN ($placeholders)";
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(array_values($noRawats));
-        
         // Initialize default empty states
         $states = [];
         foreach ($noRawats as $nr) {
