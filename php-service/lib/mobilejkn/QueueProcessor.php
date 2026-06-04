@@ -137,6 +137,39 @@ class QueueProcessor
             } else {
                 $this->log->warning("[BLOCK 1] {$nb}: ✗ {$code} — {$result['message']}");
                 $this->failCount++;
+
+                // Fallback Active Auto-Healing: try to send TaskID 3 to see if booking actually exists
+                $this->log->info("[BLOCK 1] {$nb}: attempting fallback TaskID 3 auto-healing...");
+                $hari   = $this->db->hariForDate($b['tanggalperiksa']);
+                $jadwal = $this->db->fetchJadwal($hari, $b['kodedokter'], $b['kodepoli']);
+                $jamMulai = $jadwal['jam_mulai'] ?? '08:00:00';
+
+                // Get reg_periksa details (specifically jam_reg) for the patient
+                $regInfo = $this->db->fetchPatientRegInfo($b['no_rawat']);
+                $jamReg = $regInfo['jam_reg'] ?? '08:00:00';
+
+                $datajam = $this->db->resolveTask3WaktuJkn($b['no_rawat'], $b['tanggalperiksa'], $jamMulai);
+                if (empty($datajam) || str_contains($datajam, '00:00:00')) {
+                    $datajam = RobotInference::inferTask3($b['tanggalperiksa'], $jamReg, $jamMulai);
+                }
+
+                if (!empty($datajam)) {
+                    $r = $this->sendTaskId($nb, $b['no_rawat'], '3', $datajam, 'BLOCK 1');
+                    if ($r['ok']) {
+                        // If BPJS accepted TaskID 3, it means the booking actually exists on BPJS!
+                        // Mark statuskirim = 'Sudah' and record TaskID 3 locally.
+                        try {
+                            $this->db->markBookingAsSent($nb);
+                            $this->db->insertTaskId($b['no_rawat'], '3', $datajam);
+                            $this->log->info("[BLOCK 1] {$nb}: ✓ Fallback TaskID 3 accepted. Auto-healed statuskirim=Sudah");
+                            $this->successCount++;
+                        } catch (\PDOException $e) {
+                            $this->log->error("[BLOCK 1] DB update failed for fallback {$nb}: " . $e->getMessage());
+                        }
+                    } else {
+                        $this->log->debug("[BLOCK 1] {$nb}: Fallback TaskID 3 rejected — booking likely does not exist on BPJS");
+                    }
+                }
             }
         }
     }

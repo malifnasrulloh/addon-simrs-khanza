@@ -371,6 +371,18 @@ SQL;
     }
 
     /**
+     * Fetch patient registration details (tgl_registrasi, jam_reg).
+     */
+    public function fetchPatientRegInfo(string $noRawat): ?array
+    {
+        $sql = "SELECT tgl_registrasi, jam_reg FROM reg_periksa WHERE no_rawat = :nr LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch();
+        return $row ? $row : null;
+    }
+
+    /**
      * Get task 3 waktu:
      * Strictly uses mutasi_berkas.dikirim (real check-in file transfer time).
      * If not checked in, returns an empty string to pause task chain execution.
