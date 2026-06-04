@@ -27,8 +27,8 @@ class BpjsAntreanClient
     private CircuitBreaker $cb;
 
     // ─── cURL defaults ─────────────────────────────────────────────────────
-    private const CONNECT_TIMEOUT = 10;
-    private const REQUEST_TIMEOUT = 30;
+    private const CONNECT_TIMEOUT = 3;
+    private const REQUEST_TIMEOUT = 15;
     private const USER_AGENT      = 'SIMRS-Khanza-MobileJKN/2.0';
 
     public function __construct(

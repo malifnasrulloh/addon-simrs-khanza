@@ -91,16 +91,26 @@ class CircuitBreaker
     }
 
     /**
-     * Record a successful request. Resets failure counts.
+     * Record a successful request using a Leaky Bucket algorithm.
+     * Prevents "flapping" by gradually reducing failure counts 
+     * on success, rather than resetting to zero immediately.
      */
     public function recordSuccess(): void
     {
         $state = $this->loadState();
-        if ($state['failure_count'] > 0 || $state['status'] !== 'CLOSED') {
-            $this->log->info("[CIRCUIT-BREAKER] API request succeeded. Resetting state to CLOSED.");
+        
+        if ($state['status'] === 'HALF-OPEN') {
+            // A success during the testing phase fully heals the circuit
+            $this->log->info("[CIRCUIT-BREAKER] API request succeeded in HALF-OPEN state. Resetting to CLOSED.");
             $state['status']        = 'CLOSED';
             $state['failure_count'] = 0;
             $state['tripped_time']  = 0;
+            $this->saveState($state);
+            
+        } elseif ($state['failure_count'] > 0) {
+            // Leaky bucket: heal gradually during unstable periods
+            $state['failure_count'] = max(0, $state['failure_count'] - 1);
+            $this->log->debug("[CIRCUIT-BREAKER] Success recorded. Failure count decreased to {$state['failure_count']}");
             $this->saveState($state);
         }
     }

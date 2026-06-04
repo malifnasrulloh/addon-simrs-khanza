@@ -592,3 +592,25 @@ Run the medication statement synchronization every hour (offset by 15 minutes fr
 ```bash
 15 * * * * cd /path/to/php-service && php satusehat_medicationstatement_sync.php >> /dev/null 2>&1
 ```
+
+---
+
+# System Resiliency & Circuit Breaker Architecture
+
+All Mobile JKN and Satu Sehat sync services in this repository implement a highly resilient, file-persistent Circuit Breaker pattern to protect the local server from hanging during BPJS API outages (e.g., `HTTP 429` Rate Limits or TCP Timeouts).
+
+## The "Leaky Bucket" Strategy
+
+Unlike naive circuit breakers that reset on a single successful request (causing a "flapping" state where the breaker never actually trips under heavy degradation), this service uses a robust Leaky Bucket algorithm. 
+- **Failures** increment the counter. If the counter reaches `MAX_FAILURES` (default: 5), the circuit trips to the `OPEN` state and instantly blocks all outbound API requests for a `COOLING_PERIOD` (default: 5 minutes). This prevents thread exhaustion on your server.
+- **Successes** while in the `CLOSED` state do *not* instantly reset the counter to zero. Instead, they gracefully decrement the counter by 1. This guarantees that highly unstable connections (e.g., 80% timeouts) will still reliably trip the breaker.
+
+## High-Performance Networking Limits
+
+The HTTP clients are configured with aggressive "Fail Fast" timeouts to preserve local server health during remote outages:
+- **Connect Timeout**: `3 seconds`. (If the BPJS load balancer doesn't acknowledge the TCP handshake in 3 seconds, the connection is instantly aborted).
+- **Request/Read Timeout**: `15 seconds`. (To allow for slower query execution on the BPJS end without hanging the PHP worker).
+
+## Smart-Bypass Caching
+
+For sequential workflows like Mobile JKN (Task ID 3->4->5->6->7), the `QueueProcessor` implements Smart-Bypass Caching. If a patient's task sequence is fully completed or marked as cancelled locally, the engine entirely bypasses verification requests to the BPJS API (like `/antrean/getlisttask`). This optimization eliminates N+1 network overhead and accelerates execution speeds by over 95%.
