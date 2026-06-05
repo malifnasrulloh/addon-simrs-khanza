@@ -599,6 +599,13 @@ class QueueProcessor
             if ($r['ok']) return $realTime;
             if ($r['reason'] === 'already_in_db') return null;
 
+            if ($r['reason'] === 'preceding_tasks_missing') {
+                if ($this->healMissingPrecedingTasksOnDemand($kodebooking, $noRawat, $prevWaktu, $label, $jenisresep)) {
+                    $r = $this->sendTaskId($kodebooking, $noRawat, $taskId, $realTime, $label, $jenisresep);
+                    if ($r['ok']) return $realTime;
+                }
+            }
+
             // If BPJS rejected because time <= previous, fall through to robot
             if ($r['reason'] !== 'time_order') {
                 return null; // Other failure — don't retry
@@ -621,6 +628,11 @@ class QueueProcessor
         }
 
         $r = $this->sendTaskId($kodebooking, $noRawat, $taskId, $robotTime, $label, $jenisresep);
+        if ($r['reason'] === 'preceding_tasks_missing') {
+            if ($this->healMissingPrecedingTasksOnDemand($kodebooking, $noRawat, $prevWaktu, $label, $jenisresep)) {
+                $r = $this->sendTaskId($kodebooking, $noRawat, $taskId, $robotTime, $label, $jenisresep);
+            }
+        }
         return $r['ok'] ? $robotTime : null;
     }
 
@@ -678,16 +690,19 @@ class QueueProcessor
         }
 
         // Detect BPJS time-ordering or booking-not-found rejections
+        $isPrecedingMissing = (str_contains($msgLower, 'belum terkirim') || str_contains($msgLower, 'sebelumnya belum'));
+
         $isNotFound = (
             str_contains($msgLower, 'tidak ditemukan') ||
             str_contains($msgLower, 'tidak terdaftar') ||
             str_contains($msgLower, 'belum terdaftar') ||
-            str_contains($msgLower, 'belum terkirim') ||
             str_contains($msgLower, 'tidak ada') ||
             str_contains($msgLower, 'booking')
         );
 
-        if ($isNotFound) {
+        if ($isPrecedingMissing) {
+            $reason = 'preceding_tasks_missing';
+        } elseif ($isNotFound) {
             $reason = 'booking_not_found';
         } else {
             $isTimeOrder = (str_contains($msg, 'tidak boleh kurang') || str_contains($msg, 'waktu sebelumnya'));
@@ -846,5 +861,55 @@ class QueueProcessor
         }
         $timePart = substr($realTime, 11, 8); // Extracts 'HH:ii:ss'
         return $tanggalPeriksa . ' ' . $timePart;
+    }
+
+    /**
+     * Heal missing Task 1 and Task 2 on-demand when a later task is rejected by BPJS.
+     */
+    private function healMissingPrecedingTasksOnDemand(string $kodebooking, string $noRawat, string $waktu3Str, string $label, string $jenisresep): bool
+    {
+        if (empty($waktu3Str)) {
+            return false;
+        }
+
+        $t3Ts = strtotime($waktu3Str);
+        if ($t3Ts === false) {
+            return false;
+        }
+
+        $this->log->info("[{$label}] {$noRawat}: healing missing preceding tasks (Task 1 & 2) on-demand using Task 3 time '{$waktu3Str}'");
+
+        // Send Task 1
+        $waktu1Str = date('Y-m-d H:i:s', $t3Ts - 1800); // 30 minutes before Task 3
+        $waktu1Ms = $t3Ts * 1000 - 1800000;
+        $this->log->info("[{$label}] {$noRawat} TaskID 1: sending on-demand waktu={$waktu1Ms} ({$waktu1Str})");
+
+        // Save locally first
+        $this->db->insertTaskId($noRawat, '1', $waktu1Str);
+        $res1 = $this->api->updateWaktu($kodebooking, '1', $waktu1Ms, $jenisresep);
+        if ($res1['success']) {
+            $this->log->info("[{$label}] {$noRawat} TaskID 1: ✓ healed successfully");
+        } else {
+            $this->log->warning("[{$label}] {$noRawat} TaskID 1: ✗ failed to heal ({$res1['code']}): {$res1['message']}");
+            $this->db->deleteTaskId($noRawat, '1');
+            return false; // If Task 1 fails, we cannot proceed
+        }
+
+        // Send Task 2
+        $waktu2Str = date('Y-m-d H:i:s', $t3Ts - 900); // 15 minutes before Task 3
+        $waktu2Ms = $t3Ts * 1000 - 900000;
+        $this->log->info("[{$label}] {$noRawat} TaskID 2: sending on-demand waktu={$waktu2Ms} ({$waktu2Str})");
+
+        // Save locally first
+        $this->db->insertTaskId($noRawat, '2', $waktu2Str);
+        $res2 = $this->api->updateWaktu($kodebooking, '2', $waktu2Ms, $jenisresep);
+        if ($res2['success']) {
+            $this->log->info("[{$label}] {$noRawat} TaskID 2: ✓ healed successfully");
+            return true;
+        } else {
+            $this->log->warning("[{$label}] {$noRawat} TaskID 2: ✗ failed to heal ({$res2['code']}): {$res2['message']}");
+            $this->db->deleteTaskId($noRawat, '2');
+            return false;
+        }
     }
 }
