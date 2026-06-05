@@ -625,7 +625,11 @@ class QueueProcessor
         }
 
         // Detect BPJS time-ordering or booking-not-found rejections
-        $isPrecedingMissing = (str_contains($msgLower, 'belum terkirim') || str_contains($msgLower, 'sebelumnya belum'));
+        $isPrecedingMissing = (
+            str_contains($msgLower, 'belum terkirim') ||
+            str_contains($msgLower, 'sebelumnya belum') ||
+            str_contains($msgLower, 'belum ada')
+        );
 
         $isNotFound = (
             str_contains($msgLower, 'tidak ditemukan') ||
