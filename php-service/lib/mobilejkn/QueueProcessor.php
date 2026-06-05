@@ -755,6 +755,7 @@ class QueueProcessor
 
         // 1. Sync BPJS -> Local (Add missing tasks locally, heal corrupted, or correct mismatched timestamps)
         foreach ($bpjsTasks as $tId => $t) {
+            $tId = (string) $tId;
             $currentWaktu = (($state[$tId] ?? '') === 'Sudah') ? ($state['waktu_' . $tId] ?? '') : '';
 
             $waktuStr = '';
