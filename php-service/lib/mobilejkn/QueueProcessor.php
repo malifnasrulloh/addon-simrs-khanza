@@ -372,16 +372,8 @@ class QueueProcessor
         $jamMulai   = $jadwal['jam_mulai'] ?? '08:00:00';
         $jamSelesai = $jadwal['jam_selesai'] ?? '14:00:00';
 
-        // Check if polyclinic work hours are still active for this patient
+        // Full-Robot Mode: always allow robot inference immediately (strict sequence gates apply)
         $allowRobot = true;
-        if ($this->config->deferRobotInfer) {
-            $sessionEndStr = $patient['tgl_registrasi'] . ' ' . $jamSelesai;
-            $sessionEndTs  = strtotime($sessionEndStr);
-            if ($sessionEndTs !== false && time() < $sessionEndTs) {
-                $allowRobot = false;
-                $this->log->debug("[{$label}] {$noRawat}: polyclinic session active (ends at {$jamSelesai}) — deferring robot inference");
-            }
-        }
 
         // Determine prescription info once per patient (using eagerly loaded value)
         $isRacikan  = !empty($noResep) ? $this->db->isRacikan($noResep) : false;
@@ -489,7 +481,7 @@ class QueueProcessor
 
         // ── Task 4: mulai pelayanan poli ──────────────────────────────────
         if ($state['99'] === '' && $state['3'] === 'Sudah' && $state['4'] === '') {
-            $realTime = $this->db->resolveTask4Waktu($noRawat);
+            $realTime = '';
             $prevWaktu = $state['waktu_3'] ?? '';
             $datajam = $this->tryRealThenRobot($kodebooking, $noRawat, '4', $realTime, $prevWaktu, false, $label, $jenisresep, $allowRobot, $patient['tgl_registrasi']);
             if ($datajam !== null) {
@@ -505,7 +497,7 @@ class QueueProcessor
 
         // ── Task 5: selesai pelayanan poli ────────────────────────────────
         if ($state['99'] === '' && $state['4'] === 'Sudah' && $state['5'] === '') {
-            $realTime = $this->db->resolveTask5Waktu($noRawat);
+            $realTime = '';
             $prevWaktu = $state['waktu_4'] ?? '';
             $datajam = $this->tryRealThenRobot($kodebooking, $noRawat, '5', $realTime, $prevWaktu, false, $label, $jenisresep, $allowRobot, $patient['tgl_registrasi']);
             if ($datajam !== null) {
@@ -527,7 +519,7 @@ class QueueProcessor
             } else {
                 $this->sendFarmasi($kodebooking, $noRawat, $noResep);
 
-                $realTime  = $this->db->resolveTask6Waktu($noRawat);
+                $realTime  = '';
                 $prevWaktu = $state['waktu_5'] ?? '';
                 $datajam   = $this->tryRealThenRobot($kodebooking, $noRawat, '6', $realTime, $prevWaktu, $isRacikan, $label, $jenisresep, $allowRobot, $patient['tgl_registrasi']);
                 if ($datajam !== null) {
@@ -544,7 +536,7 @@ class QueueProcessor
 
         // ── Task 7: selesai farmasi ───────────────────────────────────────
         if ($state['99'] === '' && $state['6'] === 'Sudah' && $state['7'] === '') {
-            $realTime  = $this->db->resolveTask7Waktu($noRawat);
+            $realTime  = '';
             $prevWaktu = $state['waktu_6'] ?? '';
             $datajam   = $this->tryRealThenRobot($kodebooking, $noRawat, '7', $realTime, $prevWaktu, $isRacikan, $label, $jenisresep, $allowRobot, $patient['tgl_registrasi']);
             if ($datajam !== null) {
@@ -621,7 +613,7 @@ class QueueProcessor
             return null;
         }
 
-        $robotTime = RobotInference::infer($taskId, $prevWaktu, $isRacikan);
+        $robotTime = RobotInference::infer($taskId, $prevWaktu, $isRacikan, $this->config->robotRanges);
         if (empty($robotTime)) {
             $this->log->debug("[{$label}] {$noRawat} TaskID {$taskId}: robot gates not satisfied — skip");
             return null;

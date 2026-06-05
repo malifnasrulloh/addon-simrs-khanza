@@ -27,6 +27,7 @@ class MobileJknConfig
     public readonly bool   $includeNonJkn;
     public readonly bool   $skipFarmasiNoResep;
     public readonly bool   $deferRobotInfer;
+    public readonly array  $robotRanges;
 
     // ─── Database ──────────────────────────────────────────────────────────
     public readonly string $dbHost;
@@ -85,6 +86,12 @@ class MobileJknConfig
         $this->includeNonJkn      = filter_var($this->get('MOBILEJKN_INCLUDE_NON_JKN', 'true'), FILTER_VALIDATE_BOOLEAN);
         $this->skipFarmasiNoResep = filter_var($this->get('MOBILEJKN_SKIP_FARMASI_NO_RESEP', 'false'), FILTER_VALIDATE_BOOLEAN);
         $this->deferRobotInfer    = filter_var($this->get('MOBILEJKN_DEFER_ROBOT_INFER', 'true'), FILTER_VALIDATE_BOOLEAN);
+        $this->robotRanges        = [
+            '4' => self::parseRange($this->get('ROBOT_RANGE_4', '35,58'), [35, 58]),
+            '5' => self::parseRange($this->get('ROBOT_RANGE_5', '3,10'), [3, 10]),
+            '6' => self::parseRange($this->get('ROBOT_RANGE_6', '6,15'), [6, 15]),
+            '7' => self::parseRange($this->get('ROBOT_RANGE_7', '8,15'), [8, 15]),
+        ];
 
         // ── Logging ─────────────────────────────────────────────────────
         $this->logDir           = $this->get('LOG_DIR', 'logs');
@@ -164,5 +171,21 @@ class MobileJknConfig
             $vars[$key] = $value;
         }
         return $vars;
+    }
+
+    /**
+     * Parse a comma-separated range string (min,max) into a 2-element array [min, max].
+     */
+    private static function parseRange(string $val, array $default): array
+    {
+        $parts = explode(',', $val);
+        if (count($parts) === 2) {
+            $min = (int) trim($parts[0]);
+            $max = (int) trim($parts[1]);
+            if ($min > 0 && $max >= $min) {
+                return [$min, $max];
+            }
+        }
+        return $default;
     }
 }

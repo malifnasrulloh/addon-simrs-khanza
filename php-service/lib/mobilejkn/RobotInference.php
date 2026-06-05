@@ -37,9 +37,10 @@ class RobotInference
      * @param string $taskId     Task to infer ('4', '5', '6', '7')
      * @param string $prevWaktu  Previous task's waktu (Y-m-d H:i:s format)
      * @param bool   $isRacikan  Whether the prescription is racikan (only affects task 7)
+     * @param array|null $customRanges Configured task minute ranges
      * @return string  Inferred waktu in 'Y-m-d H:i:s' format, or '' if gates not satisfied
      */
-    public static function infer(string $taskId, string $prevWaktu, bool $isRacikan = false): string
+    public static function infer(string $taskId, string $prevWaktu, bool $isRacikan = false, ?array $customRanges = null): string
     {
         if (empty($prevWaktu) || str_starts_with($prevWaktu, '0000')) {
             return '';
@@ -51,7 +52,14 @@ class RobotInference
         }
 
         // Get random offset range matching Java robot exactly
-        [$minMinutes, $maxMinutes] = self::getRange($taskId, $isRacikan);
+        $range = null;
+        if ($customRanges !== null && isset($customRanges[$taskId])) {
+            $range = $customRanges[$taskId];
+        } else {
+            $range = self::getRange($taskId, $isRacikan);
+        }
+
+        [$minMinutes, $maxMinutes] = $range;
         if ($minMinutes === 0 && $maxMinutes === 0) {
             return ''; // Task 3 or unknown — cannot infer
         }
