@@ -827,12 +827,21 @@ class QueueProcessor
         // Save locally first
         $this->db->insertTaskId($noRawat, '2', $waktu2Str);
         $res2 = $this->api->updateWaktu($kodebooking, '2', $waktu2Ms, $jenisresep);
-        if ($res2['success']) {
-            $this->log->info("[{$label}] {$noRawat} TaskID 2: ✓ healed successfully");
-            return true;
-        } else {
+        if (!$res2['success']) {
             $this->log->warning("[{$label}] {$noRawat} TaskID 2: ✗ failed to heal ({$res2['code']}): {$res2['message']}");
             $this->db->deleteTaskId($noRawat, '2');
+            return false;
+        }
+        $this->log->info("[{$label}] {$noRawat} TaskID 2: ✓ healed successfully");
+
+        // Resend Task 3 to BPJS to advance the state machine back to Task 3
+        $this->log->info("[{$label}] {$noRawat} TaskID 3: resending to BPJS to advance state machine after healing");
+        $res3 = $this->api->updateWaktu($kodebooking, '3', $t3Ts * 1000, $jenisresep);
+        if ($res3['success']) {
+            $this->log->info("[{$label}] {$noRawat} TaskID 3: ✓ resent successfully");
+            return true;
+        } else {
+            $this->log->warning("[{$label}] {$noRawat} TaskID 3: ✗ failed to resend ({$res3['code']}): {$res3['message']}");
             return false;
         }
     }
