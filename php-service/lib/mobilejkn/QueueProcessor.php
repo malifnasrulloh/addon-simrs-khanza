@@ -481,33 +481,25 @@ class QueueProcessor
 
         // ── Task 4: mulai pelayanan poli ──────────────────────────────────
         if ($state['99'] === '' && $state['3'] === 'Sudah' && $state['4'] === '') {
-            $realTime = '';
             $prevWaktu = $state['waktu_3'] ?? '';
-            $datajam = $this->tryRealThenRobot($kodebooking, $noRawat, '4', $realTime, $prevWaktu, false, $label, $jenisresep, $allowRobot, $patient['tgl_registrasi']);
+            $datajam = $this->inferAndSendRobotTask($kodebooking, $noRawat, '4', $prevWaktu, false, $label, $jenisresep);
             if ($datajam !== null) {
                 $state['4'] = 'Sudah';
                 $state['waktu_4'] = $datajam;
             } else {
                 $state = $this->db->loadTaskState($noRawat);
-                if ($state['99'] === '' && !empty($realTime)) {
-                    $state['4'] = 'Belum';
-                }
             }
         }
 
         // ── Task 5: selesai pelayanan poli ────────────────────────────────
         if ($state['99'] === '' && $state['4'] === 'Sudah' && $state['5'] === '') {
-            $realTime = '';
             $prevWaktu = $state['waktu_4'] ?? '';
-            $datajam = $this->tryRealThenRobot($kodebooking, $noRawat, '5', $realTime, $prevWaktu, false, $label, $jenisresep, $allowRobot, $patient['tgl_registrasi']);
+            $datajam = $this->inferAndSendRobotTask($kodebooking, $noRawat, '5', $prevWaktu, false, $label, $jenisresep);
             if ($datajam !== null) {
                 $state['5'] = 'Sudah';
                 $state['waktu_5'] = $datajam;
             } else {
                 $state = $this->db->loadTaskState($noRawat);
-                if ($state['99'] === '' && !empty($realTime)) {
-                    $state['5'] = 'Belum';
-                }
             }
         }
 
@@ -519,34 +511,26 @@ class QueueProcessor
             } else {
                 $this->sendFarmasi($kodebooking, $noRawat, $noResep);
 
-                $realTime  = '';
                 $prevWaktu = $state['waktu_5'] ?? '';
-                $datajam   = $this->tryRealThenRobot($kodebooking, $noRawat, '6', $realTime, $prevWaktu, $isRacikan, $label, $jenisresep, $allowRobot, $patient['tgl_registrasi']);
+                $datajam   = $this->inferAndSendRobotTask($kodebooking, $noRawat, '6', $prevWaktu, $isRacikan, $label, $jenisresep);
                 if ($datajam !== null) {
                     $state['6'] = 'Sudah';
                     $state['waktu_6'] = $datajam;
                 } else {
                     $state = $this->db->loadTaskState($noRawat);
-                    if ($state['99'] === '' && !empty($realTime)) {
-                        $state['6'] = 'Belum';
-                    }
                 }
             }
         }
 
         // ── Task 7: selesai farmasi ───────────────────────────────────────
         if ($state['99'] === '' && $state['6'] === 'Sudah' && $state['7'] === '') {
-            $realTime  = '';
             $prevWaktu = $state['waktu_6'] ?? '';
-            $datajam   = $this->tryRealThenRobot($kodebooking, $noRawat, '7', $realTime, $prevWaktu, $isRacikan, $label, $jenisresep, $allowRobot, $patient['tgl_registrasi']);
+            $datajam   = $this->inferAndSendRobotTask($kodebooking, $noRawat, '7', $prevWaktu, $isRacikan, $label, $jenisresep);
             if ($datajam !== null) {
                 $state['7'] = 'Sudah';
                 $state['waktu_7'] = $datajam;
             } else {
                 $state = $this->db->loadTaskState($noRawat);
-                if ($state['99'] === '' && !empty($realTime)) {
-                    $state['7'] = 'Belum';
-                }
             }
         }
 
@@ -560,59 +544,18 @@ class QueueProcessor
     }
 
     /**
-     * Try sending with real DB time first. If BPJS rejects with time_order,
-     * automatically retry with robot inference.
-     *
-     * @return string|null  The accepted waktu, or null if both attempts failed/skipped
+     * Generate inferred timing for a task using Box-Muller normal distribution
+     * and send it to the BPJS API.
      */
-    private function tryRealThenRobot(
+    private function inferAndSendRobotTask(
         string $kodebooking,
         string $noRawat,
         string $taskId,
-        string $realTime,
         string $prevWaktu,
         bool   $isRacikan,
         string $label,
-        string $jenisresep = 'Tidak ada',
-        bool   $allowRobot = true,
-        string $tanggalPeriksa = ''
+        string $jenisresep = 'Tidak ada'
     ): ?string {
-        if (!empty($realTime) && !empty($tanggalPeriksa)) {
-            $alignedTime = $this->alignTimeToBookingDate($realTime, $tanggalPeriksa);
-            if (!empty($alignedTime) && $alignedTime !== $realTime) {
-                $this->log->debug("[{$label}] {$noRawat} TaskID {$taskId}: aligning realTime date from '{$realTime}' to '{$alignedTime}' to match appointment schedule");
-                $realTime = $alignedTime;
-            }
-        }
-
-        // Attempt 1: use real data if available
-        if (!empty($realTime)) {
-            $r = $this->sendTaskId($kodebooking, $noRawat, $taskId, $realTime, $label, $jenisresep);
-            if ($r['ok']) return $realTime;
-            if ($r['reason'] === 'already_in_db') return null;
-
-            if ($r['reason'] === 'preceding_tasks_missing') {
-                if ($this->healMissingPrecedingTasksOnDemand($kodebooking, $noRawat, $prevWaktu, $label, $jenisresep)) {
-                    $r = $this->sendTaskId($kodebooking, $noRawat, $taskId, $realTime, $label, $jenisresep);
-                    if ($r['ok']) return $realTime;
-                }
-            }
-
-            // If BPJS rejected because time <= previous, fall through to robot
-            if ($r['reason'] !== 'time_order') {
-                return null; // Other failure — don't retry
-            }
-            if ($allowRobot) {
-                $this->log->info("[{$label}] {$noRawat} TaskID {$taskId}: time_order → retrying with robot inference");
-            }
-        }
-
-        // Attempt 2: robot inference from previous task
-        if (!$allowRobot) {
-            $this->log->debug("[{$label}] {$noRawat} TaskID {$taskId}: robot inference deferred (polyclinic session active) — skip");
-            return null;
-        }
-
         $robotTime = RobotInference::infer($taskId, $prevWaktu, $isRacikan, $this->config->robotRanges);
         if (empty($robotTime)) {
             $this->log->debug("[{$label}] {$noRawat} TaskID {$taskId}: robot gates not satisfied — skip");
@@ -842,18 +785,7 @@ class QueueProcessor
         return null;
     }
 
-    /**
-     * Aligns the date portion of a realTime timestamp to the scheduled tanggalPeriksa date,
-     * while preserving the original time of day (HH:ii:ss).
-     */
-    private function alignTimeToBookingDate(string $realTime, string $tanggalPeriksa): string
-    {
-        if (empty($realTime) || str_starts_with($realTime, '0000')) {
-            return '';
-        }
-        $timePart = substr($realTime, 11, 8); // Extracts 'HH:ii:ss'
-        return $tanggalPeriksa . ' ' . $timePart;
-    }
+
 
     /**
      * Heal missing Task 1 and Task 2 on-demand when a later task is rejected by BPJS.

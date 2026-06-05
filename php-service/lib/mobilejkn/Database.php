@@ -409,57 +409,7 @@ SQL;
         return $this->resolveTask3Waktu($noRawat, $tglRegistrasi, $jamMulai);
     }
 
-    /**
-     * Get task 4 waktu from mutasi_berkas.diterima.
-     * Java log line 58: "select mutasi_berkas.diterima..."
-     */
-    public function resolveTask4Waktu(string $noRawat): string
-    {
-        $sql = "SELECT diterima FROM mutasi_berkas WHERE no_rawat = :nr AND diterima <> '0000-00-00 00:00:00' LIMIT 1";
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['nr' => $noRawat]);
-        $row = $stmt->fetch();
-        return $row['diterima'] ?? '';
-    }
 
-    /**
-     * Get task 5 waktu from pemeriksaan_ralan.
-     * Java log line 68: "select concat(pemeriksaan_ralan.tgl_perawatan,' ',pemeriksaan_ralan.jam_rawat)..."
-     */
-    public function resolveTask5Waktu(string $noRawat): string
-    {
-        $sql = "SELECT CONCAT(tgl_perawatan, ' ', jam_rawat) as waktu FROM pemeriksaan_ralan WHERE no_rawat = :nr LIMIT 1";
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['nr' => $noRawat]);
-        $row = $stmt->fetch();
-        return $row['waktu'] ?? '';
-    }
-
-    /**
-     * Get task 6 waktu from resep_obat (prescription created).
-     * Java log line 98: "select concat(resep_obat.tgl_perawatan,' ',resep_obat.jam)..."
-     */
-    public function resolveTask6Waktu(string $noRawat): string
-    {
-        $sql = "SELECT CONCAT(tgl_perawatan, ' ', jam) as waktu FROM resep_obat WHERE tgl_perawatan <> '0000-00-00' AND status = 'ralan' AND no_rawat = :nr LIMIT 1";
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['nr' => $noRawat]);
-        $row = $stmt->fetch();
-        return $row['waktu'] ?? '';
-    }
-
-    /**
-     * Get task 7 waktu from resep_obat (prescription dispensed).
-     * Java log line 103: "select concat(resep_obat.tgl_penyerahan,' ',resep_obat.jam_penyerahan)..."
-     */
-    public function resolveTask7Waktu(string $noRawat): string
-    {
-        $sql = "SELECT CONCAT(tgl_penyerahan, ' ', jam_penyerahan) as waktu FROM resep_obat WHERE status = 'ralan' AND no_rawat = :nr AND CONCAT(tgl_penyerahan, ' ', jam_penyerahan) <> '0000-00-00 00:00:00' LIMIT 1";
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['nr' => $noRawat]);
-        $row = $stmt->fetch();
-        return $row['waktu'] ?? '';
-    }
 
 
     /**
