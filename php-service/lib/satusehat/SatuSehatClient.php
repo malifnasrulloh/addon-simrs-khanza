@@ -161,9 +161,18 @@ class SatuSehatClient
     }
 
     /**
+     * Send PATCH request (JSON Patch format).
+     * @param array $operations JSON Patch operations, e.g. [['op'=>'replace','path'=>'/status','value'=>'finished']]
+     */
+    public function patch(string $endpoint, array $operations): array
+    {
+        return $this->request('PATCH', $endpoint, $operations, 'application/json-patch+json');
+    }
+
+    /**
      * Core HTTP request method.
      */
-    private function request(string $method, string $endpoint, ?array $payload): array
+    private function request(string $method, string $endpoint, ?array $payload, ?string $contentType = null): array
     {
         $token = $this->getToken();
         if (!$token) {
@@ -178,7 +187,7 @@ class SatuSehatClient
         $url = $this->baseUrl . $endpoint;
         $headers = [
             'Authorization: Bearer ' . $token,
-            'Content-Type: application/json',
+            'Content-Type: ' . ($contentType ?? 'application/json'),
             'Accept: application/json'
         ];
 

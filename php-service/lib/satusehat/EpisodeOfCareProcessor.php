@@ -115,17 +115,19 @@ class SatuSehatEpisodeOfCareProcessor
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created EpisodeOfCare {$idEpisode}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = $result['data']['issue'][0]['details']['text'] 
+                    ?? $result['data']['issue'][0]['diagnostics'] 
+                    ?? $result['message'];
                 
                 // Duplicate Handling Fallback
                 if (stripos($errorMessage, 'found duplicated') !== false || $result['code'] === 409 || $result['code'] === 400) {
-                    $this->log->warning("[PHASE 1] {$noRawat}: Duplicated EpisodeOfCare detected. Searching existing records...");
-                    $idEpisode = $this->resolveDuplicateEpisode($idPasien, $type->code, $noRawat);
+                    $this->log->warning("[PHASE 1] {$noRawat}: Duplicated EpisodeOfCare detected (Rule 10110). Resolving...");
+                    $recoveryResult = $this->resolveDuplicateEpisode($idPasien, $type->code, $noRawat, $p['stts'] ?? '', $payload);
 
-                    if ($idEpisode) {
-                        $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $idEpisode);
+                    if ($recoveryResult) {
+                        $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $recoveryResult);
                         $this->db->updateEocLocalState($noRawat, 'active');
-                        $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered EpisodeOfCare {$idEpisode} from BPJS");
+                        $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered EpisodeOfCare {$recoveryResult}");
                         $this->successCount++;
                     } else {
                         $this->log->error("[PHASE 1] {$noRawat}: ✗ Failed to recover duplicate EpisodeOfCare.");
@@ -198,62 +200,174 @@ class SatuSehatEpisodeOfCareProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to finished");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message']));
                 $this->failCount++;
             }
         }
     }
 
     /**
-     * Resolves a duplicate EpisodeOfCare by searching the Satu Sehat API.
-     * Uses the multi-tiered filtering and sorting algorithm.
+     * Resolves a duplicate EpisodeOfCare using a 2-tier strategy:
+     *
+     * Tier 1: Search OUR organization for active EoC.
+     *   - Found + stts="Batal"       → PATCH cancelled, re-POST
+     *   - Found + stts="Sudah"       → PATCH finished, re-POST
+     *   - Found + period ≤ 1 day     → Reuse existing EoC ID
+     *   - Found + period > 1 day     → PATCH finished, re-POST (stale)
+     *
+     * Tier 2: Search WITHOUT org filter (cross-organization).
+     *   - Found in another org       → PATCH finished, re-POST
+     *
+     * @return string|null The EpisodeOfCare ID on success, null on failure
      */
-    private function resolveDuplicateEpisode(string $idPasien, string $targetTypeCode, string $noRawat): ?string
+    private function resolveDuplicateEpisode(string $idPasien, string $targetTypeCode, string $noRawat, string $stts, array $payload): ?string
     {
-        // Search API for active episodes for this patient
+        // ── Tier 1: Search OUR organization ──────────────────────────────────
+        $this->log->info("[RECOVERY] {$noRawat}: Tier 1 - Searching our organization...");
         $endpoint = "/EpisodeOfCare?patient={$idPasien}&organization={$this->config->orgId}&status=active";
         $result = $this->api->get($endpoint);
 
-        if (!$result['success'] || empty($result['data']['entry'])) {
-            return null;
-        }
+        if ($result['success'] && !empty($result['data']['entry'])) {
+            foreach ($result['data']['entry'] as $entry) {
+                $res = $entry['resource'] ?? [];
+                $resTypeCode = $res['type'][0]['coding'][0]['code'] ?? '';
 
-        $activeCandidates = [];
+                if (($res['status'] ?? '') === 'active' && $resTypeCode === $targetTypeCode) {
+                    $eocId = $res['id'];
+                    $periodStart = $res['period']['start'] ?? null;
 
-        // Tier 1: Filter & Exact Match
-        foreach ($result['data']['entry'] as $entry) {
-            $res = $entry['resource'] ?? [];
-            
-            // Check status and type code
-            $resStatus = $res['status'] ?? '';
-            $resTypeCode = $res['type'][0]['coding'][0]['code'] ?? '';
-            
-            if ($resStatus === 'active' && $resTypeCode === $targetTypeCode) {
-                // Tier 1 Check: Does the identifier match exactly?
-                if (isset($res['identifier']) && is_array($res['identifier'])) {
-                    foreach ($res['identifier'] as $idBlock) {
-                        if (isset($idBlock['value']) && $idBlock['value'] === $noRawat) {
-                            return $res['id']; // 100% exact match!
+                    if ($stts === 'Batal') {
+                        // Patient cancelled → PATCH to cancelled, then re-POST
+                        $this->log->info("[RECOVERY] {$noRawat}: Found our EoC {$eocId}, stts=Batal → PATCH cancelled");
+                        return $this->patchAndRepost($eocId, 'cancelled', $periodStart, $payload, $noRawat);
+                    } elseif ($stts === 'Sudah') {
+                        // Patient finished → PATCH to finished, then re-POST
+                        $this->log->info("[RECOVERY] {$noRawat}: Found our EoC {$eocId}, stts=Sudah → PATCH finished");
+                        return $this->patchAndRepost($eocId, 'finished', $periodStart, $payload, $noRawat);
+                    } else {
+                        // Visit still ongoing - check if stale
+                        $isStale = $this->isPeriodStale($periodStart);
+                        if ($isStale) {
+                            $this->log->info("[RECOVERY] {$noRawat}: Found our stale EoC {$eocId} (period > 1 day) → PATCH finished");
+                            return $this->patchAndRepost($eocId, 'finished', $periodStart, $payload, $noRawat);
+                        } else {
+                            // Legitimately active (same day or recent) → reuse
+                            $this->log->info("[RECOVERY] {$noRawat}: Found our active EoC {$eocId} (recent, stts={$stts}) → Reusing");
+                            return $eocId;
                         }
                     }
                 }
-                
-                // Add to candidates for Tier 2 fallback
-                $activeCandidates[] = $res;
             }
         }
 
-        // Tier 2: Closest Date Match (Newest active episode)
-        if (!empty($activeCandidates)) {
-            usort($activeCandidates, function($a, $b) {
-                $timeA = isset($a['period']['start']) ? strtotime($a['period']['start']) : 0;
-                $timeB = isset($b['period']['start']) ? strtotime($b['period']['start']) : 0;
-                return $timeB <=> $timeA; // Descending (newest first)
-            });
-            
-            return $activeCandidates[0]['id'];
+        // ── Tier 2: Cross-organization search ────────────────────────────────
+        $this->log->info("[RECOVERY] {$noRawat}: Tier 2 - Searching cross-organization...");
+        $endpoint = "/EpisodeOfCare?patient={$idPasien}&status=active";
+        $result = $this->api->get($endpoint);
+
+        if ($result['success'] && !empty($result['data']['entry'])) {
+            foreach ($result['data']['entry'] as $entry) {
+                $res = $entry['resource'] ?? [];
+                $resTypeCode = $res['type'][0]['coding'][0]['code'] ?? '';
+
+                if (($res['status'] ?? '') === 'active' && $resTypeCode === $targetTypeCode) {
+                    $eocId = $res['id'];
+                    $remoteOrg = $res['managingOrganization']['reference'] ?? 'unknown';
+                    $periodStart = $res['period']['start'] ?? null;
+
+                    $this->log->info("[RECOVERY] {$noRawat}: Found cross-org EoC {$eocId} (org: {$remoteOrg}) → PATCH finished");
+                    return $this->patchAndRepost($eocId, 'finished', $periodStart, $payload, $noRawat);
+                }
+            }
         }
 
+        $this->log->error("[RECOVERY] {$noRawat}: No active EpisodeOfCare found in any organization.");
         return null;
     }
+
+    /**
+     * PATCH an existing EpisodeOfCare to a new status, then re-POST the original payload.
+     *
+     * @return string|null The new EpisodeOfCare ID on success, null on failure
+     */
+    private function patchAndRepost(string $eocId, string $newStatus, ?string $periodStart, array $payload, string $noRawat): ?string
+    {
+        // Build PATCH operations
+        $operations = [
+            ['op' => 'replace', 'path' => '/status', 'value' => $newStatus],
+        ];
+
+        // Add period.end for "finished" status with a reasonable value
+        if ($newStatus === 'finished' && $periodStart) {
+            // Set period.end to either:
+            // - The original period.start + 1 day (if stale/cross-org)
+            // - Or "now" if the start is recent enough
+            try {
+                $startDt = new \DateTime($periodStart);
+                $now = new \DateTime('now', new \DateTimeZone('UTC'));
+                
+                // If start is more than 1 day ago, set end to start + 1 day
+                // Otherwise set end to now
+                $diff = $now->diff($startDt);
+                if ($diff->days > 1 || $diff->invert === 1) {
+                    $endDt = (clone $startDt)->modify('+1 day');
+                } else {
+                    $endDt = $now;
+                }
+                $periodEnd = $endDt->format('Y-m-d\TH:i:s+00:00');
+                $operations[] = ['op' => 'replace', 'path' => '/period/end', 'value' => $periodEnd];
+            } catch (\Throwable $e) {
+                $this->log->warning("[RECOVERY] {$noRawat}: Could not calculate period.end: " . $e->getMessage());
+            }
+        }
+
+        // Execute PATCH
+        $patchResult = $this->api->patch("/EpisodeOfCare/{$eocId}", $operations);
+
+        if (!$patchResult['success']) {
+            $patchError = $patchResult['data']['issue'][0]['details']['text']
+                ?? $patchResult['data']['issue'][0]['diagnostics']
+                ?? $patchResult['message'];
+            $this->log->error("[RECOVERY] {$noRawat}: PATCH {$eocId} to '{$newStatus}' failed → {$patchError}");
+            return null;
+        }
+
+        $this->log->info("[RECOVERY] {$noRawat}: ✓ PATCH {$eocId} → {$newStatus}");
+
+        // Re-POST the original payload
+        $this->log->info("[RECOVERY] {$noRawat}: Re-POST /EpisodeOfCare after clearing conflict...");
+        $postResult = $this->api->post('/EpisodeOfCare', $payload);
+
+        if ($postResult['success'] && isset($postResult['data']['id'])) {
+            $newId = $postResult['data']['id'];
+            $this->log->info("[RECOVERY] {$noRawat}: ✓ Re-POST successful → new EpisodeOfCare {$newId}");
+            return $newId;
+        }
+
+        $postError = $postResult['data']['issue'][0]['details']['text']
+            ?? $postResult['data']['issue'][0]['diagnostics']
+            ?? $postResult['message'];
+        $this->log->error("[RECOVERY] {$noRawat}: Re-POST failed → {$postError}");
+        return null;
+    }
+
+    /**
+     * Check if a period.start is older than 1 day (stale).
+     */
+    private function isPeriodStale(?string $periodStart): bool
+    {
+        if (!$periodStart) {
+            return true; // No period.start → treat as stale
+        }
+
+        try {
+            $startDt = new \DateTime($periodStart);
+            $now = new \DateTime('now', new \DateTimeZone('UTC'));
+            $diffHours = ($now->getTimestamp() - $startDt->getTimestamp()) / 3600;
+            return $diffHours > 24;
+        } catch (\Throwable $e) {
+            return true; // Can't parse → treat as stale
+        }
+    }
 }
+
