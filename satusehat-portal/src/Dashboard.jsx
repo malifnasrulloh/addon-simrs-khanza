@@ -1,6 +1,21 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 const API_BASE = window.PORTAL_CONFIG?.API_URL || '/php-service/api_satusehat_portal.php';
+
+const resourcesList = [
+  { id: 'patient', name: 'Patient (NIK -> IHS)' },
+  { id: 'encounter', name: 'Encounter (Visit Registration)' },
+  { id: 'episodeofcare', name: 'Episode Of Care' },
+  { id: 'condition', name: 'Condition (Diagnosis)' },
+  { id: 'observationttv', name: 'Observation TTV (Vitals)' },
+  { id: 'procedure', name: 'Procedure' },
+  { id: 'allergyintolerance', name: 'Allergy Intolerance' },
+  { id: 'immunization', name: 'Immunization' },
+  { id: 'medication', name: 'Medication (Drug Catalog)' },
+  { id: 'medicationrequest', name: 'Medication Request (Prescription)' },
+  { id: 'medicationdispense', name: 'Medication Dispense' },
+  { id: 'medicationstatement', name: 'Medication Statement' },
+];
 
 export default function Dashboard({ token, setToken }) {
   const parseJwt = (t) => {
@@ -17,6 +32,7 @@ export default function Dashboard({ token, setToken }) {
 
   const [activeTab, setActiveTab] = useState('rm');
 
+  // Search States
   const [noRm, setNoRm] = useState('');
   const [nik, setNik] = useState('');
   const [nikIbu, setNikIbu] = useState('');
@@ -32,7 +48,12 @@ export default function Dashboard({ token, setToken }) {
   const [showRawJson, setShowRawJson] = useState(false);
   const [payloadText, setPayloadText] = useState('');
 
-  // Background Batch Sync Dashboard States
+  // Sync Manager States
+  const [selectedResource, setSelectedResource] = useState('patient');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [noRawat, setNoRawat] = useState('');
+  
   const [syncStats, setSyncStats] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [syncLogs, setSyncLogs] = useState([]);
@@ -43,11 +64,22 @@ export default function Dashboard({ token, setToken }) {
 
   const cancelRef = useRef(false);
 
+  useEffect(() => {
+    if (activeTab === 'sync' && role === 'admin') {
+      fetchSyncStats();
+    }
+  }, [selectedResource, activeTab]);
+
   const fetchSyncStats = async () => {
     setLoading(true);
     setError('');
     try {
-      const data = await fetchApi(`${API_BASE}?action=getSyncStats`);
+      let url = `${API_BASE}?action=getSyncStats&resource=${selectedResource}`;
+      if (noRawat) url += `&no_rawat=${encodeURIComponent(noRawat)}`;
+      if (dateFrom) url += `&dateFrom=${dateFrom}`;
+      if (dateTo) url += `&dateTo=${dateTo}`;
+
+      const data = await fetchApi(url);
       if (data.success) {
         setSyncStats(data.stats);
       }
@@ -67,73 +99,143 @@ export default function Dashboard({ token, setToken }) {
     setSyncedCount(0);
     setFailedCount(0);
 
-    const initialLogs = [{ time: new Date().toLocaleTimeString(), text: 'Starting batch sync process...', type: 'info' }];
+    const initialLogs = [{ time: new Date().toLocaleTimeString(), text: `Starting sync process for resource: ${selectedResource}...`, type: 'info' }];
     setSyncLogs(initialLogs);
 
-    let currentUnmapped = syncStats?.unmapped_patients || 0;
-    if (currentUnmapped === 0) {
-      setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: 'No unmapped patients found. Database is fully in sync!', type: 'success' }]);
+    // If resource is sequential workflow sync
+    if (selectedResource === 'workflow') {
+      if (!noRawat) {
+        setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: 'ERROR: no_rawat parameter is strictly required for sequential workflow sync.', type: 'error' }]);
+        setSyncing(false);
+        return;
+      }
+      try {
+        setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: `Triggering sequential workflow sync for Rawat Record: ${noRawat}`, type: 'info' }]);
+        const response = await fetchApi(`${API_BASE}?action=triggerBatchSync&resource=workflow&no_rawat=${encodeURIComponent(noRawat)}`, {
+          method: 'POST'
+        });
+        if (response.success && response.workflow) {
+          const wf = response.workflow;
+          const logs = [];
+          Object.keys(wf).forEach(step => {
+            const res = wf[step];
+            const timeStr = new Date().toLocaleTimeString();
+            if (res.status === 'success' || res.status === 'already_mapped' || res.status === 'processed') {
+              logs.push({
+                time: timeStr,
+                text: `SUCCESS: Step [${step}] Completed. Status: ${res.status}. IHS: ${res.ihs || ''}`,
+                type: 'success'
+              });
+            } else {
+              logs.push({
+                time: timeStr,
+                text: `FAILED: Step [${step}] failed. Message: ${res.message || 'Error occurred'}`,
+                type: 'error'
+              });
+            }
+          });
+          setSyncLogs(prev => [...prev, ...logs]);
+          setSyncProgress(100);
+        } else {
+          throw new Error(response.message || 'Workflow synchronization returned failure status.');
+        }
+      } catch (err) {
+        setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: `ERROR: ${err.message}`, type: 'error' }]);
+      } finally {
+        setSyncing(false);
+      }
+      return;
+    }
+
+    let currentPending = syncStats?.pending ?? 0;
+    if (noRawat) {
+      currentPending = syncStats?.pending ?? 1;
+    }
+    
+    if (currentPending === 0) {
+      setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: 'No pending records found to synchronize.', type: 'success' }]);
       setSyncing(false);
       return;
     }
 
     let processed = 0;
-    const batchLimit = 5; // Chunk size
+    const batchLimit = 5;
 
-    while (processed < currentUnmapped) {
+    while (processed < currentPending || noRawat) {
       if (cancelRef.current) {
         setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: 'Batch sync process cancelled by administrator.', type: 'error' }]);
         break;
       }
 
       try {
-        const response = await fetchApi(`${API_BASE}?action=triggerBatchSync&limit=${batchLimit}`, {
-          method: 'POST'
-        });
+        let url = `${API_BASE}?action=triggerBatchSync&resource=${selectedResource}&limit=${batchLimit}`;
+        if (noRawat) url += `&no_rawat=${encodeURIComponent(noRawat)}`;
+        if (dateFrom) url += `&dateFrom=${dateFrom}`;
+        if (dateTo) url += `&dateTo=${dateTo}`;
 
-        if (response.success && response.synced) {
-          const syncedList = response.synced;
-          if (syncedList.length === 0) {
-            setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: 'All available pending records have been processed.', type: 'success' }]);
-            break;
-          }
+        const response = await fetchApi(url, { method: 'POST' });
 
+        if (response.success) {
+          const syncedList = response.synced || [];
+          const summary = response.summary || {};
+          
           let batchSuccess = 0;
           let batchFail = 0;
           const newLogs = [];
+          const timeStr = new Date().toLocaleTimeString();
 
-          syncedList.forEach(item => {
-            const timeStr = new Date().toLocaleTimeString();
-            if (item.status === 'success') {
-              batchSuccess++;
-              newLogs.push({
-                time: timeStr,
-                text: `SUCCESS: Mapped ${item.name} (RM: ${item.rm}) to IHS ${item.ihs}`,
-                type: 'success'
-              });
-            } else {
-              batchFail++;
-              newLogs.push({
-                time: timeStr,
-                text: `FAILED: NIK ${item.nik} for ${item.name} (${item.message || 'Not found'})`,
-                type: 'error'
+          if (selectedResource === 'patient') {
+            if (syncedList.length === 0) {
+              setSyncLogs(prev => [...prev, { time: timeStr, text: 'No records were mapped in this run.', type: 'info' }]);
+              break;
+            }
+            syncedList.forEach(item => {
+              if (item.status === 'success') {
+                batchSuccess++;
+                newLogs.push({ time: timeStr, text: `SUCCESS: Mapped ${item.name} (RM: ${item.rm}) to IHS ${item.ihs}`, type: 'success' });
+              } else {
+                batchFail++;
+                newLogs.push({ time: timeStr, text: `FAILED: Patient ${item.name} (RM: ${item.rm}) - ${item.message || 'Not Found'}`, type: 'error' });
+              }
+            });
+            processed += syncedList.length;
+          } else {
+            // General Clinical Processors return a summary object
+            const success = summary.success ?? 0;
+            const failed = summary.failed ?? 0;
+            batchSuccess += success;
+            batchFail += failed;
+            
+            newLogs.push({
+              time: timeStr,
+              text: `Processed Batch: ${success} Synced Successfully, ${failed} Failed.`,
+              type: success > 0 ? 'success' : 'info'
+            });
+
+            if (summary.errors && summary.errors.length > 0) {
+              summary.errors.forEach(err => {
+                newLogs.push({ time: timeStr, text: `ERROR Details: ${err}`, type: 'error' });
               });
             }
-          });
+
+            processed += batchLimit;
+            if (success === 0 && failed === 0) {
+              setSyncLogs(prev => [...prev, { time: timeStr, text: 'Batch sync execution completed. No more pending items found.', type: 'success' }]);
+              break;
+            }
+          }
 
           setSyncedCount(prev => prev + batchSuccess);
           setFailedCount(prev => prev + batchFail);
           setSyncLogs(prev => [...prev, ...newLogs]);
 
-          processed += syncedList.length;
-          const pct = Math.min(100, Math.round((processed / currentUnmapped) * 100));
+          const pct = noRawat ? 100 : Math.min(100, Math.round((processed / currentPending) * 100));
           setSyncProgress(pct);
 
-          setSyncStats(prev => ({
-            ...prev,
-            mapped_patients: prev.mapped_patients + batchSuccess,
-            unmapped_patients: Math.max(0, prev.unmapped_patients - batchSuccess)
-          }));
+          // Refresh statistics
+          fetchSyncStats();
+
+          if (noRawat) break; // Single record sync is done
         } else {
           throw new Error(response.message || "Failed to sync batch");
         }
@@ -142,8 +244,7 @@ export default function Dashboard({ token, setToken }) {
         break;
       }
 
-      // Brief throttle delay between dynamic chunks
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 600));
     }
 
     setSyncing(false);
@@ -183,7 +284,7 @@ export default function Dashboard({ token, setToken }) {
     try {
       if (activeTab === 'rm') {
         const data = await fetchApi(`${API_BASE}?action=searchLocal&no_rm=${noRm}`);
-        setResult(data.data); // data.data contains nm_pasien, nik, alamat, jk, etc.
+        setResult(data.data);
       } else {
         const query = activeTab === 'nik' ? `&nik=${nik}` : `&nik_ibu=${nikIbu}&birthdate=${birthdate}`;
         const data = await fetchApi(`${API_BASE}?action=searchSatuSehat${query}`);
@@ -203,7 +304,6 @@ export default function Dashboard({ token, setToken }) {
   };
 
   const mapLocalToFHIR = (patientData) => {
-    // Dynamic FHIR R4 mapping from SIMRS Khanza local table
     return {
       resourceType: "Patient",
       meta: { profile: ["https://fhir.kemkes.go.id/r4/StructureDefinition/Patient"] },
@@ -265,11 +365,9 @@ export default function Dashboard({ token, setToken }) {
     try {
       let localPatient = null;
 
-      // If we searched by RM, result holds the local patient details
       if (activeTab === 'rm' && result) {
         localPatient = result;
       } else {
-        // Search local database by NIK or NIK Ibu to fetch their rich details!
         const searchNik = activeTab === 'nik' ? nik : nikIbu;
         if (searchNik) {
           try {
@@ -287,7 +385,6 @@ export default function Dashboard({ token, setToken }) {
       if (localPatient) {
         payloadObj = mapLocalToFHIR(localPatient);
       } else {
-        // Basic fallback if patient is not in the local database at all
         payloadObj = {
           resourceType: "Patient",
           meta: { profile: ["https://fhir.kemkes.go.id/r4/StructureDefinition/Patient"] },
@@ -329,7 +426,6 @@ export default function Dashboard({ token, setToken }) {
       setResult(data.data);
       setShowModal(false);
       setCreateMode(false);
-      // Change tab to NIK to show result directly from Satu Sehat structure
       setActiveTab('nik');
     } catch (err) {
       setError(err.message);
@@ -341,7 +437,7 @@ export default function Dashboard({ token, setToken }) {
   return (
     <div className="container">
       <div className="header glass" style={{ padding: '1.5rem 2rem', marginBottom: '2rem' }}>
-        <h1>Patient SatuSehat Portal</h1>
+        <h1>SatuSehat Integration Portal</h1>
         <button className="logout-btn" onClick={handleLogout}>Logout</button>
       </div>
 
@@ -351,7 +447,7 @@ export default function Dashboard({ token, setToken }) {
           <button className={`tab ${activeTab === 'nik' ? 'active' : ''}`} onClick={() => { setActiveTab('nik'); setResult(null); setError(''); }}>NIK</button>
           <button className={`tab ${activeTab === 'nik_ibu' ? 'active' : ''}`} onClick={() => { setActiveTab('nik_ibu'); setResult(null); setError(''); }}>NIK Ibu (Bayi)</button>
           {role === 'admin' && (
-            <button className={`tab ${activeTab === 'sync' ? 'active' : ''}`} onClick={() => { setActiveTab('sync'); setResult(null); setError(''); fetchSyncStats(); }}>Batch Sync Manager</button>
+            <button className={`tab ${activeTab === 'sync' ? 'active' : ''}`} onClick={() => { setActiveTab('sync'); setResult(null); setError(''); fetchSyncStats(); }}>SatuSehat Sync Engine</button>
           )}
         </div>
 
@@ -392,51 +488,92 @@ export default function Dashboard({ token, setToken }) {
 
         {activeTab === 'sync' && (
           <div className="sync-dashboard-container" style={{ textAlign: 'left' }}>
-            <h2 style={{ marginTop: 0, color: 'var(--primary-color)' }}>Background Patient IHS Synchronization</h2>
+            <h2 style={{ marginTop: 0, color: 'var(--primary-color)' }}>Clinical Resource Synchronization</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-              Directly monitor mapping coverage and run visual throttled batches to complete missing SatuSehat IHS patient identifiers.
+              Orchestrate batch transfers or execute sequence-based patient visits workflows directly into SatuSehat production endpoint.
             </p>
 
-            {syncStats && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
-                <div style={{ padding: '1rem', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>TOTAL VALID PATIENTS</div>
-                  <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#cdd6f4' }}>{syncStats.total_patients}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.5fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+              <div className="form-group">
+                <label>Select Target Resource / Flow</label>
+                <select 
+                  className="form-control" 
+                  style={{ background: 'rgba(22, 18, 38, 0.9)', color: '#fff', border: '1px solid var(--border-color)' }}
+                  value={selectedResource}
+                  onChange={e => {
+                    setSelectedResource(e.target.value);
+                    setSyncStats(null);
+                  }}
+                >
+                  {resourcesList.map(res => (
+                    <option key={res.id} value={res.id}>{res.name}</option>
+                  ))}
+                  <option value="workflow">🔥 Sequential Workflow Sync (Encounter Sequence)</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>Target Single Visit (no_rawat)</label>
+                <input 
+                  type="text" 
+                  className="form-control" 
+                  placeholder="e.g. 2026/05/25/000001"
+                  style={{ background: 'rgba(22, 18, 38, 0.9)', color: '#fff', border: '1px solid var(--border-color)' }}
+                  value={noRawat}
+                  onChange={e => setNoRawat(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
+                <button className="btn btn-secondary" onClick={fetchSyncStats} style={{ height: '42px' }}>
+                  Load Stats
+                </button>
+              </div>
+            </div>
+
+            {selectedResource !== 'workflow' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr', gap: '1rem', marginBottom: '1.5rem', background: 'rgba(255,255,255,0.02)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>Date From</label>
+                  <input type="date" className="form-control" style={{ background: 'rgba(22, 18, 38, 0.9)', color: '#fff', border: '1px solid var(--border-color)' }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
                 </div>
-                <div style={{ padding: '1rem', background: 'rgba(74, 222, 128, 0.08)', borderRadius: '8px', border: '1px solid rgba(74, 222, 128, 0.2)' }}>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>MAPPED TO IHS</div>
-                  <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#4ade80' }}>{syncStats.mapped_patients}</div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>Date To</label>
+                  <input type="date" className="form-control" style={{ background: 'rgba(22, 18, 38, 0.9)', color: '#fff', border: '1px solid var(--border-color)' }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
                 </div>
-                <div style={{ padding: '1rem', background: 'rgba(248, 113, 113, 0.08)', borderRadius: '8px', border: '1px solid rgba(248, 113, 113, 0.2)' }}>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>UNMAPPED RECORDS</div>
-                  <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#f87171' }}>{syncStats.unmapped_patients}</div>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
+                  <button className="btn btn-secondary" onClick={() => { setDateFrom(''); setDateTo(''); }} style={{ height: '42px', fontSize: '0.85rem' }}>
+                    Use Config Defaults
+                  </button>
                 </div>
               </div>
             )}
 
-            {syncStats && (
-              <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)', marginBottom: '1.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.5rem', color: 'var(--text-muted)' }}>
-                  <span>Overall Mapping Coverage</span>
-                  <span style={{ fontWeight: 'bold', color: 'var(--primary-color)' }}>
-                    {syncStats.total_patients > 0 ? Math.round((syncStats.mapped_patients / syncStats.total_patients) * 100) : 0}%
-                  </span>
+            {syncStats && selectedResource !== 'workflow' && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div style={{ padding: '1rem', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>TOTAL RECORDS</div>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#cdd6f4' }}>{syncStats.total ?? 0}</div>
                 </div>
-                <div style={{ height: '8px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '4px', overflow: 'hidden' }}>
-                  <div style={{
-                    height: '100%',
-                    background: 'linear-gradient(90deg, var(--primary-color), #4ade80)',
-                    width: `${syncStats.total_patients > 0 ? (syncStats.mapped_patients / syncStats.total_patients) * 100 : 0}%`,
-                    transition: 'width 0.5s ease'
-                  }}></div>
+                <div style={{ padding: '1rem', background: 'rgba(74, 222, 128, 0.08)', borderRadius: '8px', border: '1px solid rgba(74, 222, 128, 0.2)' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>SYNCED</div>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4ade80' }}>{syncStats.synced ?? 0}</div>
+                </div>
+                <div style={{ padding: '1rem', background: 'rgba(251, 191, 36, 0.08)', borderRadius: '8px', border: '1px solid rgba(251, 191, 36, 0.2)' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>PENDING</div>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#fbbf24' }}>{syncStats.pending ?? 0}</div>
+                </div>
+                <div style={{ padding: '1rem', background: 'rgba(248, 113, 113, 0.08)', borderRadius: '8px', border: '1px solid rgba(248, 113, 113, 0.2)' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>BLOCKED / UNMAPPED</div>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#f87171' }}>{(syncStats.blocked ?? 0) + (syncStats.unmapped ?? 0) + (syncStats.unpaid ?? 0)}</div>
                 </div>
               </div>
             )}
 
             <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', alignItems: 'center' }}>
               {!syncing ? (
-                <button className="btn" style={{ width: 'auto' }} onClick={handleStartSync} disabled={loading || (syncStats && syncStats.unmapped_patients === 0)}>
-                  Start Batch Sync
+                <button className="btn" style={{ width: 'auto' }} onClick={handleStartSync} disabled={loading}>
+                  {selectedResource === 'workflow' ? 'Run Sequential Workflow' : (noRawat ? 'Sync Single Rawat' : 'Start Batch Sync')}
                 </button>
               ) : (
                 <button className="btn" style={{ width: 'auto', background: 'var(--danger)' }} onClick={handleCancelSync}>
@@ -444,9 +581,9 @@ export default function Dashboard({ token, setToken }) {
                 </button>
               )}
 
-              {syncing && (
+              {syncing && selectedResource !== 'workflow' && (
                 <div style={{ display: 'flex', gap: '1rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                  <span>Synced: <strong style={{ color: '#4ade80' }}>{syncedCount}</strong></span>
+                  <span>Success/Updated: <strong style={{ color: '#4ade80' }}>{syncedCount}</strong></span>
                   <span>Failed: <strong style={{ color: '#f87171' }}>{failedCount}</strong></span>
                 </div>
               )}
@@ -455,7 +592,7 @@ export default function Dashboard({ token, setToken }) {
             {syncing && (
               <div style={{ marginBottom: '1.5rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '0.3rem', color: 'var(--text-muted)' }}>
-                  <span>Batch Syncing Progress...</span>
+                  <span>Syncing Progress...</span>
                   <span>{syncProgress}%</span>
                 </div>
                 <div style={{ height: '6px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '3px', overflow: 'hidden' }}>
@@ -468,22 +605,23 @@ export default function Dashboard({ token, setToken }) {
               <div style={{ fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '0.5rem', color: 'var(--text-muted)' }}>Activity Log Console</div>
               <div
                 style={{
-                  height: '250px',
-                  background: '#1e1e2e',
+                  height: '280px',
+                  background: '#0d0b18',
                   border: '1px solid var(--border-color)',
-                  borderRadius: '6px',
+                  borderRadius: '12px',
                   padding: '1rem',
                   fontFamily: 'monospace',
                   fontSize: '0.8rem',
                   overflowY: 'auto',
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: '0.3rem'
+                  gap: '0.3rem',
+                  boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.8)'
                 }}
                 ref={el => { if (el) el.scrollTop = el.scrollHeight; }}
               >
                 {syncLogs.length === 0 ? (
-                  <span style={{ color: '#585b70' }}>Console inactive. Click 'Start Batch Sync' to trigger.</span>
+                  <span style={{ color: '#585b70' }}>Console inactive. Configure options and click sync.</span>
                 ) : (
                   syncLogs.map((log, index) => (
                     <div key={index} style={{ display: 'flex', gap: '0.5rem' }}>
@@ -612,7 +750,7 @@ export default function Dashboard({ token, setToken }) {
       {/* Confirmation Modal */}
       {showModal && (
         <div className="modal-overlay">
-          <div className="glass modal-content">
+          <div className="glass modal-content" style={{ background: 'rgba(11, 10, 22, 0.95)', border: '1px solid var(--border-color)' }}>
             <h2 style={{ marginTop: 0, color: 'var(--primary-color)' }}>Confirm FHIR Payload</h2>
             <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
               Please review the auto-generated JSON payload mapped from your SIMRS database. You can manually edit it before submitting.
@@ -620,7 +758,7 @@ export default function Dashboard({ token, setToken }) {
 
             <textarea
               className="form-control"
-              style={{ height: '300px', fontFamily: 'monospace', fontSize: '0.85rem', marginBottom: '1rem' }}
+              style={{ height: '300px', fontFamily: 'monospace', fontSize: '0.85rem', marginBottom: '1rem', background: '#0d0b18', color: '#cdd6f4', border: '1px solid var(--border-color)' }}
               value={payloadText}
               onChange={(e) => setPayloadText(e.target.value)}
             />
