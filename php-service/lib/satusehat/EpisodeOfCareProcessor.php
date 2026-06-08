@@ -73,9 +73,21 @@ class SatuSehatEpisodeOfCareProcessor
 
         $this->log->info("[PHASE 1] Found " . count($patients) . " potential diagnosis record(s) to check.");
 
+        $processedNoRawat = [];
+
         foreach ($patients as $p) {
             $noRawat = $p['no_rawat'];
             $kdPenyakit = $p['kd_penyakit'];
+
+            // Skip if already processed in this batch or exists in database
+            if (isset($processedNoRawat[$noRawat])) {
+                continue;
+            }
+            $existingId = $this->db->getSavedEpisodeOfCareId($noRawat);
+            if ($existingId) {
+                $processedNoRawat[$noRawat] = $existingId;
+                continue;
+            }
 
             // 1. Detect Episode Type
             $type = EpisodeOfCareType::fromIcdCode($kdPenyakit);
@@ -114,14 +126,15 @@ class SatuSehatEpisodeOfCareProcessor
                 $this->db->updateEocLocalState($noRawat, 'active');
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created EpisodeOfCare {$idEpisode}");
                 $this->successCount++;
+                $processedNoRawat[$noRawat] = $idEpisode;
             } else {
                 $errorMessage = $result['data']['issue'][0]['details']['text'] 
                     ?? $result['data']['issue'][0]['diagnostics'] 
                     ?? $result['message'];
                 
                 // Duplicate Handling Fallback
-                if (stripos($errorMessage, 'found duplicated') !== false || $result['code'] === 409 || $result['code'] === 400) {
-                    $this->log->warning("[PHASE 1] {$noRawat}: Duplicated EpisodeOfCare detected (Rule 10110). Resolving...");
+                if (stripos($errorMessage, 'found duplicated') !== false || stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                    $this->log->warning("[PHASE 1] {$noRawat}: Duplicated EpisodeOfCare detected (Rule 10110/20002). Resolving...");
                     $recoveryResult = $this->resolveDuplicateEpisode($idPasien, $type->code, $noRawat, $p['stts'] ?? '', $payload);
 
                     if ($recoveryResult) {
@@ -129,6 +142,7 @@ class SatuSehatEpisodeOfCareProcessor
                         $this->db->updateEocLocalState($noRawat, 'active');
                         $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered EpisodeOfCare {$recoveryResult}");
                         $this->successCount++;
+                        $processedNoRawat[$noRawat] = $recoveryResult;
                     } else {
                         $this->log->error("[PHASE 1] {$noRawat}: ✗ Failed to recover duplicate EpisodeOfCare.");
                         $this->failCount++;
@@ -154,9 +168,17 @@ class SatuSehatEpisodeOfCareProcessor
 
         $this->log->info("[PHASE 2] Found " . count($patients) . " patient(s) to set finished.");
 
+        $processedNoRawat = [];
+
         foreach ($patients as $p) {
             $noRawat = $p['no_rawat'];
             $kdPenyakit = $p['kd_penyakit'];
+
+            if (isset($processedNoRawat[$noRawat])) {
+                continue;
+            }
+            $processedNoRawat[$noRawat] = true;
+
             $localState = $this->db->getEocLocalState($noRawat);
 
             if ($localState === 'finished') {
@@ -207,7 +229,10 @@ class SatuSehatEpisodeOfCareProcessor
     }
 
     /**
-     * Resolves a duplicate EpisodeOfCare using a 2-tier strategy:
+     * Resolves a duplicate EpisodeOfCare using a 3-tier strategy:
+     *
+     * Tier 0: Search our organization by identifier (no_rawat).
+     *   - Found                      → Reuse existing ID, PATCH to target status if needed.
      *
      * Tier 1: Search OUR organization for active EoC.
      *   - Found + stts="Batal"       → PATCH cancelled, re-POST
@@ -222,6 +247,65 @@ class SatuSehatEpisodeOfCareProcessor
      */
     private function resolveDuplicateEpisode(string $idPasien, string $targetTypeCode, string $noRawat, string $stts, array $payload): ?string
     {
+        // ── Tier 0: Search by identifier (no_rawat) ──────────────────────────
+        $this->log->info("[RECOVERY] {$noRawat}: Tier 0 - Searching by identifier...");
+        $identifierSystem = "http://sys-ids.kemkes.go.id/episode-of-care/" . $this->config->orgId;
+        $endpoint = "/EpisodeOfCare?identifier=" . urlencode($identifierSystem . "|" . $noRawat);
+        $result = $this->api->get($endpoint);
+
+        if ($result['success'] && !empty($result['data']['entry'])) {
+            $entry = $result['data']['entry'][0]['resource'] ?? [];
+            $eocId = $entry['id'] ?? null;
+            if ($eocId) {
+                $currentStatus = $entry['status'] ?? '';
+                $this->log->info("[RECOVERY] {$noRawat}: Found existing EoC {$eocId} with status '{$currentStatus}' via identifier search.");
+
+                // Determine target status based on stts
+                $targetStatus = 'active';
+                if ($stts === 'Batal') {
+                    $targetStatus = 'cancelled';
+                } elseif ($stts === 'Sudah') {
+                    $targetStatus = 'finished';
+                }
+
+                if ($currentStatus !== $targetStatus) {
+                    $this->log->info("[RECOVERY] {$noRawat}: Status mismatch (current: {$currentStatus}, target: {$targetStatus}) → PATCHing...");
+                    $operations = [
+                        ['op' => 'replace', 'path' => '/status', 'value' => $targetStatus],
+                    ];
+                    if ($targetStatus === 'finished') {
+                        $periodStart = $entry['period']['start'] ?? null;
+                        if ($periodStart) {
+                            try {
+                                $startDt = new \DateTime($periodStart);
+                                $now = new \DateTime('now', new \DateTimeZone('UTC'));
+                                $diff = $now->diff($startDt);
+                                if ($diff->days > 1 || $diff->invert === 1) {
+                                    $endDt = (clone $startDt)->modify('+1 day');
+                                } else {
+                                    $endDt = $now;
+                                }
+                                $periodEnd = $endDt->format('Y-m-d\TH:i:s+00:00');
+                                $operations[] = ['op' => 'replace', 'path' => '/period/end', 'value' => $periodEnd];
+                            } catch (\Throwable $e) {
+                                $this->log->warning("[RECOVERY] {$noRawat}: Could not calculate period.end: " . $e->getMessage());
+                            }
+                        }
+                    }
+                    $patchResult = $this->api->patch("/EpisodeOfCare/{$eocId}", $operations);
+                    if ($patchResult['success']) {
+                        $this->log->info("[RECOVERY] {$noRawat}: ✓ PATCH {$eocId} → {$targetStatus}");
+                    } else {
+                        $patchError = $patchResult['data']['issue'][0]['details']['text']
+                            ?? $patchResult['data']['issue'][0]['diagnostics']
+                            ?? $patchResult['message'];
+                        $this->log->error("[RECOVERY] {$noRawat}: PATCH {$eocId} failed → {$patchError}");
+                    }
+                }
+                return $eocId;
+            }
+        }
+
         // ── Tier 1: Search OUR organization ──────────────────────────────────
         $this->log->info("[RECOVERY] {$noRawat}: Tier 1 - Searching our organization...");
         $endpoint = "/EpisodeOfCare?patient={$idPasien}&organization={$this->config->orgId}&status=active";

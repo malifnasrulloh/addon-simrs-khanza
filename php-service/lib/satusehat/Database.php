@@ -440,6 +440,15 @@ class SatuSehatDatabase
         ]);
     }
 
+    public function getSavedEpisodeOfCareId(string $noRawat): ?string
+    {
+        $sql = "SELECT id_episode_of_care FROM satu_sehat_episode_of_care WHERE no_rawat = :nr LIMIT 1";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['id_episode_of_care'] : null;
+    }
+
     // ─── CONDITION STATE TRACKING ──────────────────────────────────────────────
 
     public function getConditionLocalState(string $noRawat, string $kdPenyakit): ?string
