@@ -788,8 +788,20 @@ if ($action === 'triggerBatchSync' && $method === 'POST') {
                 ");
                 $stmt->execute(['nr' => $noRawat]);
                 $patient = $stmt->fetch(PDO::FETCH_ASSOC);
+
                 if (!$patient) {
-                    jsonResponse(['success' => false, 'message' => 'No patient found for rawat record.'], 404);
+                    $stmt = $pdo->prepare("
+                        SELECT p.no_ktp as nik, p.nm_pasien, p.no_rkm_medis 
+                        FROM pasien p
+                        WHERE p.no_ktp = :nik OR p.no_rkm_medis = :rm
+                        LIMIT 1
+                    ");
+                    $stmt->execute(['nik' => $noRawat, 'rm' => $noRawat]);
+                    $patient = $stmt->fetch(PDO::FETCH_ASSOC);
+                }
+
+                if (!$patient) {
+                    jsonResponse(['success' => false, 'message' => 'No patient found for identifier.'], 404);
                 }
                 
                 $nik = $patient['nik'];
@@ -901,6 +913,10 @@ if ($action === 'triggerBatchSync' && $method === 'POST') {
         } elseif ($map['method_type'] === 'medication') {
             $active = $db->fetchPendingMedicationActive();
             $update = $db->fetchPendingMedicationUpdate();
+            if ($noRawat) {
+                $active = array_values(array_filter($active, function($r) use ($noRawat) { return $r['kode_brng'] === $noRawat; }));
+                $update = array_values(array_filter($update, function($r) use ($noRawat) { return $r['kode_brng'] === $noRawat; }));
+            }
             $stats = $processor->run(array_slice($active, 0, $limit), array_slice($update, 0, $limit));
         } else {
             $type = $map['method_type'];
@@ -952,6 +968,453 @@ if ($action === 'triggerBatchSync' && $method === 'POST') {
             'success' => true,
             'resource' => $resource,
             'summary' => $stats
+        ]);
+
+    } catch (Exception $e) {
+        jsonResponse(['success' => false, 'message' => $e->getMessage()], 500);
+    }
+}
+
+if ($action === 'getPendingRecords' && $method === 'GET') {
+    if ($userRole !== 'admin') {
+        jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);
+    }
+
+    $resource = $_GET['resource'] ?? 'patient';
+    $statusFilter = $_GET['status'] ?? 'all';
+    $search = $_GET['search'] ?? '';
+    $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 20;
+    if ($page <= 0) $page = 1;
+    if ($limit <= 0 || $limit > 100) $limit = 20;
+    $offset = ($page - 1) * $limit;
+
+    // Resolve dates
+    $dateFrom = $_GET['dateFrom'] ?? null;
+    $dateTo = $_GET['dateTo'] ?? null;
+    if (!$dateFrom || !$dateTo) {
+        if ($config->lookbackDays > 0) {
+            $dateTo = date('Y-m-d', strtotime('-1 day'));
+            $dateFrom = date('Y-m-d', strtotime('-' . $config->lookbackDays . ' days', strtotime(date('Y-m-d'))));
+        } else {
+            $dateFrom = $config->dateFrom;
+            $dateTo = $config->dateTo;
+        }
+    }
+
+    try {
+        $sql = "";
+        $params = [];
+
+        switch (strtolower($resource)) {
+            case 'patient':
+                $sql = "
+                    SELECT 
+                        p.no_ktp as id,
+                        NULL as no_rawat,
+                        p.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        p.tgl_lahir as date,
+                        p.alamat as details,
+                        IF(ssp.ihspasien IS NOT NULL, 'synced', 'pending') as status,
+                        ssp.ihspasien as ihs_id
+                    FROM pasien p
+                    LEFT JOIN satu_sehat_ihs_patient ssp ON ssp.nikpasien = p.no_ktp
+                    WHERE p.no_ktp REGEXP '^[0-9]{16}$'
+                ";
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR p.no_ktp LIKE :search OR p.no_rkm_medis LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'encounter':
+                $sql = "
+                    SELECT 
+                        rp.no_rawat as id,
+                        rp.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        rp.tgl_registrasi as date,
+                        pol.nm_poli as details,
+                        (CASE 
+                            WHEN sse.id_encounter IS NOT NULL THEN 'synced'
+                            WHEN rp.status_bayar = 'Belum Bayar' THEN 'blocked'
+                            WHEN smlr.id_lokasi_satusehat IS NULL THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                         sse.id_encounter as ihs_id
+                    FROM reg_periksa rp
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
+                    LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR rp.no_rawat LIKE :search OR p.no_rkm_medis LIKE :search OR p.no_ktp LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'episodeofcare':
+            case 'episode_of_care':
+                $sql = "
+                    SELECT 
+                        CONCAT(dp.no_rawat, '-', dp.kd_penyakit, '-', dp.status) as id,
+                        dp.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        rp.tgl_registrasi as date,
+                        py.nm_penyakit as details,
+                        (CASE 
+                            WHEN sseoc.id_episode_of_care IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                         sseoc.id_episode_of_care as ihs_id
+                    FROM diagnosa_pasien dp
+                    INNER JOIN reg_periksa rp ON dp.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    INNER JOIN penyakit py ON dp.kd_penyakit = py.kd_penyakit
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_episode_of_care sseoc ON sseoc.no_rawat = rp.no_rawat
+                    WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR dp.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR py.nm_penyakit LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'condition':
+                $sql = "
+                    SELECT 
+                        CONCAT(dp.no_rawat, '-', dp.kd_penyakit, '-', dp.status) as id,
+                        dp.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        rp.tgl_registrasi as date,
+                        py.nm_penyakit as details,
+                        (CASE 
+                            WHEN ssc.id_condition IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                         ssc.id_condition as ihs_id
+                    FROM diagnosa_pasien dp
+                    INNER JOIN reg_periksa rp ON dp.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    INNER JOIN penyakit py ON dp.kd_penyakit = py.kd_penyakit
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = dp.no_rawat AND ssc.kd_penyakit = dp.kd_penyakit AND ssc.status = dp.status
+                    WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR dp.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR py.nm_penyakit LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'observationttv':
+                $sql = "
+                    SELECT 
+                        CONCAT(pr.no_rawat, '-', pr.tgl_perawatan, '-', pr.jam_rawat) as id,
+                        pr.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pr.tgl_perawatan as date,
+                        CONCAT('Suhu: ', pr.suhu_tubuh, ', Tensi: ', pr.tensi) as details,
+                        (CASE 
+                            WHEN sso.id_observation IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                         sso.id_observation as ihs_id
+                    FROM pemeriksaan_ralan pr
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_observationttvsuhu sso ON sso.no_rawat = pr.no_rawat AND sso.tgl_perawatan = pr.tgl_perawatan AND sso.jam_rawat = pr.jam_rawat
+                    WHERE pr.tgl_perawatan BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pr.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'procedure':
+                $sql = "
+                    SELECT 
+                        CONCAT(pp.no_rawat, '-', pp.kode) as id,
+                        pp.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        rp.tgl_registrasi as date,
+                        CONCAT(pp.kode, ' - ', icd.deskripsi_panjang) as details,
+                        (CASE 
+                            WHEN ssp.id_procedure IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                         ssp.id_procedure as ihs_id
+                    FROM prosedur_pasien pp
+                    INNER JOIN reg_periksa rp ON pp.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    INNER JOIN icd9 icd ON pp.kode = icd.kode
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_procedure ssp ON ssp.no_rawat = pp.no_rawat AND ssp.kode = pp.kode
+                    WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pp.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR icd.deskripsi_panjang LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'allergyintolerance':
+                $sql = "
+                    SELECT 
+                        CONCAT(pr.no_rawat, '-', pr.tgl_perawatan, '-', pr.jam_rawat) as id,
+                        pr.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pr.tgl_perawatan as date,
+                        pr.alergi as details,
+                        (CASE 
+                            WHEN ssai.id_allergy_intolerance IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                         ssai.id_allergy_intolerance as ihs_id
+                    FROM pemeriksaan_ralan pr
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pr.no_rawat AND ssai.tgl_perawatan = pr.tgl_perawatan AND ssai.jam_rawat = pr.jam_rawat
+                    WHERE pr.alergi <> '' AND pr.tgl_perawatan BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pr.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR pr.alergi LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'immunization':
+                $sql = "
+                    SELECT 
+                        CONCAT(dpo.no_rawat, '-', dpo.kode_brng, '-', dpo.tgl_perawatan) as id,
+                        dpo.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        dpo.tgl_perawatan as date,
+                        db.nama_brng as details,
+                        (CASE 
+                            WHEN ssi.id_immunization IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                         ssi.id_immunization as ihs_id
+                    FROM detail_pemberian_obat dpo
+                    INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
+                    INNER JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_immunization ssi ON ssi.no_rawat = dpo.no_rawat AND ssi.kode_brng = dpo.kode_brng AND ssi.tgl_perawatan = dpo.tgl_perawatan
+                    WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR dpo.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR db.nama_brng LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'medication':
+                $sql = "
+                    SELECT 
+                        ssmo.kode_brng as id,
+                        NULL as no_rawat,
+                        NULL as rm,
+                        ssmo.obat_display as patient_name,
+                        ssmo.obat_code as nik,
+                        NULL as date,
+                        ssmo.form_display as details,
+                        IF(ssm.id_medication IS NOT NULL AND ssm.id_medication <> '', 'synced', 'pending') as status,
+                        ssm.id_medication as ihs_id
+                    FROM satu_sehat_mapping_obat ssmo
+                    INNER JOIN databarang db ON ssmo.kode_brng = db.kode_brng
+                    LEFT JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+                    WHERE 1 = 1
+                ";
+                if ($search) {
+                    $sql .= " AND (ssmo.obat_display LIKE :search OR ssmo.kode_brng LIKE :search OR ssmo.obat_code LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'medicationrequest':
+            case 'medication_request':
+                $sql = "
+                    SELECT 
+                        CONCAT(dpo.no_rawat, '-', dpo.kode_brng, '-', dpo.tgl_perawatan) as id,
+                        dpo.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        dpo.tgl_perawatan as date,
+                        db.nama_brng as details,
+                        (CASE 
+                            WHEN ssmr.id_medication_request IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                         ssmr.id_medication_request as ihs_id
+                    FROM detail_pemberian_obat dpo
+                    INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
+                    INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_medication_request ssmr ON ssmr.no_rawat = dpo.no_rawat AND ssmr.kode_brng = dpo.kode_brng AND ssmr.tgl_perawatan = dpo.tgl_perawatan
+                    WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR dpo.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR db.nama_brng LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'medicationdispense':
+            case 'medication_dispense':
+                $sql = "
+                    SELECT 
+                        CONCAT(dpo.no_rawat, '-', dpo.kode_brng, '-', dpo.tgl_perawatan) as id,
+                        dpo.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        dpo.tgl_perawatan as date,
+                        db.nama_brng as details,
+                        (CASE 
+                            WHEN ssmd.id_medication_dispense IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                         ssmd.id_medication_dispense as ihs_id
+                    FROM detail_pemberian_obat dpo
+                    INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
+                    INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_medication_dispense ssmd ON ssmd.no_rawat = dpo.no_rawat AND ssmd.kode_brng = dpo.kode_brng AND ssmd.tgl_perawatan = dpo.tgl_perawatan
+                    WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR dpo.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR db.nama_brng LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'medicationstatement':
+            case 'medication_statement':
+                $sql = "
+                    SELECT 
+                        CONCAT(dpo.no_rawat, '-', dpo.kode_brng, '-', dpo.tgl_perawatan) as id,
+                        dpo.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        dpo.tgl_perawatan as date,
+                        db.nama_brng as details,
+                        (CASE 
+                            WHEN ssms.id_medication_statement IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                         ssms.id_medication_statement as ihs_id
+                    FROM detail_pemberian_obat dpo
+                    INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
+                    INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_medication_statement ssms ON ssms.no_rawat = dpo.no_rawat AND ssms.kode_brng = dpo.kode_brng AND ssms.tgl_perawatan = dpo.tgl_perawatan
+                    WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR dpo.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR db.nama_brng LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            default:
+                jsonResponse(['success' => false, 'message' => 'Invalid resource type'], 400);
+        }
+
+        // Apply status filter via wrapped subquery
+        if ($statusFilter && $statusFilter !== 'all') {
+            $sql = "SELECT * FROM ({$sql}) AS sub WHERE sub.status = :status_filter";
+            $params['status_filter'] = $statusFilter;
+        }
+
+        // Get total count
+        $countSql = "SELECT COUNT(*) FROM ({$sql}) AS total_cnt";
+        $countStmt = $pdo->prepare($countSql);
+        $countStmt->execute($params);
+        $totalCount = (int)$countStmt->fetchColumn();
+
+        // Get paginated list
+        $sql .= " LIMIT :limit OFFSET :offset";
+        $stmt = $pdo->prepare($sql);
+        
+        // Bind values
+        foreach ($params as $key => $val) {
+            $stmt->bindValue($key, $val);
+        }
+        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+        
+        $stmt->execute();
+        $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        jsonResponse([
+            'success' => true,
+            'resource' => $resource,
+            'total_count' => $totalCount,
+            'page' => $page,
+            'limit' => $limit,
+            'records' => $records
         ]);
 
     } catch (Exception $e) {

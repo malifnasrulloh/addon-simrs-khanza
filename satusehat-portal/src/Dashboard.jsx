@@ -62,13 +62,23 @@ export default function Dashboard({ token, setToken }) {
   const [failedCount, setFailedCount] = useState(0);
   const [cancelRequested, setCancelRequested] = useState(false);
 
+  // Phase 2 Interactive Records States
+  const [records, setRecords] = useState([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [recordsLimit] = useState(20);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [syncingRecordId, setSyncingRecordId] = useState(null);
+
   const cancelRef = useRef(false);
 
   useEffect(() => {
     if (activeTab === 'sync' && role === 'admin') {
       fetchSyncStats();
+      fetchRecords(1);
     }
-  }, [selectedResource, activeTab]);
+  }, [selectedResource, activeTab, statusFilter, dateFrom, dateTo]);
 
   const fetchSyncStats = async () => {
     setLoading(true);
@@ -87,6 +97,136 @@ export default function Dashboard({ token, setToken }) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchRecords = async (targetPage = page) => {
+    setLoading(true);
+    setError('');
+    try {
+      let url = `${API_BASE}?action=getPendingRecords&resource=${selectedResource}&page=${targetPage}&limit=${recordsLimit}&status=${statusFilter}`;
+      if (dateFrom) url += `&dateFrom=${dateFrom}`;
+      if (dateTo) url += `&dateTo=${dateTo}`;
+      if (searchTerm) url += `&search=${encodeURIComponent(searchTerm)}`;
+
+      const data = await fetchApi(url);
+      if (data.success) {
+        setRecords(data.records || []);
+        setTotalCount(data.total_count || 0);
+        setPage(data.page || 1);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRowSync = async (record) => {
+    if (syncingRecordId) return;
+    setSyncingRecordId(record.id);
+    setError('');
+    const targetIdentifier = record.no_rawat || record.nik || record.id || '';
+    if (!targetIdentifier) {
+      setError('Missing unique record identifier.');
+      setSyncingRecordId(null);
+      return;
+    }
+
+    try {
+      const timeStr = new Date().toLocaleTimeString();
+      setSyncLogs(prev => [...prev, { time: timeStr, text: `Triggering single record sync for [${selectedResource}] matching key: ${targetIdentifier}...`, type: 'info' }]);
+      
+      const url = `${API_BASE}?action=triggerBatchSync&resource=${selectedResource}&no_rawat=${encodeURIComponent(targetIdentifier)}`;
+      const response = await fetchApi(url, { method: 'POST' });
+
+      if (response.success) {
+        const summary = response.summary || {};
+        const syncedList = response.synced || [];
+        let success = 0;
+        let failed = 0;
+
+        if (selectedResource === 'patient') {
+          if (syncedList.length > 0 && syncedList[0].status === 'success') {
+            success = 1;
+            setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: `SUCCESS: Mapped Patient ${record.patient_name || ''} to IHS ${syncedList[0].ihs}`, type: 'success' }]);
+          } else {
+            failed = 1;
+            setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: `FAILED: Patient ${record.patient_name || ''} - ${syncedList[0]?.message || 'Not Found'}`, type: 'error' }]);
+          }
+        } else {
+          success = summary.success ?? 0;
+          failed = summary.failed ?? 0;
+          
+          if (success > 0) {
+            setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: `SUCCESS: Synchronized record successfully.`, type: 'success' }]);
+          } else {
+            setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: `FAILED: Record sync failed. ${summary.errors?.[0] || ''}`, type: 'error' }]);
+          }
+        }
+
+        // Refresh stats and records list
+        fetchSyncStats();
+        fetchRecords(page);
+      } else {
+        throw new Error(response.message || 'Single sync failed.');
+      }
+    } catch (err) {
+      setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: `ERROR: ${err.message}`, type: 'error' }]);
+    } finally {
+      setSyncingRecordId(null);
+    }
+  };
+
+  const handleRowWorkflow = async (record) => {
+    if (syncingRecordId) return;
+    setSyncingRecordId(record.id);
+    setError('');
+    const noRawatVal = record.no_rawat;
+    if (!noRawatVal) {
+      setError('Cannot execute workflow. No Visit ID (no_rawat) is associated with this record.');
+      setSyncingRecordId(null);
+      return;
+    }
+
+    try {
+      const timeStr = new Date().toLocaleTimeString();
+      setSyncLogs(prev => [...prev, { time: timeStr, text: `Triggering sequential clinical workflow sync for Rawat Record: ${noRawatVal}...`, type: 'info' }]);
+      
+      const response = await fetchApi(`${API_BASE}?action=triggerBatchSync&resource=workflow&no_rawat=${encodeURIComponent(noRawatVal)}`, {
+        method: 'POST'
+      });
+
+      if (response.success && response.workflow) {
+        const wf = response.workflow;
+        const logs = [];
+        Object.keys(wf).forEach(step => {
+          const res = wf[step];
+          const stepTimeStr = new Date().toLocaleTimeString();
+          if (res.status === 'success' || res.status === 'already_mapped' || res.status === 'processed') {
+            logs.push({
+              time: stepTimeStr,
+              text: `SUCCESS: Step [${step}] Completed. Status: ${res.status}. IHS: ${res.ihs || ''}`,
+              type: 'success'
+            });
+          } else {
+            logs.push({
+              time: stepTimeStr,
+              text: `FAILED: Step [${step}] failed. Message: ${res.message || 'Error occurred'}`,
+              type: 'error'
+            });
+          }
+        });
+        setSyncLogs(prev => [...prev, ...logs]);
+        fetchSyncStats();
+        fetchRecords(page);
+      } else {
+        throw new Error(response.message || 'Workflow sync failed.');
+      }
+    } catch (err) {
+      setSyncLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: `ERROR: ${err.message}`, type: 'error' }]);
+    } finally {
+      setSyncingRecordId(null);
     }
   };
 
@@ -484,16 +624,14 @@ export default function Dashboard({ token, setToken }) {
               </button>
             </div>
           </form>
-        )}
-
-        {activeTab === 'sync' && (
+        )}        {activeTab === 'sync' && (
           <div className="sync-dashboard-container" style={{ textAlign: 'left' }}>
             <h2 style={{ marginTop: 0, color: 'var(--primary-color)' }}>Clinical Resource Synchronization</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
               Orchestrate batch transfers or execute sequence-based patient visits workflows directly into SatuSehat production endpoint.
             </p>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.5fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
               <div className="form-group">
                 <label>Select Target Resource / Flow</label>
                 <select 
@@ -503,6 +641,8 @@ export default function Dashboard({ token, setToken }) {
                   onChange={e => {
                     setSelectedResource(e.target.value);
                     setSyncStats(null);
+                    setRecords([]);
+                    setPage(1);
                   }}
                 >
                   {resourcesList.map(res => (
@@ -524,15 +664,15 @@ export default function Dashboard({ token, setToken }) {
                 />
               </div>
 
-              <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
-                <button className="btn btn-secondary" onClick={fetchSyncStats} style={{ height: '42px' }}>
+              <div className="form-group" style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
+                <button className="btn btn-secondary" onClick={fetchSyncStats} style={{ height: '42px', flex: 1 }}>
                   Load Stats
                 </button>
               </div>
             </div>
 
             {selectedResource !== 'workflow' && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr', gap: '1rem', marginBottom: '1.5rem', background: 'rgba(255,255,255,0.02)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.2fr 1fr', gap: '1rem', marginBottom: '1.5rem', background: 'rgba(255,255,255,0.02)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label>Date From</label>
                   <input type="date" className="form-control" style={{ background: 'rgba(22, 18, 38, 0.9)', color: '#fff', border: '1px solid var(--border-color)' }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
@@ -542,8 +682,8 @@ export default function Dashboard({ token, setToken }) {
                   <input type="date" className="form-control" style={{ background: 'rgba(22, 18, 38, 0.9)', color: '#fff', border: '1px solid var(--border-color)' }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-                  <button className="btn btn-secondary" onClick={() => { setDateFrom(''); setDateTo(''); }} style={{ height: '42px', fontSize: '0.85rem' }}>
-                    Use Config Defaults
+                  <button className="btn btn-secondary" onClick={() => { setDateFrom(''); setDateTo(''); }} style={{ height: '42px', fontSize: '0.85rem', flex: 1 }}>
+                    Use Defaults
                   </button>
                 </div>
               </div>
@@ -573,7 +713,7 @@ export default function Dashboard({ token, setToken }) {
             <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', alignItems: 'center' }}>
               {!syncing ? (
                 <button className="btn" style={{ width: 'auto' }} onClick={handleStartSync} disabled={loading}>
-                  {selectedResource === 'workflow' ? 'Run Sequential Workflow' : (noRawat ? 'Sync Single Rawat' : 'Start Batch Sync')}
+                  {selectedResource === 'workflow' ? 'Run Sequential Workflow' : (noRawat ? 'Sync Single Rawat' : 'Sync Filtered Batch')}
                 </button>
               ) : (
                 <button className="btn" style={{ width: 'auto', background: 'var(--danger)' }} onClick={handleCancelSync}>
@@ -598,6 +738,156 @@ export default function Dashboard({ token, setToken }) {
                 <div style={{ height: '6px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '3px', overflow: 'hidden' }}>
                   <div style={{ height: '100%', background: 'var(--primary-color)', width: `${syncProgress}%`, transition: 'width 0.3s ease' }}></div>
                 </div>
+              </div>
+            )}
+
+            {/* Interactive Grid Table view */}
+            {selectedResource !== 'workflow' && (
+              <div style={{ marginTop: '2rem', marginBottom: '2rem' }}>
+                <h3 style={{ color: '#cdd6f4', marginBottom: '1rem' }}>Interactive Records Explorer</h3>
+                
+                {/* Search & Filter Controls */}
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                  <div style={{ flex: '1 1 250px' }}>
+                    <input
+                      type="text"
+                      className="form-control"
+                      placeholder="Search patient, RM, NIK, or drug..."
+                      value={searchTerm}
+                      onChange={e => setSearchTerm(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && fetchRecords(1)}
+                      style={{ background: 'rgba(22, 18, 38, 0.9)', color: '#fff', border: '1px solid var(--border-color)' }}
+                    />
+                  </div>
+                  <div style={{ width: '150px' }}>
+                    <select
+                      className="form-control"
+                      value={statusFilter}
+                      onChange={e => setStatusFilter(e.target.value)}
+                      style={{ background: 'rgba(22, 18, 38, 0.9)', color: '#fff', border: '1px solid var(--border-color)' }}
+                    >
+                      <option value="all">All Statuses</option>
+                      <option value="pending">Pending</option>
+                      <option value="synced">Synced</option>
+                      <option value="blocked">Blocked</option>
+                    </select>
+                  </div>
+                  <div>
+                    <button className="btn btn-secondary" onClick={() => fetchRecords(1)} style={{ height: '42px' }}>
+                      Apply Filters
+                    </button>
+                  </div>
+                </div>
+
+                {/* Table list */}
+                <div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.01)' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.02)' }}>
+                        <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)' }}>Date</th>
+                        <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)' }}>Patient Details</th>
+                        <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)' }}>Visit ID (Rawat)</th>
+                        <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)' }}>Details</th>
+                        <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)' }}>Status</th>
+                        <th style={{ padding: '0.75rem 1rem', color: 'var(--text-muted)', textAlign: 'right' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {records.length === 0 ? (
+                        <tr>
+                          <td colSpan="6" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                            No records found matching current criteria.
+                          </td>
+                        </tr>
+                      ) : (
+                        records.map(record => (
+                          <tr key={record.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                            <td style={{ padding: '0.75rem 1rem', whiteSpace: 'nowrap' }}>{record.date || 'N/A'}</td>
+                            <td style={{ padding: '0.75rem 1rem' }}>
+                              <div style={{ fontWeight: 'bold', color: '#cdd6f4' }}>{record.patient_name || 'System Catalog'}</div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                {record.nik ? `NIK: ${record.nik}` : ''} {record.rm ? ` | RM: ${record.rm}` : ''}
+                              </div>
+                            </td>
+                            <td style={{ padding: '0.75rem 1rem', fontFamily: 'monospace' }}>{record.no_rawat || '-'}</td>
+                            <td style={{ padding: '0.75rem 1rem', color: '#a6adc8', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={record.details}>
+                              {record.details}
+                            </td>
+                            <td style={{ padding: '0.75rem 1rem' }}>
+                              {record.status === 'synced' && (
+                                <span style={{ padding: '0.2rem 0.6rem', borderRadius: '20px', fontSize: '0.75rem', background: 'rgba(74, 222, 128, 0.15)', color: '#4ade80', border: '1px solid rgba(74, 222, 128, 0.3)', textShadow: '0 0 10px rgba(74, 222, 128, 0.4)' }}>
+                                  Synced
+                                </span>
+                              )}
+                              {record.status === 'pending' && (
+                                <span style={{ padding: '0.2rem 0.6rem', borderRadius: '20px', fontSize: '0.75rem', background: 'rgba(251, 191, 36, 0.15)', color: '#fbbf24', border: '1px solid rgba(251, 191, 36, 0.3)', textShadow: '0 0 10px rgba(251, 191, 36, 0.4)' }}>
+                                  Pending
+                                </span>
+                              )}
+                              {record.status === 'blocked' && (
+                                <span style={{ padding: '0.2rem 0.6rem', borderRadius: '20px', fontSize: '0.75rem', background: 'rgba(248, 113, 113, 0.15)', color: '#f87171', border: '1px solid rgba(248, 113, 113, 0.3)', textShadow: '0 0 10px rgba(248, 113, 113, 0.4)' }}>
+                                  Blocked
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
+                              <div style={{ display: 'inline-flex', gap: '0.5rem' }}>
+                                <button
+                                  className="btn btn-secondary"
+                                  onClick={() => handleRowSync(record)}
+                                  disabled={syncingRecordId !== null || syncing}
+                                  style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem', height: '28px' }}
+                                >
+                                  {syncingRecordId === record.id ? 'Syncing...' : 'Sync'}
+                                </button>
+                                {record.no_rawat && (
+                                  <button
+                                    className="btn btn-secondary"
+                                    onClick={() => handleRowWorkflow(record)}
+                                    disabled={syncingRecordId !== null || syncing}
+                                    style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem', height: '28px', borderColor: 'var(--primary-color)', color: 'var(--primary-color)' }}
+                                  >
+                                    Workflow
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination footer */}
+                {totalCount > recordsLimit && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem' }}>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      Showing {((page - 1) * recordsLimit) + 1} to {Math.min(page * recordsLimit, totalCount)} of {totalCount} records
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        className="btn btn-secondary"
+                        disabled={page <= 1 || loading}
+                        onClick={() => fetchRecords(page - 1)}
+                        style={{ padding: '0.2rem 0.8rem', fontSize: '0.8rem', height: '32px' }}
+                      >
+                        Previous
+                      </button>
+                      <span style={{ display: 'flex', alignItems: 'center', padding: '0 0.5rem', fontSize: '0.85rem', color: '#cdd6f4' }}>
+                        Page {page} of {Math.ceil(totalCount / recordsLimit)}
+                      </span>
+                      <button
+                        className="btn btn-secondary"
+                        disabled={page >= Math.ceil(totalCount / recordsLimit) || loading}
+                        onClick={() => fetchRecords(page + 1)}
+                        style={{ padding: '0.2rem 0.8rem', fontSize: '0.8rem', height: '32px' }}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -636,7 +926,6 @@ export default function Dashboard({ token, setToken }) {
             </div>
           </div>
         )}
-
         {error && <div className="error-msg" style={{ marginTop: '1rem', textAlign: 'left' }}>{error}</div>}
 
         {createMode && activeTab !== 'sync' && (
