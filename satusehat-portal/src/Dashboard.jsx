@@ -82,6 +82,7 @@ export default function Dashboard({ token, setToken }) {
   const [recordsLimit] = useState(20);
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchPatient, setSearchPatient] = useState('');
   const [syncingRecordId, setSyncingRecordId] = useState(null);
 
   // Phase 3 Troubleshoot & Mapping Center States
@@ -94,14 +95,79 @@ export default function Dashboard({ token, setToken }) {
   const [mappingInputs, setMappingInputs] = useState({});
   const [savingMapping, setSavingMapping] = useState({});
 
+  // Section Selector (Phase 5)
+  const [currentSection, setCurrentSection] = useState('analytics');
+
+  // Analytics states (Phase 5)
+  const [analyticsData, setAnalyticsData] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState('');
+
+  // Logs states (Phase 5)
+  const [logs, setLogs] = useState([]);
+  const [logsDate, setLogsDate] = useState(new Date().toISOString().split('T')[0]);
+  const [logsLevel, setLogsLevel] = useState('all');
+  const [logsSearch, setLogsSearch] = useState('');
+  const [logsPage, setLogsPage] = useState(1);
+  const [logsTotal, setLogsTotal] = useState(0);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState('');
+  const [expandedLogIndex, setExpandedLogIndex] = useState(null);
+
   const cancelRef = useRef(false);
 
+  const fetchAnalyticsData = async () => {
+    setAnalyticsLoading(true);
+    setAnalyticsError('');
+    try {
+      const data = await fetchApi(`${API_BASE}?action=getAnalyticsStats`);
+      if (data.success) {
+        setAnalyticsData(data);
+      } else {
+        setAnalyticsError(data.message || 'Failed to fetch analytics stats');
+      }
+    } catch (err) {
+      setAnalyticsError(err.message || 'Error fetching analytics stats');
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  };
+
+  const fetchLogs = async (pageVal = 1) => {
+    setLogsLoading(true);
+    setLogsError('');
+    try {
+      const url = `${API_BASE}?action=getLogs&date=${logsDate}&level=${logsLevel}&search=${encodeURIComponent(logsSearch)}&page=${pageVal}&limit=50`;
+      const data = await fetchApi(url);
+      if (data.success) {
+        setLogs(data.logs);
+        setLogsTotal(data.total_count);
+        setLogsPage(pageVal);
+      } else {
+        setLogsError(data.message || 'Failed to fetch log entries');
+      }
+    } catch (err) {
+      setLogsError(err.message || 'Error fetching log entries');
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (activeTab === 'sync' && role === 'admin') {
+    if (currentSection === 'analytics' && role === 'admin') {
+      fetchAnalyticsData();
+    }
+    if (currentSection === 'logs' && role === 'admin') {
+      fetchLogs(1);
+    }
+  }, [currentSection, logsDate, logsLevel]);
+
+  useEffect(() => {
+    if (currentSection === 'sync' && role === 'admin') {
       fetchSyncStats();
       fetchRecords(1);
     }
-  }, [selectedResource, activeTab, statusFilter, dateFrom, dateTo]);
+  }, [selectedResource, currentSection, statusFilter, dateFrom, dateTo]);
 
   const fetchSyncStats = async () => {
     setLoading(true);
@@ -131,6 +197,7 @@ export default function Dashboard({ token, setToken }) {
       if (dateFrom) url += `&dateFrom=${dateFrom}`;
       if (dateTo) url += `&dateTo=${dateTo}`;
       if (searchTerm) url += `&search=${encodeURIComponent(searchTerm)}`;
+      if (searchPatient) url += `&search_patient=${encodeURIComponent(searchPatient)}`;
 
       const data = await fetchApi(url);
       if (data.success) {
@@ -303,10 +370,10 @@ export default function Dashboard({ token, setToken }) {
   };
 
   useEffect(() => {
-    if (activeTab === 'troubleshoot' && role === 'admin') {
+    if (currentSection === 'troubleshoot' && role === 'admin') {
       fetchUnmapped(1);
     }
-  }, [unmappedType, activeTab]);
+  }, [unmappedType, currentSection]);
 
   const handleStartSync = async () => {
     if (syncing) return;
@@ -654,25 +721,200 @@ export default function Dashboard({ token, setToken }) {
 
   return (
     <div className="container">
-      <div className="header glass" style={{ padding: '1.5rem 2rem', marginBottom: '2rem' }}>
-        <h1>SatuSehat Integration Portal</h1>
-        <button className="logout-btn" onClick={handleLogout}>Logout</button>
+      <div className="header glass" style={{ padding: '1.5rem 2rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h1 style={{ margin: 0 }}>SatuSehat Integration Portal</h1>
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Logged in as: <strong>{username}</strong> ({role})</span>
+          <button className="logout-btn" onClick={handleLogout}>Logout</button>
+        </div>
       </div>
 
-      <div className="glass search-section">
-        <div className="tabs">
-          <button className={`tab ${activeTab === 'rm' ? 'active' : ''}`} onClick={() => { setActiveTab('rm'); setResult(null); setError(''); }}>No Rekam Medis</button>
-          <button className={`tab ${activeTab === 'nik' ? 'active' : ''}`} onClick={() => { setActiveTab('nik'); setResult(null); setError(''); }}>NIK</button>
-          <button className={`tab ${activeTab === 'nik_ibu' ? 'active' : ''}`} onClick={() => { setActiveTab('nik_ibu'); setResult(null); setError(''); }}>NIK Ibu (Bayi)</button>
-          {role === 'admin' && (
-            <>
-              <button className={`tab ${activeTab === 'sync' ? 'active' : ''}`} onClick={() => { setActiveTab('sync'); setResult(null); setError(''); fetchSyncStats(); }}>SatuSehat Sync Engine</button>
-              <button className={`tab ${activeTab === 'troubleshoot' ? 'active' : ''}`} onClick={() => { setActiveTab('troubleshoot'); setResult(null); setError(''); }}>Mapping Center</button>
-            </>
+      {/* Top Navigation Bar - Phase 5 */}
+      <div className="glass" style={{ display: 'flex', gap: '0.5rem', padding: '0.75rem', marginBottom: '2rem', overflowX: 'auto' }}>
+        {role === 'admin' ? (
+          <>
+            <button
+              className={`tab ${currentSection === 'analytics' ? 'active' : ''}`}
+              onClick={() => { setCurrentSection('analytics'); setResult(null); setError(''); }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              📈 Analytics
+            </button>
+            <button
+              className={`tab ${currentSection === 'patient_search' ? 'active' : ''}`}
+              onClick={() => { setCurrentSection('patient_search'); setResult(null); setError(''); }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              🔍 Patient Search
+            </button>
+            <button
+              className={`tab ${currentSection === 'sync' ? 'active' : ''}`}
+              onClick={() => { setCurrentSection('sync'); setResult(null); setError(''); }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              🔄 Sync Center
+            </button>
+            <button
+              className={`tab ${currentSection === 'troubleshoot' ? 'active' : ''}`}
+              onClick={() => { setCurrentSection('troubleshoot'); setResult(null); setError(''); }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              🗺️ Mapping Center
+            </button>
+            <button
+              className={`tab ${currentSection === 'logs' ? 'active' : ''}`}
+              onClick={() => { setCurrentSection('logs'); setResult(null); setError(''); }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              📋 Log Viewer
+            </button>
+          </>
+        ) : (
+          <button
+            className={`tab active`}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+          >
+            🔍 Patient Search
+          </button>
+        )}
+      </div>
+
+      {/* Analytics Dashboard (Phase 5) */}
+      {currentSection === 'analytics' && role === 'admin' && (
+        <div className="glass" style={{ padding: '2rem', textAlign: 'left', marginBottom: '2rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+            <h2 style={{ margin: 0, color: 'var(--primary-color)' }}>📈 Analytics & Coverage Dashboard</h2>
+            <button className="btn" style={{ width: 'auto', padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={fetchAnalyticsData} disabled={analyticsLoading}>
+              {analyticsLoading ? 'Refreshing...' : '🔄 Refresh Stats'}
+            </button>
+          </div>
+
+          {analyticsError && <div className="error-msg" style={{ marginBottom: '1.5rem' }}>{analyticsError}</div>}
+
+          {analyticsLoading && !analyticsData ? (
+            <div style={{ textAlign: 'center', padding: '3rem' }}>
+              <div className="spinner" style={{ margin: '0 auto 1rem auto' }}></div>
+              <p style={{ color: 'var(--text-muted)' }}>Compiling synchronization analytics from databases and logs...</p>
+            </div>
+          ) : analyticsData ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              <div className="glass" style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.02)' }}>
+                <h3 style={{ marginTop: 0, marginBottom: '1.5rem', color: '#cdd6f4' }}>Daily Visit Encounter Sync Trends (Last 7 Days)</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '1rem', height: '200px', alignItems: 'end', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
+                  {analyticsData.trends.map((t, idx) => {
+                    const maxVal = Math.max(...analyticsData.trends.map(x => x.total), 1);
+                    const syncHeight = (t.synced / maxVal) * 100;
+                    const pendingHeight = (t.pending / maxVal) * 100;
+                    return (
+                      <div key={idx} style={{ display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'flex-end', position: 'relative' }}>
+                        <div style={{ display: 'flex', height: '100%', alignItems: 'end', gap: '4px' }}>
+                          <div
+                            style={{
+                              height: `${syncHeight}%`,
+                              backgroundColor: 'rgba(74, 222, 128, 0.85)',
+                              width: '100%',
+                              borderRadius: '4px 4px 0 0',
+                              transition: 'height 0.3s ease'
+                            }}
+                            title={`Synced: ${t.synced}`}
+                          />
+                          <div
+                            style={{
+                              height: `${pendingHeight}%`,
+                              backgroundColor: 'rgba(248, 113, 113, 0.85)',
+                              width: '100%',
+                              borderRadius: '4px 4px 0 0',
+                              transition: 'height 0.3s ease'
+                            }}
+                            title={`Pending/Failed: ${t.pending}`}
+                          />
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginTop: '0.5rem', whiteSpace: 'nowrap' }}>
+                          {t.date.substring(5)}
+                        </div>
+                        <div style={{ position: 'absolute', top: '-25px', left: 0, right: 0, textAlign: 'center', fontSize: '0.7rem', color: '#a6adc8' }}>
+                          {t.total}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ display: 'flex', gap: '1.5rem', marginTop: '1rem', justifyContent: 'center', fontSize: '0.8rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ width: '12px', height: '12px', backgroundColor: 'rgba(74, 222, 128, 0.85)', borderRadius: '3px' }} />
+                    <span style={{ color: '#cdd6f4' }}>Synced Visits</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ width: '12px', height: '12px', backgroundColor: 'rgba(248, 113, 113, 0.85)', borderRadius: '3px' }} />
+                    <span style={{ color: '#cdd6f4' }}>Pending / Failed Visits</span>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '1.5rem' }}>
+                <div className="glass" style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.02)' }}>
+                  <h3 style={{ marginTop: 0, marginBottom: '1rem', color: '#cdd6f4' }}>Top Common API Sync Errors (Last 3 Days)</h3>
+                  {analyticsData.top_errors.length === 0 ? (
+                    <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                      🎉 No errors logged in the last 3 days!
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      {analyticsData.top_errors.map((err, idx) => (
+                        <div key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.75rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                            <span style={{ fontSize: '0.85rem', color: '#f38ba8', fontWeight: 500, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '80%' }}>
+                              {err.reason}
+                            </span>
+                            <span className="badge" style={{ backgroundColor: 'rgba(243, 139, 168, 0.15)', color: '#f38ba8' }}>
+                              {err.count} times
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="glass" style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.02)' }}>
+                  <h3 style={{ marginTop: 0, marginBottom: '1rem', color: '#cdd6f4' }}>Resource Coverage Rates (Last 7 Days)</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', maxHeight: '300px', overflowY: 'auto', paddingRight: '0.5rem' }}>
+                    {Object.entries(analyticsData.coverage).map(([resName, stats]) => (
+                      <div key={resName}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '0.25rem' }}>
+                          <span style={{ textTransform: 'capitalize', color: '#cdd6f4' }}>{resName.replace('_', ' ')}</span>
+                          <span style={{ color: 'var(--text-muted)' }}>{stats.synced}/{stats.total} ({stats.percent}%)</span>
+                        </div>
+                        <div style={{ height: '6px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div
+                            style={{
+                              height: '100%',
+                              width: `${stats.percent}%`,
+                              backgroundColor: stats.percent === 100 ? '#4ade80' : stats.percent > 50 ? '#f9e2af' : '#f38ba8',
+                              transition: 'width 0.3s ease'
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No data available. Click Refresh.</div>
           )}
         </div>
+      )}
 
-        {activeTab !== 'sync' && activeTab !== 'troubleshoot' && (
+      {currentSection === 'patient_search' && (
+        <div className="glass search-section">
+          <div className="tabs">
+            <button className={`tab ${activeTab === 'rm' ? 'active' : ''}`} onClick={() => { setActiveTab('rm'); setResult(null); setError(''); }}>No Rekam Medis</button>
+            <button className={`tab ${activeTab === 'nik' ? 'active' : ''}`} onClick={() => { setActiveTab('nik'); setResult(null); setError(''); }}>NIK</button>
+            <button className={`tab ${activeTab === 'nik_ibu' ? 'active' : ''}`} onClick={() => { setActiveTab('nik_ibu'); setResult(null); setError(''); }}>NIK Ibu (Bayi)</button>
+          </div>
+
           <form onSubmit={handleSearch}>
             {activeTab === 'rm' && (
               <div className="form-group">
@@ -705,7 +947,20 @@ export default function Dashboard({ token, setToken }) {
               </button>
             </div>
           </form>
-        )}        {activeTab === 'sync' && (
+
+          {error && <div className="error-msg" style={{ marginTop: '1rem', textAlign: 'left' }}>{error}</div>}
+
+          {createMode && (
+            <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '8px' }}>
+              <p style={{ margin: '0 0 1rem 0' }}>This patient does not exist in Satu Sehat.</p>
+              <button className="btn btn-secondary" style={{ width: 'auto' }} onClick={prepareCreate}>
+                Prepare Patient Creation Payload
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {currentSection === 'sync' && role === 'admin' && (
           <div className="sync-dashboard-container" style={{ textAlign: 'left' }}>
             <h2 style={{ marginTop: 0, color: 'var(--primary-color)' }}>Clinical Resource Synchronization</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
@@ -861,11 +1116,22 @@ export default function Dashboard({ token, setToken }) {
                 
                 {/* Search & Filter Controls */}
                 <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-                  <div style={{ flex: '1 1 250px' }}>
+                  <div style={{ flex: '1 1 200px' }}>
                     <input
                       type="text"
                       className="form-control"
-                      placeholder="Search patient, RM, NIK, or drug..."
+                      placeholder="Patient Name, RM or NIK..."
+                      value={searchPatient}
+                      onChange={e => setSearchPatient(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && fetchRecords(1)}
+                      style={{ background: 'rgba(22, 18, 38, 0.9)', color: '#fff', border: '1px solid var(--border-color)' }}
+                    />
+                  </div>
+                  <div style={{ flex: '1 1 200px' }}>
+                    <input
+                      type="text"
+                      className="form-control"
+                      placeholder="General keyword/code..."
                       value={searchTerm}
                       onChange={e => setSearchTerm(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && fetchRecords(1)}
@@ -1089,7 +1355,7 @@ export default function Dashboard({ token, setToken }) {
             </div>
           </div>
         )}
-        {activeTab === 'troubleshoot' && (
+        {currentSection === 'troubleshoot' && role === 'admin' && (
           <div className="sync-dashboard-container" style={{ textAlign: 'left' }}>
             <h2 style={{ marginTop: 0, color: 'var(--primary-color)' }}>Troubleshooting & Mapping Center</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
@@ -1255,19 +1521,207 @@ export default function Dashboard({ token, setToken }) {
             </div>
           </div>
         )}
-        {error && <div className="error-msg" style={{ marginTop: '1rem', textAlign: 'left' }}>{error}</div>}
 
-        {createMode && activeTab !== 'sync' && (
-          <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '8px' }}>
-            <p style={{ margin: '0 0 1rem 0' }}>This patient does not exist in Satu Sehat.</p>
-            <button className="btn btn-secondary" style={{ width: 'auto' }} onClick={prepareCreate}>
-              Prepare Patient Creation Payload
-            </button>
+      {currentSection === 'logs' && role === 'admin' && (
+        <div className="glass" style={{ padding: '2rem', textAlign: 'left', marginBottom: '2rem' }}>
+          <h2 style={{ marginTop: 0, color: 'var(--primary-color)' }}>📋 SatuSehat Sync Log Viewer</h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+            Monitor live HTTP transaction logs, network payloads, and outbound FHIR responses directly from the rotating system log files.
+          </p>
+
+          {/* Filter Bar */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label style={{ fontSize: '0.75rem', marginBottom: '0.25rem', color: '#cdd6f4' }}>Select Log Date</label>
+              <input 
+                type="date" 
+                className="form-control" 
+                value={logsDate} 
+                onChange={e => setLogsDate(e.target.value)} 
+                style={{ height: '38px', background: 'rgba(22, 18, 38, 0.9)', color: '#fff', border: '1px solid var(--border-color)' }} 
+              />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label style={{ fontSize: '0.75rem', marginBottom: '0.25rem', color: '#cdd6f4' }}>Filter Level</label>
+              <select 
+                className="form-control" 
+                value={logsLevel} 
+                onChange={e => setLogsLevel(e.target.value)} 
+                style={{ height: '38px', background: 'rgba(22, 18, 38, 0.9)', color: '#fff', border: '1px solid var(--border-color)' }}
+              >
+                <option value="all">All Levels</option>
+                <option value="DEBUG">DEBUG</option>
+                <option value="INFO">INFO</option>
+                <option value="WARNING">WARNING</option>
+                <option value="ERROR">ERROR</option>
+              </select>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label style={{ fontSize: '0.75rem', marginBottom: '0.25rem', color: '#cdd6f4' }}>Search Keywords</label>
+              <input
+                type="text"
+                className="form-control"
+                placeholder="Search message, visit key, or NIK..."
+                value={logsSearch}
+                onChange={e => setLogsSearch(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && fetchLogs(1)}
+                style={{ height: '38px', background: 'rgba(22, 18, 38, 0.9)', color: '#fff', border: '1px solid var(--border-color)' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+              <button className="btn" onClick={() => fetchLogs(1)} disabled={logsLoading} style={{ height: '38px' }}>
+                {logsLoading ? 'Filtering...' : 'Apply Filter'}
+              </button>
+            </div>
           </div>
-        )}
-      </div>
 
-      {result && !showModal && (
+          {logsError && <div className="error-msg" style={{ marginBottom: '1.5rem' }}>{logsError}</div>}
+
+          {logsLoading ? (
+            <div style={{ textAlign: 'center', padding: '3rem' }}>
+              <div className="spinner" style={{ margin: '0 auto 1rem auto' }}></div>
+              <p style={{ color: 'var(--text-muted)' }}>Retrieving transactions log from disk...</p>
+            </div>
+          ) : logs.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+              No log entries match the criteria for {logsDate}.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div style={{ maxHeight: '500px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                {logs.map((logItem, idx) => {
+                  const isExpanded = expandedLogIndex === idx;
+                  const levelColors = {
+                    'ERROR': '#f38ba8',
+                    'WARNING': '#f9e2af',
+                    'INFO': '#89b4fa',
+                    'DEBUG': '#a6adc8'
+                  };
+                  const levelBgColors = {
+                    'ERROR': 'rgba(243, 139, 168, 0.1)',
+                    'WARNING': 'rgba(249, 226, 175, 0.1)',
+                    'INFO': 'rgba(137, 180, 250, 0.1)',
+                    'DEBUG': 'rgba(166, 173, 200, 0.1)'
+                  };
+
+                  return (
+                    <div
+                      key={idx}
+                      style={{
+                        borderBottom: '1px solid var(--border-color)',
+                        background: isExpanded ? 'rgba(255,255,255,0.02)' : 'transparent',
+                        transition: 'background 0.2s'
+                      }}
+                    >
+                      <div
+                        onClick={() => setExpandedLogIndex(isExpanded ? null : idx)}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '180px 100px 1fr',
+                          padding: '0.75rem 1rem',
+                          cursor: 'pointer',
+                          alignItems: 'center',
+                          fontSize: '0.85rem'
+                        }}
+                      >
+                        <div style={{ color: 'var(--text-muted)', fontFamily: 'monospace' }}>{logItem.timestamp}</div>
+                        <div>
+                          <span
+                            style={{
+                              backgroundColor: levelBgColors[logItem.level] || 'rgba(255,255,255,0.05)',
+                              color: levelColors[logItem.level] || '#cdd6f4',
+                              padding: '0.15rem 0.5rem',
+                              borderRadius: '4px',
+                              fontSize: '0.7rem',
+                              fontWeight: 'bold',
+                              display: 'inline-block',
+                              textAlign: 'center',
+                              width: '70px'
+                            }}
+                          >
+                            {logItem.level}
+                          </span>
+                        </div>
+                        <div style={{
+                          color: '#cdd6f4',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          paddingRight: '1rem',
+                          fontFamily: 'monospace'
+                        }}>
+                          {logItem.message}
+                          {logItem.payload && <span style={{ color: 'var(--primary-color)', marginLeft: '0.5rem', fontSize: '0.75rem' }}>[inspect payload]</span>}
+                        </div>
+                      </div>
+
+                      {isExpanded && (
+                        <div style={{ padding: '0 1rem 1rem 1rem', fontSize: '0.8rem', borderTop: '1px dashed rgba(255,255,255,0.05)' }}>
+                          <div style={{ marginTop: '0.75rem', color: '#cdd6f4', lineHeight: 1.5 }}>
+                            <strong>Message: </strong>
+                            <span style={{ fontFamily: 'monospace' }}>{logItem.message}</span>
+                          </div>
+                          {logItem.payload && (
+                            <div style={{ marginTop: '0.75rem' }}>
+                              <strong style={{ color: 'var(--primary-color)' }}>FHIR / API Transaction Payload:</strong>
+                              <pre style={{
+                                marginTop: '0.5rem',
+                                padding: '1rem',
+                                background: '#1e1e2e',
+                                color: '#cdd6f4',
+                                borderRadius: '6px',
+                                overflowX: 'auto',
+                                maxHeight: '300px',
+                                fontSize: '0.75rem',
+                                fontFamily: 'monospace'
+                              }}>
+                                {JSON.stringify(logItem.payload, null, 2)}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Pagination controls */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem' }}>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  Found {logsTotal} log entries.
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    className="btn btn-secondary"
+                    disabled={logsPage <= 1 || logsLoading}
+                    onClick={() => fetchLogs(logsPage - 1)}
+                    style={{ padding: '0.2rem 0.8rem', fontSize: '0.8rem', height: '32px', width: 'auto' }}
+                  >
+                    Previous
+                  </button>
+                  <span style={{ display: 'flex', alignItems: 'center', padding: '0 0.5rem', fontSize: '0.85rem', color: '#cdd6f4' }}>
+                    Page {logsPage}
+                  </span>
+                  <button
+                    className="btn btn-secondary"
+                    disabled={logs.length < 50 || logsLoading}
+                    onClick={() => fetchLogs(logsPage + 1)}
+                    style={{ padding: '0.2rem 0.8rem', fontSize: '0.8rem', height: '32px', width: 'auto' }}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {currentSection === 'patient_search' && result && !showModal && (
         <div className="glass result-card">
           <h2 style={{ marginTop: 0 }}>Patient Details</h2>
           <div className="result-grid">

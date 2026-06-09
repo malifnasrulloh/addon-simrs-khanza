@@ -2740,6 +2740,305 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
     }
 }
 
+if ($action === 'getLogs' && $method === 'GET') {
+    if ($userRole !== 'admin') {
+        jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);
+    }
+
+    $dateInput = $_GET['date'] ?? date('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateInput)) {
+        jsonResponse(['success' => false, 'message' => 'Invalid date format. Use YYYY-MM-DD.'], 400);
+    }
+
+    $targetLevel = $_GET['level'] ?? 'all';
+    $searchKeyword = $_GET['search'] ?? '';
+    $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 100;
+    if ($page <= 0) $page = 1;
+    if ($limit <= 0 || $limit > 500) $limit = 100;
+
+    $logDir = $config->logDir;
+    if (!str_starts_with($logDir, '/')) {
+        $logDir = BASE_DIR . '/' . $logDir;
+    }
+    $pattern = rtrim($logDir, '/') . '/satusehat_portal/satusehat_portal_' . $dateInput . '*.log';
+    $files = glob($pattern);
+
+    $allLines = [];
+    if (!empty($files)) {
+        foreach ($files as $file) {
+            if (is_file($file) && is_readable($file)) {
+                $lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                if ($lines !== false) {
+                    $allLines = array_merge($allLines, $lines);
+                }
+            }
+        }
+    }
+
+    $parsedLogs = [];
+    foreach ($allLines as $line) {
+        if (preg_match('/^\[(.*?)\]\s+\[(.*?)\]\s+(.*)$/', $line, $matches)) {
+            $ts = $matches[1];
+            $lvl = strtoupper($matches[2]);
+            $msg = $matches[3];
+
+            if ($targetLevel !== 'all' && $lvl !== strtoupper($targetLevel)) {
+                continue;
+            }
+
+            if ($searchKeyword !== '' && stripos($msg, $searchKeyword) === false && stripos($ts, $searchKeyword) === false) {
+                continue;
+            }
+
+            $payload = null;
+            if (preg_match('/(\{.*\})/', $msg, $jsonMatch)) {
+                $decoded = json_decode($jsonMatch[1], true);
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    $payload = $decoded;
+                    $msg = str_replace($jsonMatch[1], '[JSON Payload]', $msg);
+                }
+            }
+
+            $parsedLogs[] = [
+                'timestamp' => $ts,
+                'level' => $lvl,
+                'message' => $msg,
+                'payload' => $payload
+            ];
+        }
+    }
+
+    usort($parsedLogs, function($a, $b) {
+        return strcmp($b['timestamp'], $a['timestamp']);
+    });
+
+    $totalLogs = count($parsedLogs);
+    $offset = ($page - 1) * $limit;
+    $slicedLogs = array_slice($parsedLogs, $offset, $limit);
+
+    jsonResponse([
+        'success' => true,
+        'date' => $dateInput,
+        'total_count' => $totalLogs,
+        'page' => $page,
+        'limit' => $limit,
+        'logs' => $slicedLogs
+    ]);
+}
+
+if ($action === 'getAnalyticsStats' && $method === 'GET') {
+    if ($userRole !== 'admin') {
+        jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);
+    }
+
+    try {
+        $dates = [];
+        for ($i = 6; $i >= 0; $i--) {
+            $dates[] = date('Y-m-d', strtotime("-$i days"));
+        }
+        $df = $dates[0];
+        $dt = $dates[6];
+
+        $trends = [];
+        foreach ($dates as $d) {
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM reg_periksa WHERE tgl_registrasi = ?");
+            $stmt->execute([$d]);
+            $total = (int)$stmt->fetchColumn();
+
+            $stmt = $pdo->prepare("
+                SELECT COUNT(*) FROM reg_periksa rp
+                INNER JOIN satu_sehat_encounter sse ON rp.no_rawat = sse.no_rawat
+                WHERE rp.tgl_registrasi = ?
+            ");
+            $stmt->execute([$d]);
+            $synced = (int)$stmt->fetchColumn();
+
+            $trends[] = [
+                'date' => $d,
+                'total' => $total,
+                'synced' => $synced,
+                'pending' => max(0, $total - $synced)
+            ];
+        }
+
+        $coverage = [];
+        $resourceTypes = [
+            'patient' => [
+                'total_sql' => "SELECT COUNT(DISTINCT rp.no_rkm_medis) FROM reg_periksa rp WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(DISTINCT rp.no_rkm_medis) FROM reg_periksa rp INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis INNER JOIN satu_sehat_ihs_patient ssp ON ssp.nikpasien = p.no_ktp WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'encounter' => [
+                'total_sql' => "SELECT COUNT(*) FROM reg_periksa rp WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM reg_periksa rp INNER JOIN satu_sehat_encounter sse ON rp.no_rawat = sse.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'episodeofcare' => [
+                'total_sql' => "SELECT COUNT(DISTINCT dp.no_rawat) FROM diagnosa_pasien dp INNER JOIN reg_periksa rp ON dp.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_episode_of_care eoc INNER JOIN reg_periksa rp ON eoc.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'condition' => [
+                'total_sql' => "SELECT COUNT(*) FROM diagnosa_pasien dp INNER JOIN reg_periksa rp ON dp.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_condition ssc INNER JOIN reg_periksa rp ON ssc.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'observationttv' => [
+                'total_sql' => "SELECT COUNT(*) FROM pemeriksaan_ralan pem INNER JOIN reg_periksa rp ON pem.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_observation_ttv sso INNER JOIN reg_periksa rp ON sso.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'procedure' => [
+                'total_sql' => "SELECT COUNT(*) FROM prosedur_pasien pp INNER JOIN reg_periksa rp ON pp.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_procedure ssp INNER JOIN reg_periksa rp ON ssp.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'allergyintolerance' => [
+                'total_sql' => "SELECT COUNT(*) FROM alergi_pasien ap INNER JOIN reg_periksa rp ON ap.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_allergy_intolerance ssai INNER JOIN reg_periksa rp ON ssai.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'immunization' => [
+                'total_sql' => "SELECT COUNT(*) FROM detail_pemberian_obat dpo INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat INNER JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_immunization ssi INNER JOIN reg_periksa rp ON ssi.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'medication' => [
+                'total_sql' => "SELECT COUNT(DISTINCT dpo.kode_brng) FROM detail_pemberian_obat dpo INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(DISTINCT ssm.kode_brng) FROM satu_sehat_medication ssm INNER JOIN reg_periksa rp ON ssm.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'medicationrequest' => [
+                'total_sql' => "SELECT COUNT(*) FROM resep_obat ro INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_medicationrequest ssmr INNER JOIN reg_periksa rp ON ssmr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'medicationdispense' => [
+                'total_sql' => "SELECT COUNT(*) FROM detail_pemberian_obat dpo INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_medicationdispense ssmd INNER JOIN reg_periksa rp ON ssmd.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'medicationstatement' => [
+                'total_sql' => "SELECT COUNT(*) FROM detail_pemberian_obat dpo INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_medicationstatement ssms INNER JOIN reg_periksa rp ON ssms.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'clinicalimpression' => [
+                'total_sql' => "SELECT COUNT(*) FROM pemeriksaan_ralan pem INNER JOIN reg_periksa rp ON pem.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_clinicalimpression ssci INNER JOIN reg_periksa rp ON ssci.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'servicerequest_rad' => [
+                'total_sql' => "SELECT COUNT(*) FROM permintaan_pemeriksaan_radiologi ppr INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_servicerequest_radiologi ssr INNER JOIN reg_periksa rp ON ssr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'specimen_rad' => [
+                'total_sql' => "SELECT COUNT(*) FROM permintaan_pemeriksaan_radiologi ppr INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_specimen_radiologi sssp INNER JOIN reg_periksa rp ON sssp.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'observation_rad' => [
+                'total_sql' => "SELECT COUNT(*) FROM periksa_radiologi prad INNER JOIN reg_periksa rp ON prad.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_observation_radiologi sso INNER JOIN reg_periksa rp ON sso.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'diagnosticreport_rad' => [
+                'total_sql' => "SELECT COUNT(*) FROM periksa_radiologi prad INNER JOIN reg_periksa rp ON prad.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_diagnosticreport_radiologi ssdr INNER JOIN reg_periksa rp ON ssdr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'servicerequest_lab_pk' => [
+                'total_sql' => "SELECT COUNT(*) FROM permintaan_pemeriksaan_lab ppl INNER JOIN permintaan_lab pl ON ppl.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_servicerequest_lab ssl INNER JOIN reg_periksa rp ON ssl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'specimen_lab_pk' => [
+                'total_sql' => "SELECT COUNT(*) FROM permintaan_pemeriksaan_lab ppl INNER JOIN permintaan_lab pl ON ppl.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_specimen_lab sss INNER JOIN reg_periksa rp ON sss.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'observation_lab_pk' => [
+                'total_sql' => "SELECT COUNT(*) FROM detail_periksa_lab dpl INNER JOIN reg_periksa rp ON dpl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_observation_lab sso INNER JOIN reg_periksa rp ON sso.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'diagnosticreport_lab_pk' => [
+                'total_sql' => "SELECT COUNT(*) FROM detail_periksa_lab dpl INNER JOIN reg_periksa rp ON dpl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_diagnosticreport_lab ssdr INNER JOIN reg_periksa rp ON ssdr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'servicerequest_lab_mb' => [
+                'total_sql' => "SELECT COUNT(*) FROM permintaan_pemeriksaan_lab ppl INNER JOIN permintaan_lab pl ON ppl.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE pl.status = 'mikrobiologi' AND rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_servicerequest_lab_mb ssl INNER JOIN reg_periksa rp ON ssl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'specimen_lab_mb' => [
+                'total_sql' => "SELECT COUNT(*) FROM permintaan_pemeriksaan_lab ppl INNER JOIN permintaan_lab pl ON ppl.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE pl.status = 'mikrobiologi' AND rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_specimen_lab_mb sss INNER JOIN reg_periksa rp ON sss.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'observation_lab_mb' => [
+                'total_sql' => "SELECT COUNT(*) FROM detail_periksa_lab dpl INNER JOIN reg_periksa rp ON dpl.no_rawat = rp.no_rawat INNER JOIN permintaan_lab pl ON dpl.no_rawat = pl.no_rawat WHERE pl.status = 'mikrobiologi' AND rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_observation_lab_mb sso INNER JOIN reg_periksa rp ON sso.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'diagnosticreport_lab_mb' => [
+                'total_sql' => "SELECT COUNT(*) FROM detail_periksa_lab dpl INNER JOIN reg_periksa rp ON dpl.no_rawat = rp.no_rawat INNER JOIN permintaan_lab pl ON dpl.no_rawat = pl.no_rawat WHERE pl.status = 'mikrobiologi' AND rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_diagnosticreport_lab_mb ssdr INNER JOIN reg_periksa rp ON ssdr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ]
+        ];
+
+        foreach ($resourceTypes as $name => $sqls) {
+            $stmt = $pdo->prepare($sqls['total_sql']);
+            $stmt->execute(['df' => $df, 'dt' => $dt]);
+            $total = (int)$stmt->fetchColumn();
+
+            $stmt = $pdo->prepare($sqls['synced_sql']);
+            $stmt->execute(['df' => $df, 'dt' => $dt]);
+            $synced = (int)$stmt->fetchColumn();
+
+            $coverage[$name] = [
+                'total' => $total,
+                'synced' => $synced,
+                'percent' => $total > 0 ? round(($synced / $total) * 100) : 100
+            ];
+        }
+
+        $errors = [];
+        $logDir = $config->logDir;
+        if (!str_starts_with($logDir, '/')) {
+            $logDir = BASE_DIR . '/' . $logDir;
+        }
+
+        for ($i = 0; $i < 3; $i++) {
+            $dateStr = date('Y-m-d', strtotime("-$i days"));
+            $pattern = rtrim($logDir, '/') . '/satusehat_portal/satusehat_portal_' . $dateStr . '*.log';
+            $files = glob($pattern);
+            if (!empty($files)) {
+                foreach ($files as $file) {
+                    if (is_file($file) && is_readable($file)) {
+                        $lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                        if ($lines !== false) {
+                            foreach ($lines as $line) {
+                                if (stripos($line, '[ERROR]') !== false || stripos($line, '[WARNING]') !== false) {
+                                    if (preg_match('/\]\s+\[(?:ERROR|WARNING)\]\s+(.*)$/i', $line, $match)) {
+                                        $msg = trim($match[1]);
+                                        if (preg_match('/^[a-zA-Z\s,:\'"\(\)\{\}\[\]\.\_\-\!\@\#\$\%\^\&\*\+\=]+/i', $msg, $g)) {
+                                            $msg = $g[0];
+                                        }
+                                        $msg = preg_replace('/[0-9]{4}-[0-9]{2}-[0-9]{2}/', 'DATE', $msg);
+                                        $msg = preg_replace('/[0-9\/\:\-]+/', 'X', $msg);
+                                        $msg = preg_replace('/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/i', 'UUID', $msg);
+                                        $msg = substr($msg, 0, 80);
+                                        $errors[$msg] = ($errors[$msg] ?? 0) + 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        arsort($errors);
+        $topErrors = [];
+        $count = 0;
+        foreach ($errors as $reason => $qty) {
+            $topErrors[] = ['reason' => $reason, 'count' => $qty];
+            $count++;
+            if ($count >= 5) break;
+        }
+
+        jsonResponse([
+            'success' => true,
+            'trends' => $trends,
+            'coverage' => $coverage,
+            'top_errors' => $topErrors
+        ]);
+
+    } catch (Exception $e) {
+        jsonResponse(['success' => false, 'message' => $e->getMessage()], 500);
+    }
+}
+
 function executeWorkflowSync($pdo, SatuSehatDatabase $db, SatuSehatClient $client, SatuSehatConfig $config, Logger $log, string $noRawat): array {
     $results = [];
 
