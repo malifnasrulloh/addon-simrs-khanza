@@ -15,6 +15,19 @@ const resourcesList = [
   { id: 'medicationrequest', name: 'Medication Request (Prescription)' },
   { id: 'medicationdispense', name: 'Medication Dispense' },
   { id: 'medicationstatement', name: 'Medication Statement' },
+  { id: 'clinicalimpression', name: 'Clinical Impression' },
+  { id: 'servicerequest_rad', name: 'Radiology Service Request' },
+  { id: 'specimen_rad', name: 'Radiology Specimen' },
+  { id: 'observation_rad', name: 'Radiology Observation' },
+  { id: 'diagnosticreport_rad', name: 'Radiology Diagnostic Report' },
+  { id: 'servicerequest_lab_pk', name: 'Lab PK Service Request' },
+  { id: 'specimen_lab_pk', name: 'Lab PK Specimen' },
+  { id: 'observation_lab_pk', name: 'Lab PK Observation' },
+  { id: 'diagnosticreport_lab_pk', name: 'Lab PK Diagnostic Report' },
+  { id: 'servicerequest_lab_mb', name: 'Lab MB Service Request' },
+  { id: 'specimen_lab_mb', name: 'Lab MB Specimen' },
+  { id: 'observation_lab_mb', name: 'Lab MB Observation' },
+  { id: 'diagnosticreport_lab_mb', name: 'Lab MB Diagnostic Report' },
 ];
 
 export default function Dashboard({ token, setToken }) {
@@ -70,6 +83,16 @@ export default function Dashboard({ token, setToken }) {
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [syncingRecordId, setSyncingRecordId] = useState(null);
+
+  // Phase 3 Troubleshoot & Mapping Center States
+  const [unmappedType, setUnmappedType] = useState('location');
+  const [unmappedSearch, setUnmappedSearch] = useState('');
+  const [unmappedRecords, setUnmappedRecords] = useState([]);
+  const [unmappedTotal, setUnmappedTotal] = useState(0);
+  const [unmappedPage, setUnmappedPage] = useState(1);
+  const [unmappedLoading, setUnmappedLoading] = useState(false);
+  const [mappingInputs, setMappingInputs] = useState({});
+  const [savingMapping, setSavingMapping] = useState({});
 
   const cancelRef = useRef(false);
 
@@ -229,6 +252,61 @@ export default function Dashboard({ token, setToken }) {
       setSyncingRecordId(null);
     }
   };
+
+  const fetchUnmapped = async (targetPage = unmappedPage) => {
+    setUnmappedLoading(true);
+    setError('');
+    try {
+      let url = `${API_BASE}?action=getUnmappedEntities&type=${unmappedType}&page=${targetPage}&limit=10`;
+      if (unmappedSearch) {
+        url += `&search=${encodeURIComponent(unmappedSearch)}`;
+      }
+      const data = await fetchApi(url);
+      if (data.success) {
+        setUnmappedRecords(data.records || []);
+        setUnmappedTotal(data.total_count || 0);
+        setUnmappedPage(data.page || 1);
+        setMappingInputs({});
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUnmappedLoading(false);
+    }
+  };
+
+  const handleSaveMapping = async (key, value) => {
+    if (!value || !value.trim()) {
+      setError('SatuSehat ID/Code is required.');
+      return;
+    }
+    setSavingMapping(prev => ({ ...prev, [key]: true }));
+    setError('');
+    try {
+      const response = await fetchApi(`${API_BASE}?action=saveMapping`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: unmappedType, key, value })
+      });
+      if (response.success) {
+        const timeStr = new Date().toLocaleTimeString();
+        setSyncLogs(prev => [...prev, { time: timeStr, text: `Successfully mapped [${unmappedType}] key: ${key} to value: ${value}`, type: 'success' }]);
+        await fetchUnmapped(unmappedPage);
+      } else {
+        setError(response.message || 'Failed to save mapping');
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingMapping(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'troubleshoot' && role === 'admin') {
+      fetchUnmapped(1);
+    }
+  }, [unmappedType, activeTab]);
 
   const handleStartSync = async () => {
     if (syncing) return;
@@ -587,11 +665,14 @@ export default function Dashboard({ token, setToken }) {
           <button className={`tab ${activeTab === 'nik' ? 'active' : ''}`} onClick={() => { setActiveTab('nik'); setResult(null); setError(''); }}>NIK</button>
           <button className={`tab ${activeTab === 'nik_ibu' ? 'active' : ''}`} onClick={() => { setActiveTab('nik_ibu'); setResult(null); setError(''); }}>NIK Ibu (Bayi)</button>
           {role === 'admin' && (
-            <button className={`tab ${activeTab === 'sync' ? 'active' : ''}`} onClick={() => { setActiveTab('sync'); setResult(null); setError(''); fetchSyncStats(); }}>SatuSehat Sync Engine</button>
+            <>
+              <button className={`tab ${activeTab === 'sync' ? 'active' : ''}`} onClick={() => { setActiveTab('sync'); setResult(null); setError(''); fetchSyncStats(); }}>SatuSehat Sync Engine</button>
+              <button className={`tab ${activeTab === 'troubleshoot' ? 'active' : ''}`} onClick={() => { setActiveTab('troubleshoot'); setResult(null); setError(''); }}>Mapping Center</button>
+            </>
           )}
         </div>
 
-        {activeTab !== 'sync' && (
+        {activeTab !== 'sync' && activeTab !== 'troubleshoot' && (
           <form onSubmit={handleSearch}>
             {activeTab === 'rm' && (
               <div className="form-group">
@@ -645,10 +726,42 @@ export default function Dashboard({ token, setToken }) {
                     setPage(1);
                   }}
                 >
-                  {resourcesList.map(res => (
-                    <option key={res.id} value={res.id}>{res.name}</option>
-                  ))}
-                  <option value="workflow">🔥 Sequential Workflow Sync (Encounter Sequence)</option>
+                  <optgroup label="🏥 Core Visit & Demographics" style={{ background: '#110e1a', color: '#ffb3c1', fontWeight: 'bold' }}>
+                    <option value="patient">{'Patient (NIK -> IHS)'}</option>
+                    <option value="encounter">Encounter (Visit Registration)</option>
+                    <option value="episodeofcare">Episode Of Care</option>
+                    <option value="condition">Condition (Diagnosis)</option>
+                    <option value="observationttv">Observation TTV (Vitals)</option>
+                    <option value="procedure">Procedure</option>
+                    <option value="allergyintolerance">Allergy Intolerance</option>
+                    <option value="immunization">Immunization</option>
+                  </optgroup>
+                  <optgroup label="💊 Medication Services" style={{ background: '#110e1a', color: '#ffb3c1', fontWeight: 'bold' }}>
+                    <option value="medication">Medication (Drug Catalog)</option>
+                    <option value="medicationrequest">Medication Request (Prescription)</option>
+                    <option value="medicationdispense">Medication Dispense</option>
+                    <option value="medicationstatement">Medication Statement</option>
+                  </optgroup>
+                  <optgroup label="🔬 Laboratory Services (PK & MB)" style={{ background: '#110e1a', color: '#ffb3c1', fontWeight: 'bold' }}>
+                    <option value="servicerequest_lab_pk">Lab PK Service Request</option>
+                    <option value="specimen_lab_pk">Lab PK Specimen</option>
+                    <option value="observation_lab_pk">Lab PK Observation</option>
+                    <option value="diagnosticreport_lab_pk">Lab PK Diagnostic Report</option>
+                    <option value="servicerequest_lab_mb">Lab MB Service Request</option>
+                    <option value="specimen_lab_mb">Lab MB Specimen</option>
+                    <option value="observation_lab_mb">Lab MB Observation</option>
+                    <option value="diagnosticreport_lab_mb">Lab MB Diagnostic Report</option>
+                  </optgroup>
+                  <optgroup label="🩻 Radiology & Clinical Impression" style={{ background: '#110e1a', color: '#ffb3c1', fontWeight: 'bold' }}>
+                    <option value="clinicalimpression">Clinical Impression</option>
+                    <option value="servicerequest_rad">Radiology Service Request</option>
+                    <option value="specimen_rad">Radiology Specimen</option>
+                    <option value="observation_rad">Radiology Observation</option>
+                    <option value="diagnosticreport_rad">Radiology Diagnostic Report</option>
+                  </optgroup>
+                  <optgroup label="🔥 Advanced Workflow" style={{ background: '#110e1a', color: '#ffb3c1', fontWeight: 'bold' }}>
+                    <option value="workflow">Sequential Workflow Sync (Encounter Sequence)</option>
+                  </optgroup>
                 </select>
               </div>
 
@@ -808,6 +921,25 @@ export default function Dashboard({ token, setToken }) {
                               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                                 {record.nik ? `NIK: ${record.nik}` : ''} {record.rm ? ` | RM: ${record.rm}` : ''}
                               </div>
+                              {(record.noorder || record.kd_jenis_prw || record.id_template) && (
+                                <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.25rem', flexWrap: 'wrap' }}>
+                                  {record.noorder && (
+                                    <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.3rem', borderRadius: '4px', background: 'rgba(137, 180, 250, 0.1)', color: '#89b4fa', border: '1px solid rgba(137, 180, 250, 0.2)' }}>
+                                      Order: {record.noorder}
+                                    </span>
+                                  )}
+                                  {record.kd_jenis_prw && (
+                                    <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.3rem', borderRadius: '4px', background: 'rgba(203, 166, 247, 0.1)', color: '#cba6f7', border: '1px solid rgba(203, 166, 247, 0.2)' }}>
+                                      Type Code: {record.kd_jenis_prw}
+                                    </span>
+                                  )}
+                                  {record.id_template && (
+                                    <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.3rem', borderRadius: '4px', background: 'rgba(242, 205, 205, 0.1)', color: '#f2cdcd', border: '1px solid rgba(242, 205, 205, 0.2)' }}>
+                                      Template: {record.id_template}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                             </td>
                             <td style={{ padding: '0.75rem 1rem', fontFamily: 'monospace' }}>{record.no_rawat || '-'}</td>
                             <td style={{ padding: '0.75rem 1rem', color: '#a6adc8', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={record.details}>
@@ -825,9 +957,40 @@ export default function Dashboard({ token, setToken }) {
                                 </span>
                               )}
                               {record.status === 'blocked' && (
-                                <span style={{ padding: '0.2rem 0.6rem', borderRadius: '20px', fontSize: '0.75rem', background: 'rgba(248, 113, 113, 0.15)', color: '#f87171', border: '1px solid rgba(248, 113, 113, 0.3)', textShadow: '0 0 10px rgba(248, 113, 113, 0.4)' }}>
-                                  Blocked
-                                </span>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                  <span style={{ display: 'inline-block', width: 'fit-content', padding: '0.2rem 0.6rem', borderRadius: '20px', fontSize: '0.75rem', background: 'rgba(248, 113, 113, 0.15)', color: '#f87171', border: '1px solid rgba(248, 113, 113, 0.3)', textShadow: '0 0 10px rgba(248, 113, 113, 0.4)' }}>
+                                    Blocked
+                                  </span>
+                                  {record.blocked_reason && (
+                                    <span
+                                      onClick={() => {
+                                        if (record.blocked_reason.includes('Location')) {
+                                          setUnmappedType('location');
+                                          setActiveTab('troubleshoot');
+                                        } else if (record.blocked_reason.includes('Practitioner') || record.blocked_reason.includes('Doctor')) {
+                                          setUnmappedType('practitioner');
+                                          setActiveTab('troubleshoot');
+                                        } else if (record.blocked_reason.includes('Medication')) {
+                                          setUnmappedType('medication');
+                                          setActiveTab('troubleshoot');
+                                        } else if (record.blocked_reason.includes('Vaccine')) {
+                                          setUnmappedType('vaccine');
+                                          setActiveTab('troubleshoot');
+                                        }
+                                      }}
+                                      style={{
+                                        fontSize: '0.7rem',
+                                        color: '#f87171',
+                                        textDecoration: 'underline',
+                                        cursor: record.blocked_reason.includes('Unmapped') ? 'pointer' : 'default',
+                                        opacity: 0.8
+                                      }}
+                                      title={record.blocked_reason.includes('Unmapped') ? 'Click to resolve in Mapping Center' : ''}
+                                    >
+                                      {record.blocked_reason}
+                                    </span>
+                                  )}
+                                </div>
                               )}
                             </td>
                             <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
@@ -921,6 +1084,172 @@ export default function Dashboard({ token, setToken }) {
                       }}>{log.text}</span>
                     </div>
                   ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+        {activeTab === 'troubleshoot' && (
+          <div className="sync-dashboard-container" style={{ textAlign: 'left' }}>
+            <h2 style={{ marginTop: 0, color: 'var(--primary-color)' }}>Troubleshooting & Mapping Center</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+              Identify missing master data mappings that block synchronization pipelines. Update matching IDs directly to auto-heal failed sync runs.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 3fr', gap: '1.5rem', minHeight: '400px' }}>
+              {/* Left sidebar selectors */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {[
+                  { id: 'location', label: 'Clinics / Locations' },
+                  { id: 'practitioner', label: 'Practitioners / Doctors' },
+                  { id: 'medication', label: 'Medications / Drugs' },
+                  { id: 'vaccine', label: 'Vaccines / Immunizations' }
+                ].map(item => (
+                  <button
+                    key={item.id}
+                    className={`tab ${unmappedType === item.id ? 'active' : ''}`}
+                    onClick={() => { setUnmappedType(item.id); setUnmappedPage(1); setUnmappedSearch(''); }}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '0.75rem 1rem',
+                      borderRadius: '8px',
+                      background: unmappedType === item.id ? 'rgba(168, 85, 247, 0.2)' : 'rgba(255,255,255,0.05)',
+                      border: '1px solid ' + (unmappedType === item.id ? 'var(--primary-color)' : 'rgba(255,255,255,0.1)'),
+                      color: unmappedType === item.id ? '#fff' : 'var(--text-muted)',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Right content panel */}
+              <div className="glass" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                {/* Top search/filter */}
+                <div style={{ display: 'flex', gap: '1rem' }}>
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder={`Search unmapped ${unmappedType}s...`}
+                    value={unmappedSearch}
+                    onChange={e => setUnmappedSearch(e.target.value)}
+                    style={{ background: 'rgba(0,0,0,0.4)', color: '#fff', border: '1px solid rgba(255,255,255,0.1)' }}
+                  />
+                  <button
+                    className="btn"
+                    onClick={() => fetchUnmapped(1)}
+                    disabled={unmappedLoading}
+                    style={{ width: 'auto', whiteSpace: 'nowrap' }}
+                  >
+                    {unmappedLoading ? 'Searching...' : 'Search'}
+                  </button>
+                </div>
+
+                {/* Table or loading state */}
+                {unmappedLoading ? (
+                  <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
+                    Loading unmapped records...
+                  </div>
+                ) : unmappedRecords.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: '8px' }}>
+                    No unmapped {unmappedType}s found matching filters. Everything is set up correctly!
+                  </div>
+                ) : (
+                  <div style={{ overflowX: 'auto', flexGrow: 1 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', textAlign: 'left' }}>
+                          <th style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>Local Key</th>
+                          <th style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>Name / Details</th>
+                          <th style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>SatuSehat Identifier / Code</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {unmappedRecords.map(rec => (
+                          <tr key={rec.key} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                            <td style={{ padding: '0.75rem', fontFamily: 'monospace', color: 'var(--primary-color)' }}>{rec.key}</td>
+                            <td style={{ padding: '0.75rem' }}>
+                              <div style={{ fontWeight: '500' }}>{rec.name}</div>
+                              {rec.extra && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{rec.extra}</div>}
+                            </td>
+                            <td style={{ padding: '0.75rem', minWidth: '320px' }}>
+                              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <input
+                                  type="text"
+                                  className="form-control"
+                                  placeholder={
+                                    unmappedType === 'location' ? 'Location UUID (e.g. 10002891)' :
+                                    unmappedType === 'practitioner' ? 'Practitioner IHS ID' :
+                                    unmappedType === 'medication' ? 'KFA Drug Code' : 'KFA Vaccine Code'
+                                  }
+                                  value={mappingInputs[rec.key] ?? ''}
+                                  onChange={e => setMappingInputs(prev => ({ ...prev, [rec.key]: e.target.value }))}
+                                  style={{
+                                    height: '38px',
+                                    padding: '0 0.75rem',
+                                    fontSize: '0.85rem',
+                                    background: 'rgba(0,0,0,0.3)',
+                                    color: '#fff',
+                                    border: '1px solid rgba(255,255,255,0.15)'
+                                  }}
+                                />
+                                <button
+                                  className="btn"
+                                  onClick={() => handleSaveMapping(rec.key, mappingInputs[rec.key] ?? '')}
+                                  disabled={savingMapping[rec.key]}
+                                  style={{
+                                    width: 'auto',
+                                    height: '38px',
+                                    padding: '0 1rem',
+                                    fontSize: '0.85rem',
+                                    background: 'var(--primary-color)',
+                                    color: '#fff',
+                                    border: 'none',
+                                    borderRadius: '8px',
+                                    cursor: 'pointer',
+                                    whiteSpace: 'nowrap'
+                                  }}
+                                >
+                                  {savingMapping[rec.key] ? 'Saving...' : 'Save'}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Pagination */}
+                {unmappedTotal > 10 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1rem' }}>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      Showing {(unmappedPage - 1) * 10 + 1} - {Math.min(unmappedPage * 10, unmappedTotal)} of {unmappedTotal} entries
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        className="btn btn-secondary"
+                        disabled={unmappedPage <= 1 || unmappedLoading}
+                        onClick={() => fetchUnmapped(unmappedPage - 1)}
+                        style={{ width: 'auto', padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                      >
+                        Prev
+                      </button>
+                      <span style={{ alignSelf: 'center', fontSize: '0.85rem', color: '#fff' }}>Page {unmappedPage} of {Math.ceil(unmappedTotal / 10)}</span>
+                      <button
+                        className="btn btn-secondary"
+                        disabled={unmappedPage >= Math.ceil(unmappedTotal / 10) || unmappedLoading}
+                        onClick={() => fetchUnmapped(unmappedPage + 1)}
+                        style={{ width: 'auto', padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

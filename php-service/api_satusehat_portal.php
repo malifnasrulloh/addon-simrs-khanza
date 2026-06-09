@@ -122,6 +122,227 @@ if ($action !== 'login') {
     $userRole = $decoded['role'] ?? 'user';
 }
 
+if ($action === 'getUnmappedEntities' && $method === 'GET') {
+    if ($userRole !== 'admin') {
+        jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);
+    }
+
+    $type = $_GET['type'] ?? 'location';
+    $search = $_GET['search'] ?? '';
+    $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 20;
+    if ($page <= 0) $page = 1;
+    if ($limit <= 0 || $limit > 100) $limit = 20;
+    $offset = ($page - 1) * $limit;
+
+    try {
+        $sql = "";
+        $countSql = "";
+        $params = [];
+
+        switch ($type) {
+            case 'location':
+                $sql = "
+                    SELECT pol.kd_poli as `key`, pol.nm_poli as `name`, NULL as extra
+                    FROM poliklinik pol
+                    LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
+                    WHERE smlr.id_lokasi_satusehat IS NULL OR smlr.id_lokasi_satusehat = ''
+                ";
+                $countSql = "
+                    SELECT COUNT(*) as cnt
+                    FROM poliklinik pol
+                    LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
+                    WHERE smlr.id_lokasi_satusehat IS NULL OR smlr.id_lokasi_satusehat = ''
+                ";
+                if ($search) {
+                    $sql .= " AND (pol.kd_poli LIKE :search OR pol.nm_poli LIKE :search)";
+                    $countSql .= " AND (pol.kd_poli LIKE :search OR pol.nm_poli LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'practitioner':
+                $sql = "
+                    SELECT peg.nik as `key`, peg.nama as `name`, peg.no_ktp as extra
+                    FROM pegawai peg
+                    LEFT JOIN satu_sehat_ihs_practitioner ssip ON ssip.nikpegawai = peg.nik
+                    WHERE (ssip.ihspegawai IS NULL OR ssip.ihspegawai = '') AND peg.no_ktp REGEXP '^[0-9]{16}$'
+                ";
+                $countSql = "
+                    SELECT COUNT(*) as cnt
+                    FROM pegawai peg
+                    LEFT JOIN satu_sehat_ihs_practitioner ssip ON ssip.nikpegawai = peg.nik
+                    WHERE (ssip.ihspegawai IS NULL OR ssip.ihspegawai = '') AND peg.no_ktp REGEXP '^[0-9]{16}$'
+                ";
+                if ($search) {
+                    $sql .= " AND (peg.nik LIKE :search OR peg.nama LIKE :search OR peg.no_ktp LIKE :search)";
+                    $countSql .= " AND (peg.nik LIKE :search OR peg.nama LIKE :search OR peg.no_ktp LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'medication':
+                $sql = "
+                    SELECT db.kode_brng as `key`, db.nama_brng as `name`, k.nm_kategori as extra
+                    FROM databarang db
+                    INNER JOIN kategori_barang k ON db.kode_kategori = k.kode_kategori
+                    LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = db.kode_brng
+                    WHERE ssmo.obat_code IS NULL OR ssmo.obat_code = ''
+                ";
+                $countSql = "
+                    SELECT COUNT(*) as cnt
+                    FROM databarang db
+                    LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = db.kode_brng
+                    WHERE ssmo.obat_code IS NULL OR ssmo.obat_code = ''
+                ";
+                if ($search) {
+                    $sql .= " AND (db.kode_brng LIKE :search OR db.nama_brng LIKE :search)";
+                    $countSql .= " AND (db.kode_brng LIKE :search OR db.nama_brng LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'vaccine':
+                $sql = "
+                    SELECT db.kode_brng as `key`, db.nama_brng as `name`, NULL as extra
+                    FROM databarang db
+                    LEFT JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = db.kode_brng
+                    WHERE smv.vaksin_kodifikasi IS NULL OR smv.vaksin_kodifikasi = ''
+                ";
+                $countSql = "
+                    SELECT COUNT(*) as cnt
+                    FROM databarang db
+                    LEFT JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = db.kode_brng
+                    WHERE smv.vaksin_kodifikasi IS NULL OR smv.vaksin_kodifikasi = ''
+                ";
+                if ($search) {
+                    $sql .= " AND (db.kode_brng LIKE :search OR db.nama_brng LIKE :search)";
+                    $countSql .= " AND (db.kode_brng LIKE :search OR db.nama_brng LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            default:
+                jsonResponse(['success' => false, 'message' => 'Invalid mapping type'], 400);
+        }
+
+        // Get total count
+        $countStmt = $pdo->prepare($countSql);
+        foreach ($params as $k => $val) {
+            $countStmt->bindValue($k, $val);
+        }
+        $countStmt->execute();
+        $totalCount = (int)$countStmt->fetchColumn();
+
+        // Get records
+        $sql .= " LIMIT :limit OFFSET :offset";
+        $stmt = $pdo->prepare($sql);
+        foreach ($params as $k => $val) {
+            $stmt->bindValue($k, $val);
+        }
+        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+        $stmt->execute();
+        $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        jsonResponse([
+            'success' => true,
+            'type' => $type,
+            'total_count' => $totalCount,
+            'page' => $page,
+            'limit' => $limit,
+            'records' => $records
+        ]);
+
+    } catch (Exception $e) {
+        jsonResponse(['success' => false, 'message' => $e->getMessage()], 500);
+    }
+}
+
+if ($action === 'saveMapping' && $method === 'POST') {
+    if ($userRole !== 'admin') {
+        jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);
+    }
+
+    // Read POST payload
+    $input = json_decode(file_get_contents('php://input'), true);
+    $type = $input['type'] ?? '';
+    $key = $input['key'] ?? '';
+    $value = $input['value'] ?? '';
+
+    if (!$type || !$key || !$value) {
+        jsonResponse(['success' => false, 'message' => 'Missing required fields: type, key, value'], 400);
+    }
+
+    try {
+        switch ($type) {
+            case 'location':
+                $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_mapping_lokasi_ralan WHERE kd_poli = ?");
+                $checkStmt->execute([$key]);
+                if ((int)$checkStmt->fetchColumn() > 0) {
+                    $stmt = $pdo->prepare("UPDATE satu_sehat_mapping_lokasi_ralan SET id_lokasi_satusehat = ? WHERE kd_poli = ?");
+                    $stmt->execute([$value, $key]);
+                } else {
+                    $stmt = $pdo->prepare("INSERT INTO satu_sehat_mapping_lokasi_ralan (kd_poli, id_lokasi_satusehat) VALUES (?, ?)");
+                    $stmt->execute([$key, $value]);
+                }
+                break;
+
+            case 'practitioner':
+                $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_ihs_practitioner WHERE nikpegawai = ?");
+                $checkStmt->execute([$key]);
+                if ((int)$checkStmt->fetchColumn() > 0) {
+                    $stmt = $pdo->prepare("UPDATE satu_sehat_ihs_practitioner SET ihspegawai = ? WHERE nikpegawai = ?");
+                    $stmt->execute([$value, $key]);
+                } else {
+                    $stmt = $pdo->prepare("INSERT INTO satu_sehat_ihs_practitioner (nikpegawai, ihspegawai) VALUES (?, ?)");
+                    $stmt->execute([$key, $value]);
+                }
+                break;
+
+            case 'medication':
+                $nameStmt = $pdo->prepare("SELECT nama_brng FROM databarang WHERE kode_brng = ?");
+                $nameStmt->execute([$key]);
+                $localName = $nameStmt->fetchColumn() ?: 'Obat';
+
+                $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_mapping_obat WHERE kode_brng = ?");
+                $checkStmt->execute([$key]);
+                if ((int)$checkStmt->fetchColumn() > 0) {
+                    $stmt = $pdo->prepare("UPDATE satu_sehat_mapping_obat SET obat_code = ?, obat_display = ? WHERE kode_brng = ?");
+                    $stmt->execute([$value, $localName, $key]);
+                } else {
+                    $stmt = $pdo->prepare("INSERT INTO satu_sehat_mapping_obat (kode_brng, obat_code, obat_display, obat_system, form_code, form_system, form_display) VALUES (?, ?, ?, 'http://sys-ids.kemkes.go.id/medication/', '00000000', 'http://terminology.kemkes.go.id/CodeSystem/medication-form', 'Tablet/Kapsul')");
+                    $stmt->execute([$key, $value, $localName]);
+                }
+                break;
+
+            case 'vaccine':
+                $nameStmt = $pdo->prepare("SELECT nama_brng FROM databarang WHERE kode_brng = ?");
+                $nameStmt->execute([$key]);
+                $brngName = $nameStmt->fetchColumn() ?: 'Vaksin';
+
+                $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_mapping_vaksin WHERE kode_brng = ?");
+                $checkStmt->execute([$key]);
+                if ((int)$checkStmt->fetchColumn() > 0) {
+                    $stmt = $pdo->prepare("UPDATE satu_sehat_mapping_vaksin SET vaksin_kodifikasi = ? WHERE kode_brng = ?");
+                    $stmt->execute([$value, $key]);
+                } else {
+                    $stmt = $pdo->prepare("INSERT INTO satu_sehat_mapping_vaksin (kode_brng, vaksin_kodifikasi, vaksin_nama) VALUES (?, ?, ?)");
+                    $stmt->execute([$key, $value, $brngName]);
+                }
+                break;
+
+            default:
+                jsonResponse(['success' => false, 'message' => 'Invalid mapping type'], 400);
+        }
+
+        jsonResponse(['success' => true, 'message' => 'Mapping successfully persisted']);
+
+    } catch (Exception $e) {
+        jsonResponse(['success' => false, 'message' => $e->getMessage()], 500);
+    }
+}
+
 if ($action === 'searchLocal' && $method === 'GET') {
     $no_rm = $_GET['no_rm'] ?? '';
     $nik = $_GET['nik'] ?? '';
@@ -736,6 +957,498 @@ if ($action === 'getSyncStats' && $method === 'GET') {
                     'pending' => max(0, $total - $blocked - $synced)
                 ];
                 break;
+
+            case 'clinicalimpression':
+                $stmtTotal = $pdo->prepare("
+                    SELECT 
+                        (SELECT COUNT(*) FROM pemeriksaan_ralan pem INNER JOIN reg_periksa rp ON pem.no_rawat = rp.no_rawat WHERE {$timeFilter} AND pem.penilaian <> '') +
+                        (SELECT COUNT(*) FROM pemeriksaan_ranap pem INNER JOIN reg_periksa rp ON pem.no_rawat = rp.no_rawat WHERE {$timeFilter} AND pem.penilaian <> '') as cnt
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT 
+                        (SELECT COUNT(*) FROM pemeriksaan_ralan pem INNER JOIN reg_periksa rp ON pem.no_rawat = rp.no_rawat LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat WHERE {$timeFilter} AND pem.penilaian <> '' AND sse.id_encounter IS NULL) +
+                        (SELECT COUNT(*) FROM pemeriksaan_ranap pem INNER JOIN reg_periksa rp ON pem.no_rawat = rp.no_rawat LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat WHERE {$timeFilter} AND pem.penilaian <> '' AND sse.id_encounter IS NULL) as cnt
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_clinicalimpression ssci
+                    INNER JOIN reg_periksa rp ON ssci.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
+            case 'servicerequest_rad':
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(*) FROM permintaan_pemeriksaan_radiologi ppr
+                    INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT COUNT(*) FROM permintaan_pemeriksaan_radiologi ppr
+                    INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = ppr.kd_jenis_prw
+                    WHERE {$timeFilter} AND (sse.id_encounter IS NULL OR smr.code IS NULL OR smr.code = '')
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_servicerequest_radiologi ssr
+                    INNER JOIN permintaan_radiologi pr ON ssr.noorder = pr.noorder
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
+            case 'specimen_rad':
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(*) FROM permintaan_pemeriksaan_radiologi ppr
+                    INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT COUNT(*) FROM permintaan_pemeriksaan_radiologi ppr
+                    INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
+                    WHERE {$timeFilter} AND (ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '')
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_specimen_radiologi sssp
+                    INNER JOIN permintaan_radiologi pr ON sssp.noorder = pr.noorder
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
+            case 'observation_rad':
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(*) FROM periksa_radiologi prad
+                    INNER JOIN reg_periksa rp ON prad.no_rawat = rp.no_rawat
+                    INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam
+                    WHERE {$timeFilter}
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT COUNT(*) FROM periksa_radiologi prad
+                    INNER JOIN reg_periksa rp ON prad.no_rawat = rp.no_rawat
+                    INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam
+                    INNER JOIN permintaan_radiologi pr ON pr.no_rawat = rp.no_rawat AND pr.tgl_hasil = prad.tgl_periksa AND pr.jam_hasil = prad.jam
+                    INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+                    LEFT JOIN satu_sehat_specimen_radiologi sssp ON sssp.noorder = ppr.noorder AND sssp.kd_jenis_prw = ppr.kd_jenis_prw
+                    LEFT JOIN satu_sehat_imagingstudy_radiologi ssi ON ssi.noorder = ppr.noorder AND ssi.kd_jenis_prw = ppr.kd_jenis_prw
+                    WHERE {$timeFilter} AND (sssp.id_specimen IS NULL OR ssi.id_imaging IS NULL)
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_observation_radiologi sso
+                    INNER JOIN permintaan_radiologi pr ON sso.noorder = pr.noorder
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
+            case 'diagnosticreport_rad':
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(*) FROM periksa_radiologi prad
+                    INNER JOIN reg_periksa rp ON prad.no_rawat = rp.no_rawat
+                    INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam
+                    WHERE {$timeFilter}
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT COUNT(*) FROM periksa_radiologi prad
+                    INNER JOIN reg_periksa rp ON prad.no_rawat = rp.no_rawat
+                    INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam
+                    INNER JOIN permintaan_radiologi pr ON pr.no_rawat = rp.no_rawat AND pr.tgl_hasil = prad.tgl_periksa AND pr.jam_hasil = prad.jam
+                    INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+                    LEFT JOIN satu_sehat_observation_radiologi sso ON sso.noorder = ppr.noorder AND sso.kd_jenis_prw = ppr.kd_jenis_prw
+                    WHERE {$timeFilter} AND sso.id_observation IS NULL
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_diagnosticreport_radiologi ssdr
+                    INNER JOIN permintaan_radiologi pr ON ssdr.noorder = ssdr.noorder AND ssdr.kd_jenis_prw = ssdr.kd_jenis_prw
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
+            case 'servicerequest_lab_pk':
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(*) FROM permintaan_detail_permintaan_lab pdpl
+                    INNER JOIN permintaan_lab pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT COUNT(*) FROM permintaan_detail_permintaan_lab pdpl
+                    INNER JOIN permintaan_lab pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_mapping_lab sml ON sml.kd_jenis_prw = pdpl.kd_jenis_prw AND sml.id_template = pdpl.id_template
+                    WHERE {$timeFilter} AND (sse.id_encounter IS NULL OR sml.code IS NULL OR sml.code = '')
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_servicerequest_lab ssr
+                    INNER JOIN permintaan_lab pl ON ssr.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
+            case 'specimen_lab_pk':
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(*) FROM permintaan_detail_permintaan_lab pdpl
+                    INNER JOIN permintaan_lab pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT COUNT(*) FROM permintaan_detail_permintaan_lab pdpl
+                    INNER JOIN permintaan_lab pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_servicerequest_lab ssr ON ssr.noorder = pdpl.noorder AND ssr.kd_jenis_prw = pdpl.kd_jenis_prw AND ssr.id_template = pdpl.id_template
+                    WHERE {$timeFilter} AND (ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '')
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_specimen_lab sssp
+                    INNER JOIN permintaan_lab pl ON sssp.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
+            case 'observation_lab_pk':
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(*) FROM detail_periksa_lab dpl
+                    INNER JOIN periksa_lab pl ON dpl.no_rawat = pl.no_rawat AND dpl.tgl_periksa = pl.tgl_periksa AND dpl.jam = pl.jam
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT COUNT(*) FROM detail_periksa_lab dpl
+                    INNER JOIN periksa_lab pl ON dpl.no_rawat = pl.no_rawat AND dpl.tgl_periksa = pl.tgl_periksa AND dpl.jam = pl.jam
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    INNER JOIN permintaan_lab pr ON pr.no_rawat = rp.no_rawat AND pr.tgl_hasil = pl.tgl_periksa AND pr.jam_hasil = pl.jam
+                    INNER JOIN permintaan_detail_permintaan_lab pdpl ON pdpl.noorder = pr.noorder AND pdpl.kd_jenis_prw = dpl.kd_jenis_prw AND pdpl.id_template = dpl.id_template
+                    LEFT JOIN satu_sehat_specimen_lab sssp ON sssp.noorder = pdpl.noorder AND sssp.kd_jenis_prw = pdpl.kd_jenis_prw AND sssp.id_template = pdpl.id_template
+                    WHERE {$timeFilter} AND sssp.id_specimen IS NULL
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_observation_lab sso
+                    INNER JOIN permintaan_lab pl ON sso.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
+            case 'diagnosticreport_lab_pk':
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(*) FROM detail_periksa_lab dpl
+                    INNER JOIN periksa_lab pl ON dpl.no_rawat = pl.no_rawat AND dpl.tgl_periksa = pl.tgl_periksa AND dpl.jam = pl.jam
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT COUNT(*) FROM detail_periksa_lab dpl
+                    INNER JOIN periksa_lab pl ON dpl.no_rawat = pl.no_rawat AND dpl.tgl_periksa = pl.tgl_periksa AND dpl.jam = pl.jam
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    INNER JOIN permintaan_lab pr ON pr.no_rawat = rp.no_rawat AND pr.tgl_hasil = pl.tgl_periksa AND pr.jam_hasil = pl.jam
+                    INNER JOIN permintaan_detail_permintaan_lab pdpl ON pdpl.noorder = pr.noorder AND pdpl.kd_jenis_prw = dpl.kd_jenis_prw AND pdpl.id_template = dpl.id_template
+                    LEFT JOIN satu_sehat_observation_lab sso ON sso.noorder = pdpl.noorder AND sso.kd_jenis_prw = pdpl.kd_jenis_prw AND sso.id_template = pdpl.id_template
+                    WHERE {$timeFilter} AND sso.id_observation IS NULL
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_diagnosticreport_lab ssdr
+                    INNER JOIN permintaan_lab pl ON ssdr.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
+            case 'servicerequest_lab_mb':
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(*) FROM permintaan_detail_permintaan_labmb pdpl
+                    INNER JOIN permintaan_labmb pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT COUNT(*) FROM permintaan_detail_permintaan_labmb pdpl
+                    INNER JOIN permintaan_labmb pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_mapping_lab sml ON sml.kd_jenis_prw = pdpl.kd_jenis_prw AND sml.id_template = pdpl.id_template
+                    WHERE {$timeFilter} AND (sse.id_encounter IS NULL OR sml.code IS NULL OR sml.code = '')
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_servicerequest_lab_mb ssr
+                    INNER JOIN permintaan_labmb pl ON ssr.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
+            case 'specimen_lab_mb':
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(*) FROM permintaan_detail_permintaan_labmb pdpl
+                    INNER JOIN permintaan_labmb pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT COUNT(*) FROM permintaan_detail_permintaan_labmb pdpl
+                    INNER JOIN permintaan_labmb pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_servicerequest_lab_mb ssr ON ssr.noorder = pdpl.noorder AND ssr.kd_jenis_prw = pdpl.kd_jenis_prw AND ssr.id_template = pdpl.id_template
+                    WHERE {$timeFilter} AND (ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '')
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_specimen_lab_mb sssp
+                    INNER JOIN permintaan_labmb pl ON sssp.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
+            case 'observation_lab_mb':
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(*) FROM detail_periksa_lab dpl
+                    INNER JOIN periksa_lab pl ON dpl.no_rawat = pl.no_rawat AND dpl.tgl_periksa = pl.tgl_periksa AND dpl.jam = pl.jam
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT COUNT(*) FROM detail_periksa_lab dpl
+                    INNER JOIN periksa_lab pl ON dpl.no_rawat = pl.no_rawat AND dpl.tgl_periksa = pl.tgl_periksa AND dpl.jam = pl.jam
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    INNER JOIN permintaan_labmb pr ON pr.no_rawat = rp.no_rawat AND pr.tgl_hasil = pl.tgl_periksa AND pr.jam_hasil = pl.jam
+                    INNER JOIN permintaan_detail_permintaan_labmb pdpl ON pdpl.noorder = pr.noorder AND pdpl.kd_jenis_prw = dpl.kd_jenis_prw AND pdpl.id_template = dpl.id_template
+                    LEFT JOIN satu_sehat_specimen_lab_mb sssp ON sssp.noorder = pdpl.noorder AND sssp.kd_jenis_prw = pdpl.kd_jenis_prw AND sssp.id_template = pdpl.id_template
+                    WHERE {$timeFilter} AND sssp.id_specimen IS NULL
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_observation_lab_mb sso
+                    INNER JOIN permintaan_labmb pl ON sso.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
+            case 'diagnosticreport_lab_mb':
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(*) FROM detail_periksa_lab dpl
+                    INNER JOIN periksa_lab pl ON dpl.no_rawat = pl.no_rawat AND dpl.tgl_periksa = pl.tgl_periksa AND dpl.jam = pl.jam
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtTotal->execute($params);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtBlocked = $pdo->prepare("
+                    SELECT COUNT(*) FROM detail_periksa_lab dpl
+                    INNER JOIN periksa_lab pl ON dpl.no_rawat = pl.no_rawat AND dpl.tgl_periksa = pl.tgl_periksa AND dpl.jam = pl.jam
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    INNER JOIN permintaan_labmb pr ON pr.no_rawat = rp.no_rawat AND pr.tgl_hasil = pl.tgl_periksa AND pr.jam_hasil = pl.jam
+                    INNER JOIN permintaan_detail_permintaan_labmb pdpl ON pdpl.noorder = pr.noorder AND pdpl.kd_jenis_prw = dpl.kd_jenis_prw AND pdpl.id_template = dpl.id_template
+                    LEFT JOIN satu_sehat_observation_lab_mb sso ON sso.noorder = pdpl.noorder AND sso.kd_jenis_prw = pdpl.kd_jenis_prw AND sso.id_template = pdpl.id_template
+                    WHERE {$timeFilter} AND sso.id_observation IS NULL
+                ");
+                $stmtBlocked->execute($params);
+                $blocked = (int)$stmtBlocked->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(*) FROM satu_sehat_diagnosticreport_lab_mb ssdr
+                    INNER JOIN permintaan_labmb pl ON ssdr.noorder = pl.noorder
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    WHERE {$timeFilter}
+                ");
+                $stmtSynced->execute($params);
+                $synced = (int)$stmtSynced->fetchColumn();
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
         }
 
         jsonResponse([
@@ -882,6 +1595,19 @@ if ($action === 'triggerBatchSync' && $method === 'POST') {
             'medicationrequest' => ['class' => 'SatuSehatMedicationRequestProcessor', 'file' => 'MedicationRequestProcessor.php', 'method_type' => 'medicationrequest'],
             'medicationdispense' => ['class' => 'SatuSehatMedicationDispenseProcessor', 'file' => 'MedicationDispenseProcessor.php', 'method_type' => 'medicationdispense'],
             'medicationstatement' => ['class' => 'SatuSehatMedicationStatementProcessor', 'file' => 'MedicationStatementProcessor.php', 'method_type' => 'medicationstatement'],
+            'clinicalimpression' => ['class' => 'SatuSehatClinicalImpressionProcessor', 'file' => 'ClinicalImpressionProcessor.php', 'method_type' => 'clinicalimpression'],
+            'servicerequest_rad' => ['class' => 'SatuSehatServiceRequestRadiologiProcessor', 'file' => 'ServiceRequestRadiologiProcessor.php', 'method_type' => 'servicerequest_rad'],
+            'specimen_rad' => ['class' => 'SatuSehatSpecimenRadiologiProcessor', 'file' => 'SpecimenRadiologiProcessor.php', 'method_type' => 'specimen_rad'],
+            'observation_rad' => ['class' => 'SatuSehatObservationRadiologiProcessor', 'file' => 'ObservationRadiologiProcessor.php', 'method_type' => 'observation_rad'],
+            'diagnosticreport_rad' => ['class' => 'SatuSehatDiagnosticReportRadiologiProcessor', 'file' => 'DiagnosticReportRadiologiProcessor.php', 'method_type' => 'diagnosticreport_rad'],
+            'servicerequest_lab_pk' => ['class' => 'SatuSehatServiceRequestLabPKProcessor', 'file' => 'ServiceRequestLabPKProcessor.php', 'method_type' => 'servicerequest_lab_pk'],
+            'specimen_lab_pk' => ['class' => 'SatuSehatSpecimenLabPKProcessor', 'file' => 'SpecimenLabPKProcessor.php', 'method_type' => 'specimen_lab_pk'],
+            'observation_lab_pk' => ['class' => 'SatuSehatObservationLabPKProcessor', 'file' => 'ObservationLabPKProcessor.php', 'method_type' => 'observation_lab_pk'],
+            'diagnosticreport_lab_pk' => ['class' => 'SatuSehatDiagnosticReportLabPKProcessor', 'file' => 'DiagnosticReportLabPKProcessor.php', 'method_type' => 'diagnosticreport_lab_pk'],
+            'servicerequest_lab_mb' => ['class' => 'SatuSehatServiceRequestLabMBProcessor', 'file' => 'ServiceRequestLabMBProcessor.php', 'method_type' => 'servicerequest_lab_mb'],
+            'specimen_lab_mb' => ['class' => 'SatuSehatSpecimenLabMBProcessor', 'file' => 'SpecimenLabMBProcessor.php', 'method_type' => 'specimen_lab_mb'],
+            'observation_lab_mb' => ['class' => 'SatuSehatObservationLabMBProcessor', 'file' => 'ObservationLabMBProcessor.php', 'method_type' => 'observation_lab_mb'],
+            'diagnosticreport_lab_mb' => ['class' => 'SatuSehatDiagnosticReportLabMBProcessor', 'file' => 'DiagnosticReportLabMBProcessor.php', 'method_type' => 'diagnosticreport_lab_mb'],
         ];
 
         $resKey = strtolower($resource);
@@ -920,19 +1646,41 @@ if ($action === 'triggerBatchSync' && $method === 'POST') {
             $stats = $processor->run(array_slice($active, 0, $limit), array_slice($update, 0, $limit));
         } else {
             $type = $map['method_type'];
-            $activeFetchMethod = 'fetchPending' . ucfirst($type) . 'Active';
-            $updateFetchMethod = 'fetchPending' . ucfirst($type) . 'Update';
             
-            if ($type === 'eoc') {
-                $activeFetchMethod = 'fetchPendingEocActive';
-                $updateFetchMethod = 'fetchPendingEocFinished';
-            } elseif ($type === 'allergy') {
-                $activeFetchMethod = 'fetchPendingAllergyActive';
-                $updateFetchMethod = 'fetchPendingAllergyUpdate';
-            } elseif ($type === 'encounter') {
-                $activeFetchMethod = 'fetchPendingArrived';
-                $updateFetchMethod = 'fetchPendingInProgress';
-                $finishFetchMethod = 'fetchPendingFinished';
+            $customFetchMethods = [
+                'clinicalimpression' => ['fetchPendingClinicalImpressionActive', 'fetchPendingClinicalImpressionUpdate'],
+                'servicerequest_rad' => ['fetchPendingServiceRequestRadiologiActive', 'fetchPendingServiceRequestRadiologiUpdate'],
+                'specimen_rad' => ['fetchPendingSpecimenRadiologiActive', 'fetchPendingSpecimenRadiologiUpdate'],
+                'observation_rad' => ['fetchPendingObservationRadiologiActive', 'fetchPendingObservationRadiologiUpdate'],
+                'diagnosticreport_rad' => ['fetchPendingDiagnosticReportRadiologiActive', 'fetchPendingDiagnosticReportRadiologiUpdate'],
+                'servicerequest_lab_pk' => ['fetchPendingServiceRequestLabPKActive', 'fetchPendingServiceRequestLabPKUpdate'],
+                'specimen_lab_pk' => ['fetchPendingSpecimenLabPKActive', 'fetchPendingSpecimenLabPKUpdate'],
+                'observation_lab_pk' => ['fetchPendingObservationLabPKActive', 'fetchPendingObservationLabPKUpdate'],
+                'diagnosticreport_lab_pk' => ['fetchPendingDiagnosticReportLabPKActive', 'fetchPendingDiagnosticReportLabPKUpdate'],
+                'servicerequest_lab_mb' => ['fetchPendingServiceRequestLabMBActive', 'fetchPendingServiceRequestLabMBUpdate'],
+                'specimen_lab_mb' => ['fetchPendingSpecimenLabMBActive', 'fetchPendingSpecimenLabMBUpdate'],
+                'observation_lab_mb' => ['fetchPendingObservationLabMBActive', 'fetchPendingObservationLabMBUpdate'],
+                'diagnosticreport_lab_mb' => ['fetchPendingDiagnosticReportLabMBActive', 'fetchPendingDiagnosticReportLabMBUpdate'],
+            ];
+
+            if (isset($customFetchMethods[$type])) {
+                $activeFetchMethod = $customFetchMethods[$type][0];
+                $updateFetchMethod = $customFetchMethods[$type][1];
+            } else {
+                $activeFetchMethod = 'fetchPending' . ucfirst($type) . 'Active';
+                $updateFetchMethod = 'fetchPending' . ucfirst($type) . 'Update';
+                
+                if ($type === 'eoc') {
+                    $activeFetchMethod = 'fetchPendingEocActive';
+                    $updateFetchMethod = 'fetchPendingEocFinished';
+                } elseif ($type === 'allergy') {
+                    $activeFetchMethod = 'fetchPendingAllergyActive';
+                    $updateFetchMethod = 'fetchPendingAllergyUpdate';
+                } elseif ($type === 'encounter') {
+                    $activeFetchMethod = 'fetchPendingArrived';
+                    $updateFetchMethod = 'fetchPendingInProgress';
+                    $finishFetchMethod = 'fetchPendingFinished';
+                }
             }
 
             if ($type === 'encounter') {
@@ -1039,13 +1787,19 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                         p.no_ktp as nik,
                         rp.tgl_registrasi as date,
                         pol.nm_poli as details,
-                        (CASE 
+                         (CASE 
                             WHEN sse.id_encounter IS NOT NULL THEN 'synced'
                             WHEN rp.status_bayar = 'Belum Bayar' THEN 'blocked'
-                            WHEN smlr.id_lokasi_satusehat IS NULL THEN 'blocked'
+                            WHEN smlr.id_lokasi_satusehat IS NULL OR smlr.id_lokasi_satusehat = '' THEN 'blocked'
                             ELSE 'pending'
-                         END) as status,
-                         sse.id_encounter as ihs_id
+                          END) as status,
+                          (CASE 
+                            WHEN sse.id_encounter IS NOT NULL THEN NULL
+                            WHEN rp.status_bayar = 'Belum Bayar' THEN 'Unpaid Registration'
+                            WHEN smlr.id_lokasi_satusehat IS NULL OR smlr.id_lokasi_satusehat = '' THEN 'Unmapped Clinic Location'
+                            ELSE NULL
+                          END) as blocked_reason,
+                          sse.id_encounter as ihs_id
                     FROM reg_periksa rp
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                     INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
@@ -1077,6 +1831,11 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
+                        (CASE 
+                            WHEN sseoc.id_episode_of_care IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
                          sseoc.id_episode_of_care as ihs_id
                     FROM diagnosa_pasien dp
                     INNER JOIN reg_periksa rp ON dp.no_rawat = rp.no_rawat
@@ -1109,6 +1868,11 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
+                        (CASE 
+                            WHEN ssc.id_condition IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
                          ssc.id_condition as ihs_id
                     FROM diagnosa_pasien dp
                     INNER JOIN reg_periksa rp ON dp.no_rawat = rp.no_rawat
@@ -1141,6 +1905,11 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
+                        (CASE 
+                            WHEN sso.id_observation IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
                          sso.id_observation as ihs_id
                     FROM pemeriksaan_ralan pr
                     INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
@@ -1172,6 +1941,11 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
+                        (CASE 
+                            WHEN ssp.id_procedure IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
                          ssp.id_procedure as ihs_id
                     FROM prosedur_pasien pp
                     INNER JOIN reg_periksa rp ON pp.no_rawat = rp.no_rawat
@@ -1204,6 +1978,11 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
+                        (CASE 
+                            WHEN ssai.id_allergy_intolerance IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
                          ssai.id_allergy_intolerance as ihs_id
                     FROM pemeriksaan_ralan pr
                     INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
@@ -1233,14 +2012,21 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                         (CASE 
                             WHEN ssi.id_immunization IS NOT NULL THEN 'synced'
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            WHEN smv.vaksin_kodifikasi IS NULL OR smv.vaksin_kodifikasi = '' THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
+                        (CASE 
+                            WHEN ssi.id_immunization IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            WHEN smv.vaksin_kodifikasi IS NULL OR smv.vaksin_kodifikasi = '' THEN 'Unmapped Vaccine Code'
+                            ELSE NULL
+                         END) as blocked_reason,
                          ssi.id_immunization as ihs_id
                     FROM detail_pemberian_obat dpo
                     INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                     INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
-                    INNER JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng
+                    LEFT JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng
                     LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
                     LEFT JOIN satu_sehat_immunization ssi ON ssi.no_rawat = dpo.no_rawat AND ssi.kode_brng = dpo.kode_brng AND ssi.tgl_perawatan = dpo.tgl_perawatan
                     WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
@@ -1290,14 +2076,21 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                         (CASE 
                             WHEN ssmr.id_medication_request IS NOT NULL THEN 'synced'
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
+                        (CASE 
+                            WHEN ssmr.id_medication_request IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'Unmapped Medication Code'
+                            ELSE NULL
+                         END) as blocked_reason,
                          ssmr.id_medication_request as ihs_id
                     FROM detail_pemberian_obat dpo
                     INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                     INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
-                    INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+                    LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
                     LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
                     LEFT JOIN satu_sehat_medication_request ssmr ON ssmr.no_rawat = dpo.no_rawat AND ssmr.kode_brng = dpo.kode_brng AND ssmr.tgl_perawatan = dpo.tgl_perawatan
                     WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
@@ -1324,14 +2117,21 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                         (CASE 
                             WHEN ssmd.id_medication_dispense IS NOT NULL THEN 'synced'
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
+                        (CASE 
+                            WHEN ssmd.id_medication_dispense IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'Unmapped Medication Code'
+                            ELSE NULL
+                         END) as blocked_reason,
                          ssmd.id_medication_dispense as ihs_id
                     FROM detail_pemberian_obat dpo
                     INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                     INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
-                    INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+                    LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
                     LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
                     LEFT JOIN satu_sehat_medication_dispense ssmd ON ssmd.no_rawat = dpo.no_rawat AND ssmd.kode_brng = dpo.kode_brng AND ssmd.tgl_perawatan = dpo.tgl_perawatan
                     WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
@@ -1358,14 +2158,21 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                         (CASE 
                             WHEN ssms.id_medication_statement IS NOT NULL THEN 'synced'
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
+                        (CASE 
+                            WHEN ssms.id_medication_statement IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'Unmapped Medication Code'
+                            ELSE NULL
+                         END) as blocked_reason,
                          ssms.id_medication_statement as ihs_id
                     FROM detail_pemberian_obat dpo
                     INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                     INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
-                    INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+                    LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
                     LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
                     LEFT JOIN satu_sehat_medication_statement ssms ON ssms.no_rawat = dpo.no_rawat AND ssms.kode_brng = dpo.kode_brng AND ssms.tgl_perawatan = dpo.tgl_perawatan
                     WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
@@ -1374,6 +2181,517 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                 $params['dt'] = $dateTo;
                 if ($search) {
                     $sql .= " AND (p.nm_pasien LIKE :search OR dpo.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR db.nama_brng LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'clinicalimpression':
+                $sql = "
+                    SELECT 
+                        CONCAT(pem.no_rawat, '-', pem.tgl_perawatan, '-', pem.jam_rawat, '-', pem.status_lanjut) as id,
+                        pem.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pem.tgl_perawatan as date,
+                        pem.penilaian as details,
+                        (CASE 
+                            WHEN ssci.id_clinicalimpression IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN ssci.id_clinicalimpression IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         ssci.id_clinicalimpression as ihs_id
+                    FROM (
+                        SELECT no_rawat, tgl_perawatan, jam_rawat, penilaian, 'Ralan' as status_lanjut FROM pemeriksaan_ralan WHERE penilaian <> ''
+                        UNION ALL
+                        SELECT no_rawat, tgl_perawatan, jam_rawat, penilaian, 'Ranap' as status_lanjut FROM pemeriksaan_ranap WHERE penilaian <> ''
+                    ) pem
+                    INNER JOIN reg_periksa rp ON pem.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat 
+                        AND ssci.tgl_perawatan = pem.tgl_perawatan 
+                        AND ssci.jam_rawat = pem.jam_rawat 
+                        AND ssci.status = pem.status_lanjut
+                    WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pem.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR pem.penilaian LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'servicerequest_rad':
+                $sql = "
+                    SELECT 
+                        CONCAT(ppr.noorder, '-', ppr.kd_jenis_prw) as id,
+                        pr.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pr.tgl_permintaan as date,
+                        jpr.nm_perawatan as details,
+                        (CASE 
+                            WHEN ssr.id_servicerequest IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            WHEN smr.code IS NULL OR smr.code = '' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN ssr.id_servicerequest IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            WHEN smr.code IS NULL OR smr.code = '' THEN 'Unmapped Radiology Code'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         ssr.id_servicerequest as ihs_id
+                    FROM permintaan_pemeriksaan_radiologi ppr
+                    INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder
+                    INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = ppr.kd_jenis_prw
+                    LEFT JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
+                    WHERE pr.tgl_permintaan BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pr.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR jpr.nm_perawatan LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'specimen_rad':
+                $sql = "
+                    SELECT 
+                        CONCAT(ppr.noorder, '-', ppr.kd_jenis_prw) as id,
+                        pr.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pr.tgl_permintaan as date,
+                        jpr.nm_perawatan as details,
+                        (CASE 
+                            WHEN sssp.id_specimen IS NOT NULL THEN 'synced'
+                            WHEN ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN sssp.id_specimen IS NOT NULL THEN NULL
+                            WHEN ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '' THEN 'Service Request Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         sssp.id_specimen as ihs_id
+                    FROM permintaan_pemeriksaan_radiologi ppr
+                    INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder
+                    INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
+                    LEFT JOIN satu_sehat_specimen_radiologi sssp ON sssp.noorder = ppr.noorder AND sssp.kd_jenis_prw = ppr.kd_jenis_prw
+                    WHERE pr.tgl_permintaan BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pr.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR jpr.nm_perawatan LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'observation_rad':
+                $sql = "
+                    SELECT 
+                        CONCAT(ppr.noorder, '-', ppr.kd_jenis_prw) as id,
+                        pr.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pr.tgl_hasil as date,
+                        jpr.nm_perawatan as details,
+                        (CASE 
+                            WHEN sso.id_observation IS NOT NULL THEN 'synced'
+                            WHEN sssp.id_specimen IS NULL OR sssp.id_specimen = '' THEN 'blocked'
+                            WHEN ssi.id_imaging IS NULL OR ssi.id_imaging = '' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN sso.id_observation IS NOT NULL THEN NULL
+                            WHEN sssp.id_specimen IS NULL OR sssp.id_specimen = '' THEN 'Specimen Not Synced Yet'
+                            WHEN ssi.id_imaging IS NULL OR ssi.id_imaging = '' THEN 'ImagingStudy Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         sso.id_observation as ihs_id
+                    FROM permintaan_pemeriksaan_radiologi ppr
+                    INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder
+                    INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_specimen_radiologi sssp ON sssp.noorder = ppr.noorder AND sssp.kd_jenis_prw = ppr.kd_jenis_prw
+                    LEFT JOIN satu_sehat_imagingstudy_radiologi ssi ON ssi.noorder = ppr.noorder AND ssi.kd_jenis_prw = ppr.kd_jenis_prw
+                    LEFT JOIN satu_sehat_observation_radiologi sso ON sso.noorder = ppr.noorder AND sso.kd_jenis_prw = ppr.kd_jenis_prw
+                    WHERE pr.tgl_hasil IS NOT NULL AND pr.tgl_hasil <> '0000-00-00' AND pr.tgl_hasil BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pr.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR jpr.nm_perawatan LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'diagnosticreport_rad':
+                $sql = "
+                    SELECT 
+                        CONCAT(ppr.noorder, '-', ppr.kd_jenis_prw) as id,
+                        pr.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pr.tgl_hasil as date,
+                        jpr.nm_perawatan as details,
+                        (CASE 
+                            WHEN ssdr.id_diagnosticreport IS NOT NULL THEN 'synced'
+                            WHEN sso.id_observation IS NULL OR sso.id_observation = '' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN ssdr.id_diagnosticreport IS NOT NULL THEN NULL
+                            WHEN sso.id_observation IS NULL OR sso.id_observation = '' THEN 'Observation Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         ssdr.id_diagnosticreport as ihs_id
+                    FROM permintaan_pemeriksaan_radiologi ppr
+                    INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder
+                    INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
+                    INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_observation_radiologi sso ON sso.noorder = ppr.noorder AND sso.kd_jenis_prw = ppr.kd_jenis_prw
+                    LEFT JOIN satu_sehat_diagnosticreport_radiologi ssdr ON ssdr.noorder = ppr.noorder AND ssdr.kd_jenis_prw = ssdr.kd_jenis_prw
+                    WHERE pr.tgl_hasil IS NOT NULL AND pr.tgl_hasil <> '0000-00-00' AND pr.tgl_hasil BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pr.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR jpr.nm_perawatan LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'servicerequest_lab_pk':
+                $sql = "
+                    SELECT 
+                        CONCAT(pdpl.noorder, '-', pdpl.kd_jenis_prw, '-', pdpl.id_template) as id,
+                        pl.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pl.tgl_permintaan as date,
+                        tl.pemeriksaan as details,
+                        (CASE 
+                            WHEN ssr.id_servicerequest IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            WHEN sml.code IS NULL OR sml.code = '' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN ssr.id_servicerequest IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            WHEN sml.code IS NULL OR sml.code = '' THEN 'Unmapped Lab Code'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         ssr.id_servicerequest as ihs_id
+                    FROM permintaan_detail_permintaan_lab pdpl
+                    INNER JOIN permintaan_lab pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_mapping_lab sml ON sml.kd_jenis_prw = pdpl.kd_jenis_prw AND sml.id_template = pdpl.id_template
+                    LEFT JOIN satu_sehat_servicerequest_lab ssr ON ssr.noorder = pdpl.noorder AND ssr.kd_jenis_prw = pdpl.kd_jenis_prw AND ssr.id_template = pdpl.id_template
+                    WHERE pl.tgl_permintaan BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pl.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR tl.pemeriksaan LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'specimen_lab_pk':
+                $sql = "
+                    SELECT 
+                        CONCAT(pdpl.noorder, '-', pdpl.kd_jenis_prw, '-', pdpl.id_template) as id,
+                        pl.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pl.tgl_permintaan as date,
+                        tl.pemeriksaan as details,
+                        (CASE 
+                            WHEN sssp.id_specimen IS NOT NULL THEN 'synced'
+                            WHEN ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN sssp.id_specimen IS NOT NULL THEN NULL
+                            WHEN ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '' THEN 'Service Request Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         sssp.id_specimen as ihs_id
+                    FROM permintaan_detail_permintaan_lab pdpl
+                    INNER JOIN permintaan_lab pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_servicerequest_lab ssr ON ssr.noorder = pdpl.noorder AND ssr.kd_jenis_prw = pdpl.kd_jenis_prw AND ssr.id_template = pdpl.id_template
+                    LEFT JOIN satu_sehat_specimen_lab sssp ON sssp.noorder = pdpl.noorder AND sssp.kd_jenis_prw = pdpl.kd_jenis_prw AND sssp.id_template = pdpl.id_template
+                    WHERE pl.tgl_permintaan BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pl.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR tl.pemeriksaan LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'observation_lab_pk':
+                $sql = "
+                    SELECT 
+                        CONCAT(pdpl.noorder, '-', pdpl.kd_jenis_prw, '-', pdpl.id_template) as id,
+                        pl.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pl.tgl_hasil as date,
+                        tl.pemeriksaan as details,
+                        (CASE 
+                            WHEN sso.id_observation IS NOT NULL THEN 'synced'
+                            WHEN sssp.id_specimen IS NULL OR sssp.id_specimen = '' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN sso.id_observation IS NOT NULL THEN NULL
+                            WHEN sssp.id_specimen IS NULL OR sssp.id_specimen = '' THEN 'Specimen Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         sso.id_observation as ihs_id
+                    FROM permintaan_detail_permintaan_lab pdpl
+                    INNER JOIN permintaan_lab pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_specimen_lab sssp ON sssp.noorder = pdpl.noorder AND sssp.kd_jenis_prw = pdpl.kd_jenis_prw AND sssp.id_template = pdpl.id_template
+                    LEFT JOIN satu_sehat_observation_lab sso ON sso.noorder = pdpl.noorder AND sso.kd_jenis_prw = pdpl.kd_jenis_prw AND sso.id_template = pdpl.id_template
+                    WHERE pl.tgl_hasil IS NOT NULL AND pl.tgl_hasil <> '0000-00-00' AND pl.tgl_hasil BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pl.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR tl.pemeriksaan LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'diagnosticreport_lab_pk':
+                $sql = "
+                    SELECT 
+                        CONCAT(pdpl.noorder, '-', pdpl.kd_jenis_prw, '-', pdpl.id_template) as id,
+                        pl.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pl.tgl_hasil as date,
+                        tl.pemeriksaan as details,
+                        (CASE 
+                            WHEN ssdr.id_diagnosticreport IS NOT NULL THEN 'synced'
+                            WHEN sso.id_observation IS NULL OR sso.id_observation = '' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN ssdr.id_diagnosticreport IS NOT NULL THEN NULL
+                            WHEN sso.id_observation IS NULL OR sso.id_observation = '' THEN 'Observation Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         ssdr.id_diagnosticreport as ihs_id
+                    FROM permintaan_detail_permintaan_lab pdpl
+                    INNER JOIN permintaan_lab pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_observation_lab sso ON sso.noorder = pdpl.noorder AND sso.kd_jenis_prw = pdpl.kd_jenis_prw AND sso.id_template = pdpl.id_template
+                    LEFT JOIN satu_sehat_diagnosticreport_lab ssdr ON ssdr.noorder = pdpl.noorder AND ssdr.kd_jenis_prw = pdpl.kd_jenis_prw AND ssdr.id_template = pdpl.id_template
+                    WHERE pl.tgl_hasil IS NOT NULL AND pl.tgl_hasil <> '0000-00-00' AND pl.tgl_hasil BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pl.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR tl.pemeriksaan LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'servicerequest_lab_mb':
+                $sql = "
+                    SELECT 
+                        CONCAT(pdpl.noorder, '-', pdpl.kd_jenis_prw, '-', pdpl.id_template) as id,
+                        pl.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pl.tgl_permintaan as date,
+                        tl.pemeriksaan as details,
+                        (CASE 
+                            WHEN ssr.id_servicerequest IS NOT NULL THEN 'synced'
+                            WHEN sse.id_encounter IS NULL THEN 'blocked'
+                            WHEN sml.code IS NULL OR sml.code = '' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN ssr.id_servicerequest IS NOT NULL THEN NULL
+                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                            WHEN sml.code IS NULL OR sml.code = '' THEN 'Unmapped Lab Code'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         ssr.id_servicerequest as ihs_id
+                    FROM permintaan_detail_permintaan_labmb pdpl
+                    INNER JOIN permintaan_labmb pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_mapping_lab sml ON sml.kd_jenis_prw = pdpl.kd_jenis_prw AND sml.id_template = pdpl.id_template
+                    LEFT JOIN satu_sehat_servicerequest_lab_mb ssr ON ssr.noorder = pdpl.noorder AND ssr.kd_jenis_prw = pdpl.kd_jenis_prw AND ssr.id_template = pdpl.id_template
+                    WHERE pl.tgl_permintaan BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pl.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR tl.pemeriksaan LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'specimen_lab_mb':
+                $sql = "
+                    SELECT 
+                        CONCAT(pdpl.noorder, '-', pdpl.kd_jenis_prw, '-', pdpl.id_template) as id,
+                        pl.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pl.tgl_permintaan as date,
+                        tl.pemeriksaan as details,
+                        (CASE 
+                            WHEN sssp.id_specimen IS NOT NULL THEN 'synced'
+                            WHEN ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN sssp.id_specimen IS NOT NULL THEN NULL
+                            WHEN ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '' THEN 'Service Request Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         sssp.id_specimen as ihs_id
+                    FROM permintaan_detail_permintaan_labmb pdpl
+                    INNER JOIN permintaan_labmb pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_servicerequest_lab_mb ssr ON ssr.noorder = pdpl.noorder AND ssr.kd_jenis_prw = pdpl.kd_jenis_prw AND ssr.id_template = pdpl.id_template
+                    LEFT JOIN satu_sehat_specimen_lab_mb sssp ON sssp.noorder = pdpl.noorder AND sssp.kd_jenis_prw = pdpl.kd_jenis_prw AND sssp.id_template = pdpl.id_template
+                    WHERE pl.tgl_permintaan BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pl.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR tl.pemeriksaan LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'observation_lab_mb':
+                $sql = "
+                    SELECT 
+                        CONCAT(pdpl.noorder, '-', pdpl.kd_jenis_prw, '-', pdpl.id_template) as id,
+                        pl.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pl.tgl_hasil as date,
+                        tl.pemeriksaan as details,
+                        (CASE 
+                            WHEN sso.id_observation IS NOT NULL THEN 'synced'
+                            WHEN sssp.id_specimen IS NULL OR sssp.id_specimen = '' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN sso.id_observation IS NOT NULL THEN NULL
+                            WHEN sssp.id_specimen IS NULL OR sssp.id_specimen = '' THEN 'Specimen Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         sso.id_observation as ihs_id
+                    FROM permintaan_detail_permintaan_labmb pdpl
+                    INNER JOIN permintaan_labmb pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_specimen_lab_mb sssp ON sssp.noorder = pdpl.noorder AND sssp.kd_jenis_prw = pdpl.kd_jenis_prw AND sssp.id_template = pdpl.id_template
+                    LEFT JOIN satu_sehat_observation_lab_mb sso ON sso.noorder = pdpl.noorder AND sso.kd_jenis_prw = pdpl.kd_jenis_prw AND sso.id_template = pdpl.id_template
+                    WHERE pl.tgl_hasil IS NOT NULL AND pl.tgl_hasil <> '0000-00-00' AND pl.tgl_hasil BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pl.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR tl.pemeriksaan LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
+
+            case 'diagnosticreport_lab_mb':
+                $sql = "
+                    SELECT 
+                        CONCAT(pdpl.noorder, '-', pdpl.kd_jenis_prw, '-', pdpl.id_template) as id,
+                        pl.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        pl.tgl_hasil as date,
+                        tl.pemeriksaan as details,
+                        (CASE 
+                            WHEN ssdr.id_diagnosticreport IS NOT NULL THEN 'synced'
+                            WHEN sso.id_observation IS NULL OR sso.id_observation = '' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN ssdr.id_diagnosticreport IS NOT NULL THEN NULL
+                            WHEN sso.id_observation IS NULL OR sso.id_observation = '' THEN 'Observation Not Synced Yet'
+                            ELSE NULL
+                         END) as blocked_reason,
+                         ssdr.id_diagnosticreport as ihs_id
+                    FROM permintaan_detail_permintaan_labmb pdpl
+                    INNER JOIN permintaan_labmb pl ON pdpl.noorder = pl.noorder
+                    INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
+                    INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    LEFT JOIN satu_sehat_observation_lab_mb sso ON sso.noorder = pdpl.noorder AND sso.kd_jenis_prw = pdpl.kd_jenis_prw AND sso.id_template = pdpl.id_template
+                    LEFT JOIN satu_sehat_diagnosticreport_lab_mb ssdr ON ssdr.noorder = pdpl.noorder AND ssdr.kd_jenis_prw = pdpl.kd_jenis_prw AND ssdr.id_template = pdpl.id_template
+                    WHERE pl.tgl_hasil IS NOT NULL AND pl.tgl_hasil <> '0000-00-00' AND pl.tgl_hasil BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (p.nm_pasien LIKE :search OR pl.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR tl.pemeriksaan LIKE :search)";
                     $params['search'] = "%{$search}%";
                 }
                 break;
