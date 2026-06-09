@@ -1278,6 +1278,190 @@ class SatuSehatPayloadBuilder
         return $payload;
     }
 
+    /**
+     * Builds QuestionnaireResponse payload for Telaah Farmasi
+     *
+     * @param array       $p          QuestionnaireResponse data row
+     * @param string      $idPasien   IHS Patient ID
+     * @param string      $idPraktisi IHS Practitioner ID
+     * @param string|null $idQR       Existing QuestionnaireResponse ID (if updating)
+     * @return array
+     */
+    public static function questionnaireResponse(
+        array $p,
+        string $idPasien,
+        string $idPraktisi,
+        ?string $idQR = null
+    ): array {
+        $authored = str_replace(' ', 'T', $p['tgl_peresepan'] . ' ' . $p['jam_peresepan']) . '+07:00';
+
+        $payload = [
+            'resourceType' => 'QuestionnaireResponse',
+            'status' => 'completed',
+            'authored' => $authored,
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display' => $p['nm_pasien']
+            ],
+            'source' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter']
+            ],
+            'author' => [
+                'reference' => 'Practitioner/' . $idPraktisi,
+                'display' => $p['nama']
+            ],
+            'item' => [
+                [
+                    'linkId' => 'identitas',
+                    'text' => 'Identitas',
+                    'item' => [
+                        [
+                            'linkId' => 'no-rawat',
+                            'text' => 'No. Rawat',
+                            'answer' => [['valueString' => $p['no_rawat']]]
+                        ],
+                        [
+                            'linkId' => 'no-rm',
+                            'text' => 'No. RM',
+                            'answer' => [['valueString' => $p['no_rkm_medis']]]
+                        ],
+                        [
+                            'linkId' => 'no-resep',
+                            'text' => 'No. Resep',
+                            'answer' => [['valueString' => $p['no_resep']]]
+                        ]
+                    ]
+                ],
+                [
+                    'linkId' => 'telaah-resep',
+                    'text' => 'Telaah Resep',
+                    'item' => [
+                        [
+                            'linkId' => 'tr-1-tepat-identifikasi-pasien',
+                            'text' => '1. Tepat Identifikasi Pasien',
+                            'answer' => [['valueString' => $p['resep_identifikasi_pasien']]]
+                        ],
+                        [
+                            'linkId' => 'tr-1-tepat-identifikasi-pasien-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_identifikasi_pasien']]]
+                        ],
+                        [
+                            'linkId' => 'tr-2-tepat-obat',
+                            'text' => '2. Tepat Obat',
+                            'answer' => [['valueString' => $p['resep_tepat_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-2-tepat-obat-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_tepat_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-3-tepat-dosis',
+                            'text' => '3. Tepat Dosis',
+                            'answer' => [['valueString' => $p['resep_tepat_dosis']]]
+                        ],
+                        [
+                            'linkId' => 'tr-3-tepat-dosis-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_tepat_dosis']]]
+                        ],
+                        [
+                            'linkId' => 'tr-4-tepat-cara-pemberian',
+                            'text' => '4. Tepat Cara Pemberian',
+                            'answer' => [['valueString' => $p['resep_tepat_cara_pemberian']]]
+                        ],
+                        [
+                            'linkId' => 'tr-4-tepat-cara-pemberian-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_tepat_cara_pemberian']]]
+                        ],
+                        [
+                            'linkId' => 'tr-5-tepat-waktu-pemberian',
+                            'text' => '5. Tepat Waktu Pemberian',
+                            'answer' => [['valueString' => $p['resep_tepat_waktu_pemberian']]]
+                        ],
+                        [
+                            'linkId' => 'tr-5-tepat-waktu-pemberian-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_tepat_waktu_pemberian']]]
+                        ],
+                        [
+                            'linkId' => 'tr-6-duplikasi-obat',
+                            'text' => '6. Ada Tidak Duplikasi Obat',
+                            'answer' => [['valueString' => $p['resep_ada_tidak_duplikasi_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-6-duplikasi-obat-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_ada_tidak_duplikasi_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-7-interaksi-obat',
+                            'text' => '7. Interaksi Obat',
+                            'answer' => [['valueString' => $p['resep_interaksi_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-7-interaksi-obat-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_interaksi_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-8-kontra-indikasi-obat',
+                            'text' => '8. Kontra Indikasi Obat',
+                            'answer' => [['valueString' => $p['resep_kontra_indikasi_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-8-kontra-indikasi-obat-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_kontra_indikasi_obat']]]
+                        ]
+                    ]
+                ],
+                [
+                    'linkId' => 'telaah-obat',
+                    'text' => 'Telaah Obat',
+                    'item' => [
+                        [
+                            'linkId' => 'to-1-tepat-pasien',
+                            'text' => '1. Tepat Pasien',
+                            'answer' => [['valueString' => $p['obat_tepat_pasien']]]
+                        ],
+                        [
+                            'linkId' => 'to-2-tepat-obat',
+                            'text' => '2. Tepat Obat',
+                            'answer' => [['valueString' => $p['obat_tepat_obat']]]
+                        ],
+                        [
+                            'linkId' => 'to-3-tepat-dosis',
+                            'text' => '3. Tepat Dosis',
+                            'answer' => [['valueString' => $p['obat_tepat_dosis']]]
+                        ],
+                        [
+                            'linkId' => 'to-4-tepat-cara-pemberian',
+                            'text' => '4. Tepat Cara Pemberian',
+                            'answer' => [['valueString' => $p['obat_tepat_cara_pemberian']]]
+                        ],
+                        [
+                            'linkId' => 'to-5-tepat-waktu-pemberian',
+                            'text' => '5. Tepat Waktu Pemberian',
+                            'answer' => [['valueString' => $p['obat_tepat_waktu_pemberian']]]
+                        ]
+                    ]
+                ]
+            ]
+        ];
+
+        if (!empty($idQR)) {
+            $payload['id'] = $idQR;
+        }
+
+        return $payload;
+    }
+
     public static function buildAcsn(string $noorder, string $kdJenisPrw): string
     {
         $base = str_replace('PR', '', $noorder) . $kdJenisPrw;

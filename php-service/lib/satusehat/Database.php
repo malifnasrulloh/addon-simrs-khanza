@@ -131,6 +131,13 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for QuestionnaireResponse state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS questionnaireresponse_state (
+            no_resep VARCHAR(50) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -3062,6 +3069,104 @@ class SatuSehatDatabase
         ]);
     }
 
+    // ─── QUESTIONNAIRE RESPONSE STATE TRACKING ───────────────────────────────────
+
+    public function getQuestionnaireResponseLocalState(string $noResep): ?string
+    {
+        $stmt = $this->sqlite->prepare("SELECT status FROM questionnaireresponse_state WHERE no_resep = :nr");
+        $stmt->execute(['nr' => $noResep]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateQuestionnaireResponseLocalState(string $noResep, string $status): void
+    {
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO questionnaireresponse_state (no_resep, status, updated_at) 
+            VALUES (:nr, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(no_resep) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['nr' => $noResep, 'st' => $status]);
+    }
+
+    // ─── QUESTIONNAIRE RESPONSE MYSQL OPERATIONS ───────────────────────────────
+
+    public function fetchPendingQuestionnaireResponseActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT 
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, pasien.nm_pasien, pasien.no_ktp,
+                pegawai.nama, pegawai.no_ktp as ktppraktisi, sse.id_encounter, resep_obat.tgl_peresepan, resep_obat.jam_peresepan,
+                resep_obat.no_resep, tf.resep_identifikasi_pasien, tf.resep_ket_identifikasi_pasien,
+                tf.resep_tepat_obat, tf.resep_ket_tepat_obat, tf.resep_tepat_dosis, tf.resep_ket_tepat_dosis,
+                tf.resep_tepat_cara_pemberian, tf.resep_ket_tepat_cara_pemberian, tf.resep_tepat_waktu_pemberian,
+                tf.resep_ket_tepat_waktu_pemberian, tf.resep_ada_tidak_duplikasi_obat, tf.resep_ket_ada_tidak_duplikasi_obat,
+                tf.resep_interaksi_obat, tf.resep_ket_interaksi_obat, tf.resep_kontra_indikasi_obat, tf.resep_ket_kontra_indikasi_obat,
+                tf.obat_tepat_pasien, tf.obat_tepat_obat, tf.obat_tepat_dosis, tf.obat_tepat_cara_pemberian, tf.obat_tepat_waktu_pemberian 
+            FROM reg_periksa rp
+            INNER JOIN pasien ON rp.no_rkm_medis = pasien.no_rkm_medis 
+            INNER JOIN resep_obat ON rp.no_rawat = resep_obat.no_rawat 
+            INNER JOIN telaah_farmasi tf ON tf.no_resep = resep_obat.no_resep 
+            INNER JOIN pegawai ON tf.nip = pegawai.nik 
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+            LEFT JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = resep_obat.no_resep 
+            WHERE resep_obat.tgl_peresepan BETWEEN :df AND :dt
+              AND (ssqr.id_questionresponse IS NULL OR ssqr.id_questionresponse = '')
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function fetchPendingQuestionnaireResponseUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT 
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, pasien.nm_pasien, pasien.no_ktp,
+                pegawai.nama, pegawai.no_ktp as ktppraktisi, sse.id_encounter, resep_obat.tgl_peresepan, resep_obat.jam_peresepan,
+                resep_obat.no_resep, ssqr.id_questionresponse, tf.resep_identifikasi_pasien, tf.resep_ket_identifikasi_pasien,
+                tf.resep_tepat_obat, tf.resep_ket_tepat_obat, tf.resep_tepat_dosis, tf.resep_ket_tepat_dosis,
+                tf.resep_tepat_cara_pemberian, tf.resep_ket_tepat_cara_pemberian, tf.resep_tepat_waktu_pemberian,
+                tf.resep_ket_tepat_waktu_pemberian, tf.resep_ada_tidak_duplikasi_obat, tf.resep_ket_ada_tidak_duplikasi_obat,
+                tf.resep_interaksi_obat, tf.resep_ket_interaksi_obat, tf.resep_kontra_indikasi_obat, tf.resep_ket_kontra_indikasi_obat,
+                tf.obat_tepat_pasien, tf.obat_tepat_obat, tf.obat_tepat_dosis, tf.obat_tepat_cara_pemberian, tf.obat_tepat_waktu_pemberian 
+            FROM reg_periksa rp
+            INNER JOIN pasien ON rp.no_rkm_medis = pasien.no_rkm_medis 
+            INNER JOIN resep_obat ON rp.no_rawat = resep_obat.no_rawat 
+            INNER JOIN telaah_farmasi tf ON tf.no_resep = resep_obat.no_resep 
+            INNER JOIN pegawai ON tf.nip = pegawai.nik 
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+            INNER JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = resep_obat.no_resep 
+            WHERE resep_obat.tgl_peresepan BETWEEN :df AND :dt
+              AND ssqr.id_questionresponse IS NOT NULL AND ssqr.id_questionresponse <> ''
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function saveQuestionnaireResponse(string $noResep, string $idQuestionResponse): bool
+    {
+        $sql = "INSERT INTO satu_sehat_questionresponse_telaah_farmasi (no_resep, id_questionresponse) 
+                VALUES (:nr, :id) 
+                ON DUPLICATE KEY UPDATE id_questionresponse = :id2";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'nr'  => $noResep,
+            'id'  => $idQuestionResponse,
+            'id2' => $idQuestionResponse
+        ]);
+    }
+
+    public function getSavedQuestionnaireResponseId(string $noResep): ?string
+    {
+        $sql = "SELECT id_questionresponse FROM satu_sehat_questionresponse_telaah_farmasi WHERE no_resep = :nr LIMIT 1";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['nr' => $noResep]);
+        $val = $stmt->fetchColumn();
+        return $val ?: null;
+    }
+
     public function printSyncDiagnostics(string $resourceType, string $dateFrom, string $dateTo): void
     {
         $this->log->info("🔍 [DIAGNOSTICS] Calculating synchronization metrics...");
@@ -4224,6 +4329,37 @@ class SatuSehatDatabase
 
                     $this->log->info("   ├─ Total Diagnostic Reports Lab MB     : {$total}");
                     $this->log->info("   ├─ Blocked (No Parent Observation)     : {$noObs}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
+                case 'questionnaireresponse':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM resep_obat ro
+                        INNER JOIN telaah_farmasi tf ON tf.no_resep = ro.no_resep
+                        INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat
+                        INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        WHERE ro.tgl_peresepan BETWEEN :df AND :dt
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*)
+                        FROM satu_sehat_questionresponse_telaah_farmasi ssqr
+                        INNER JOIN resep_obat ro ON ssqr.no_resep = ro.no_resep
+                        INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat
+                        WHERE ro.tgl_peresepan BETWEEN :df AND :dt
+                          AND ssqr.id_questionresponse IS NOT NULL AND ssqr.id_questionresponse <> ''
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Questionnaire Responses       : {$total}");
                     $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
                     $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
                     break;
