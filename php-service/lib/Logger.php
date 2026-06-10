@@ -21,6 +21,7 @@ class Logger
     private string $prefix;
     private int $minLevel;
     private bool $verbose;
+    private bool $echoWeb;
 
     private const LEVELS = ['DEBUG' => 0, 'INFO' => 1, 'WARNING' => 2, 'ERROR' => 3];
 
@@ -29,8 +30,9 @@ class Logger
      * @param string $serviceName Service name used as subfolder AND file prefix (e.g. "mobilejkn")
      * @param string $level       Minimum log level
      * @param bool   $verbose     If true, always output DEBUG to console
+     * @param bool   $echoWeb     If true, echo log output to web page when run in web context
      */
-    public function __construct(string $baseLogDir, string $serviceName, string $level = 'INFO', bool $verbose = false)
+    public function __construct(string $baseLogDir, string $serviceName, string $level = 'INFO', bool $verbose = false, bool $echoWeb = false)
     {
         // Resolve to absolute path
         if (!str_starts_with($baseLogDir, '/')) {
@@ -40,6 +42,7 @@ class Logger
         // Create service-specific subdirectory: logs/mobilejkn/
         $this->logDir  = rtrim($baseLogDir, '/') . '/' . $serviceName;
         $this->prefix  = $serviceName;
+        $this->echoWeb = $echoWeb;
 
         if (!is_dir($this->logDir) && !mkdir($this->logDir, 0755, true)) {
             if (defined('STDERR')) {
@@ -105,7 +108,7 @@ class Logger
         if (defined('STDERR') && defined('STDOUT')) {
             $stream = ($level === 'ERROR' || $level === 'WARNING') ? STDERR : STDOUT;
             fwrite($stream, $line . PHP_EOL);
-        } elseif (php_sapi_name() !== 'cli') {
+        } elseif (php_sapi_name() !== 'cli' && $this->echoWeb) {
             echo $line . PHP_EOL;
             if (ob_get_level() > 0) {
                 ob_flush();
@@ -113,6 +116,7 @@ class Logger
             flush();
         }
     }
+
 
     public function debug(string $msg): void
     {

@@ -38,6 +38,10 @@ class SatuSehatConfig
     public readonly string $timezone;
     public readonly string $jwtSecret;
 
+    // ─── Webhook Credentials ─────────────────────────────────────────────────
+    public readonly string $webhookUser;
+    public readonly string $webhookPassword;
+
     public function __construct(string $envPath)
     {
         if (!file_exists($envPath)) {
@@ -55,7 +59,11 @@ class SatuSehatConfig
         $this->dbUser = $this->require('DB_USER');
         $this->dbPass = $this->get('DB_PASS', '');
 
+        $this->webhookUser     = $this->get('WEBHOOK_USER', 'user_webhook_rs');
+        $this->webhookPassword = $this->get('WEBHOOK_PASSWORD', 'password_webhook_rs');
+
         $this->orgId        = $this->require('SATUSEHAT_ORG_ID');
+
         $this->clientId     = $this->require('SATUSEHAT_CLIENT_ID');
 
         $this->secretKey    = $this->require('SATUSEHAT_SECRET_KEY');
