@@ -104,25 +104,6 @@ try {
     // ─── BACKGROUND PROCESSING ───
     $log->info("Starting background processing for ACSN: {$acsn} | Status: " . ($status ? "SUCCESS" : "FAILED") . " | Stage: {$stage}");
 
-    if (!$status) {
-        $errors = $input['error'] ?? [];
-        $errStr = '';
-        if (is_array($errors)) {
-            foreach ($errors as $err) {
-                $errCode = $err['code'] ?? 'UNKNOWN';
-                $errMsg = $err['message'] ?? '';
-                $errStr .= "[{$errCode}: {$errMsg}] ";
-            }
-        }
-        $log->error("DICOM Router reported failure for ACSN {$acsn}. Message: " . ($input['message'] ?? '') . " | Errors: {$errStr}");
-        exit;
-    }
-
-    if (empty($imagingStudyId)) {
-        $log->error("DICOM Router reported SUCCESS but imagingStudyId is empty for ACSN: {$acsn}");
-        exit;
-    }
-
     // Initialize Database Connection
     $pdo = new PDO(
         "mysql:host={$config->dbHost};port={$config->dbPort};dbname={$config->dbName}",
@@ -141,15 +122,42 @@ try {
         exit;
     }
 
-    if (!empty($record['id_imaging']) && $record['id_imaging'] !== '-' && $record['id_imaging'] === $imagingStudyId) {
-        $log->info("ACSN {$acsn} already has id_imaging mapped correctly: {$imagingStudyId}");
+    if (!$status) {
+        $errors = $input['error'] ?? [];
+        $errStr = '';
+        if (is_array($errors)) {
+            foreach ($errors as $err) {
+                $errStr .= ($err['message'] ?? '') . ' ';
+            }
+        }
+        $errStr = trim($errStr);
+        $message = !empty($errStr) ? $errStr : ($input['message'] ?? 'Gagal');
+
+        $updateStmt = $pdo->prepare("UPDATE satu_sehat_imagingstudy_radiologi SET status_webhook = 'FAILED', message_webhook = :message WHERE acsn = :acsn");
+        $updateStmt->execute([
+            'message' => substr($message, 0, 255),
+            'acsn' => $acsn
+        ]);
+        $log->error("Successfully updated database status to FAILED for ACSN {$acsn}. Message: {$message}");
         exit;
     }
 
-    // Update local DB directly with the imagingStudyId provided by the webhook
-    $updateStmt = $pdo->prepare("UPDATE satu_sehat_imagingstudy_radiologi SET id_imaging = :id_imaging WHERE acsn = :acsn");
-    $updateStmt->execute(['id_imaging' => $imagingStudyId, 'acsn' => $acsn]);
-    $log->info("Successfully updated database for ACSN {$acsn} with id_imaging: {$imagingStudyId}");
+    if (empty($imagingStudyId)) {
+        $log->error("DICOM Router reported SUCCESS but imagingStudyId is empty for ACSN: {$acsn}");
+        $updateStmt = $pdo->prepare("UPDATE satu_sehat_imagingstudy_radiologi SET status_webhook = 'FAILED', message_webhook = 'imagingStudyId empty' WHERE acsn = :acsn");
+        $updateStmt->execute(['acsn' => $acsn]);
+        exit;
+    }
+
+    // Update local DB directly with the imagingStudyId provided by the webhook on success
+    $message = $input['message'] ?? 'DICOM berhasil dikirim';
+    $updateStmt = $pdo->prepare("UPDATE satu_sehat_imagingstudy_radiologi SET id_imaging = :id_imaging, status_webhook = 'SUCCESS', message_webhook = :message WHERE acsn = :acsn");
+    $updateStmt->execute([
+        'id_imaging' => $imagingStudyId,
+        'message' => substr($message, 0, 255),
+        'acsn' => $acsn
+    ]);
+    $log->info("Successfully updated database for ACSN {$acsn} with id_imaging: {$imagingStudyId} and status SUCCESS");
 
 } catch (Exception $e) {
     if (isset($log)) {
