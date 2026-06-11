@@ -482,6 +482,11 @@ class QueueProcessor
         // ── Task 4: mulai pelayanan poli ──────────────────────────────────
         if ($state['99'] === '' && $state['3'] === 'Sudah' && $state['4'] === '') {
             $prevWaktu = $state['waktu_3'] ?? '';
+            // Ensure physician service (Task 4) is never inferred before polyclinic opens (jam_mulai)
+            $openTime = $patient['tgl_registrasi'] . ' ' . $jamMulai;
+            if (strtotime($prevWaktu) < strtotime($openTime)) {
+                $prevWaktu = $openTime;
+            }
             $datajam = $this->inferAndSendRobotTask($kodebooking, $noRawat, '4', $prevWaktu, false, $label, $jenisresep);
             if ($datajam !== null) {
                 $state['4'] = 'Sudah';
