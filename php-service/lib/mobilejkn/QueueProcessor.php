@@ -266,6 +266,12 @@ class QueueProcessor
                 continue;
             }
 
+            // Defer check: if configured, skip today's patients until the polyclinic has closed
+            if ($this->config->deferRobotInfer && $p['tgl_registrasi'] === date('Y-m-d') && date('H:i:s') < $jadwal['jam_selesai']) {
+                $this->log->debug("[BLOCK 3] {$noRawat}: polyclinic is still active today — deferring robot inference until after {$jadwal['jam_selesai']}");
+                continue;
+            }
+
             // Load pre-fetched prescription number
             $noResep = $noResepMap[$noRawat] ?? '';
 
@@ -320,6 +326,12 @@ class QueueProcessor
             $jadwal = $this->db->fetchJadwal($hari, $p['kd_dokter'], $p['kd_poli']);
             if (!$jadwal) {
                 $this->log->debug("[BLOCK 4] {$noRawat}: no jadwal for {$hari} — skipping");
+                continue;
+            }
+
+            // Defer check: if configured, skip today's patients until the polyclinic has closed
+            if ($this->config->deferRobotInfer && $p['tgl_registrasi'] === date('Y-m-d') && date('H:i:s') < $jadwal['jam_selesai']) {
+                $this->log->debug("[BLOCK 4] {$noRawat}: polyclinic is still active today — deferring robot inference until after {$jadwal['jam_selesai']}");
                 continue;
             }
 
@@ -397,17 +409,9 @@ class QueueProcessor
 
         // ── Task 3: mulai tunggu poli ─────────────────────────────────────
         if ($state['3'] === '') {
-            $datajam = $isJkn
-                ? $this->db->resolveTask3WaktuJkn($noRawat, $patient['tgl_registrasi'], $jamMulai)
-                : $this->db->resolveTask3Waktu($noRawat, $patient['tgl_registrasi'], $jamMulai);
-
-            // Auto-heal missing or '00:00:00' (midnight) check-in times for backdated patients
-            // Midnight times cause Task 4 robot inference to generate times like 00:45:00,
-            // which BPJS rejects because it's earlier than the polyclinic jam_mulai.
-            if ((empty($datajam) || str_ends_with($datajam, ' 00:00:00')) && $allowRobot) {
-                $datajam = RobotInference::inferTask3($patient['tgl_registrasi'], $patient['jam_reg'], $jamMulai);
-                $this->log->debug("[{$label}] {$noRawat} TaskID 3: missing/midnight check-in time — auto-inferring to {$datajam}");
-            }
+            // Under Option B (Full-Robot Sync), we always generate Task 3 using robot to prevent SLA reporting gaps
+            $datajam = RobotInference::inferTask3($patient['tgl_registrasi'], $patient['jam_reg'], $jamMulai);
+            $this->log->debug("[{$label}] {$noRawat} TaskID 3: robot-inferred to {$datajam}");
 
             if (!empty($datajam)) {
                 // Future-time gate: don't send if the time hasn't happened yet
