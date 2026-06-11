@@ -95,7 +95,7 @@ if (php_sapi_name() !== 'cli') {
 require_once BASE_DIR . '/lib/Logger.php';
 
 $logLevel = $isVerbose ? 'DEBUG' : $config->logLevel;
-$log = new Logger($config->logDir, 'mobilejkn', $logLevel, $isVerbose);
+$log = new Logger($config->logDir, 'mobilejkn', $logLevel, $isVerbose, php_sapi_name() !== 'cli');
 $log->cleanOldLogs($config->logRetentionDays);
 
 // ─── Banner ────────────────────────────────────────────────────────────────
