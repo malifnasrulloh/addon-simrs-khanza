@@ -109,8 +109,8 @@ class RobotInference
         // Base timestamp
         $baseTs = ($regTs < $startTs) ? $startTs : $regTs;
         
-        // Add random offset: 2 to 12 minutes, plus random seconds
-        $offsetMinutes = rand(2, 12);
+        // Add random offset: 10 to 20 minutes, plus random seconds
+        $offsetMinutes = rand(10, 20);
         $offsetSeconds = rand(0, 59);
         
         $inferredTs = $baseTs + ($offsetMinutes * 60) + $offsetSeconds;
