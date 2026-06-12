@@ -78,8 +78,7 @@ class SatuSehatMedicationStatementProcessor
             $isRacikan = (bool)$p['is_racikan'];
 
             $localState = $this->db->getMedicationStatementLocalState($noResep, $kodeBrng, $noRacik);
-
-            if ($localState === 'active' || $localState === 'updated') {
+            if (in_array($localState, ['active', 'updated', 'privacy_error', 'failed_rule', 'invalid_code'], true)) {
                 $this->skipCount++;
                 continue;
             }
@@ -125,7 +124,22 @@ class SatuSehatMedicationStatementProcessor
                         $this->failCount++;
                     }
                 } else {
-                    $this->log->warning("[PHASE 1] Resep: {$noResep}: ✗ Failed -> " . $errorMessage);
+                    $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
+                    $isRule = (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false);
+                    $isCode = (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false);
+
+                    if ($isPrivacy) {
+                        $this->db->updateMedicationStatementLocalState($noResep, $kodeBrng, $noRacik, 'privacy_error');
+                        $this->log->warning("[PHASE 1] Resep: {$noResep}: ✗ Permanent Privacy Error -> {$errorMessage}");
+                    } elseif ($isRule) {
+                        $this->db->updateMedicationStatementLocalState($noResep, $kodeBrng, $noRacik, 'failed_rule');
+                        $this->log->warning("[PHASE 1] Resep: {$noResep}: ✗ Permanent Rule Error -> {$errorMessage}");
+                    } elseif ($isCode) {
+                        $this->db->updateMedicationStatementLocalState($noResep, $kodeBrng, $noRacik, 'invalid_code');
+                        $this->log->warning("[PHASE 1] Resep: {$noResep}: ✗ Permanent Code Error -> {$errorMessage}");
+                    } else {
+                        $this->log->warning("[PHASE 1] Resep: {$noResep}: ✗ Failed -> " . $errorMessage);
+                    }
                     $this->failCount++;
                 }
             }
@@ -153,8 +167,7 @@ class SatuSehatMedicationStatementProcessor
             $idStatement = $p['id_medicationstatement'];
 
             $localState = $this->db->getMedicationStatementLocalState($noResep, $kodeBrng, $noRacik);
-
-            if ($localState === 'updated') {
+            if (in_array($localState, ['updated', 'privacy_error', 'failed_rule', 'invalid_code'], true)) {
                 $this->skipCount++;
                 continue;
             }
@@ -183,7 +196,23 @@ class SatuSehatMedicationStatementProcessor
                 $this->log->info("[PHASE 2] Resep: {$noResep}: ✓ Updated MedicationStatement {$idStatement}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] Resep: {$noResep}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
+                $isRule = (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false);
+                $isCode = (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false);
+
+                if ($isPrivacy) {
+                    $this->db->updateMedicationStatementLocalState($noResep, $kodeBrng, $noRacik, 'privacy_error');
+                    $this->log->warning("[PHASE 2] Resep: {$noResep}: ✗ Permanent Privacy Error -> {$errorMessage}");
+                } elseif ($isRule) {
+                    $this->db->updateMedicationStatementLocalState($noResep, $kodeBrng, $noRacik, 'failed_rule');
+                    $this->log->warning("[PHASE 2] Resep: {$noResep}: ✗ Permanent Rule Error -> {$errorMessage}");
+                } elseif ($isCode) {
+                    $this->db->updateMedicationStatementLocalState($noResep, $kodeBrng, $noRacik, 'invalid_code');
+                    $this->log->warning("[PHASE 2] Resep: {$noResep}: ✗ Permanent Code Error -> {$errorMessage}");
+                } else {
+                    $this->log->warning("[PHASE 2] Resep: {$noResep}: ✗ Failed -> " . $errorMessage);
+                }
                 $this->failCount++;
             }
         }

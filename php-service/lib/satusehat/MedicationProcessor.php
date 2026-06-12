@@ -68,6 +68,12 @@ class SatuSehatMedicationProcessor
         foreach ($records as $med) {
             $kodeBrng = $med['kode_brng'];
 
+            $localState = $this->db->getMedicationLocalState($kodeBrng);
+            if (in_array($localState, ['active', 'updated', 'privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
             $payload = SatuSehatPayloadBuilder::medication(
                 $this->config->orgId,
                 $med
@@ -100,7 +106,22 @@ class SatuSehatMedicationProcessor
                         $this->failCount++;
                     }
                 } else {
-                    $this->log->warning("[PHASE 1] {$kodeBrng}: ✗ Failed -> " . $errorMessage);
+                    $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
+                    $isRule = (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false);
+                    $isCode = (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false);
+
+                    if ($isPrivacy) {
+                        $this->db->updateMedicationLocalState($kodeBrng, 'privacy_error');
+                        $this->log->warning("[PHASE 1] {$kodeBrng}: ✗ Permanent Privacy Error -> {$errorMessage}");
+                    } elseif ($isRule) {
+                        $this->db->updateMedicationLocalState($kodeBrng, 'failed_rule');
+                        $this->log->warning("[PHASE 1] {$kodeBrng}: ✗ Permanent Rule Error -> {$errorMessage}");
+                    } elseif ($isCode) {
+                        $this->db->updateMedicationLocalState($kodeBrng, 'invalid_code');
+                        $this->log->warning("[PHASE 1] {$kodeBrng}: ✗ Permanent Code Error -> {$errorMessage}");
+                    } else {
+                        $this->log->warning("[PHASE 1] {$kodeBrng}: ✗ Failed -> " . $errorMessage);
+                    }
                     $this->failCount++;
                 }
             }
@@ -125,8 +146,7 @@ class SatuSehatMedicationProcessor
             $idMedication = $med['id_medication'];
 
             $localState = $this->db->getMedicationLocalState($kodeBrng);
-
-            if ($localState === 'updated') {
+            if (in_array($localState, ['updated', 'privacy_error', 'failed_rule', 'invalid_code'], true)) {
                 $this->skipCount++;
                 continue;
             }
@@ -145,7 +165,23 @@ class SatuSehatMedicationProcessor
                 $this->log->info("[PHASE 2] {$kodeBrng}: ✓ Updated Medication {$idMedication}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$kodeBrng}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
+                $isRule = (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false);
+                $isCode = (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false);
+
+                if ($isPrivacy) {
+                    $this->db->updateMedicationLocalState($kodeBrng, 'privacy_error');
+                    $this->log->warning("[PHASE 2] {$kodeBrng}: ✗ Permanent Privacy Error -> {$errorMessage}");
+                } elseif ($isRule) {
+                    $this->db->updateMedicationLocalState($kodeBrng, 'failed_rule');
+                    $this->log->warning("[PHASE 2] {$kodeBrng}: ✗ Permanent Rule Error -> {$errorMessage}");
+                } elseif ($isCode) {
+                    $this->db->updateMedicationLocalState($kodeBrng, 'invalid_code');
+                    $this->log->warning("[PHASE 2] {$kodeBrng}: ✗ Permanent Code Error -> {$errorMessage}");
+                } else {
+                    $this->log->warning("[PHASE 2] {$kodeBrng}: ✗ Failed -> " . $errorMessage);
+                }
                 $this->failCount++;
             }
         }

@@ -82,8 +82,7 @@ class SatuSehatMedicationDispenseProcessor
             $statusPemberian = $p['status_pemberian'];
 
             $localState = $this->db->getMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur);
-
-            if ($localState === 'active' || $localState === 'updated') {
+            if (in_array($localState, ['active', 'updated', 'privacy_error', 'failed_rule', 'invalid_code'], true)) {
                 $this->skipCount++;
                 continue;
             }
@@ -145,7 +144,22 @@ class SatuSehatMedicationDispenseProcessor
                         $this->failCount++;
                     }
                 } else {
-                    $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $errorMessage);
+                    $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
+                    $isRule = (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false);
+                    $isCode = (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false);
+
+                    if ($isPrivacy) {
+                        $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'privacy_error');
+                        $this->log->warning("[PHASE 1] {$noRawat}: ✗ Permanent Privacy Error -> {$errorMessage}");
+                    } elseif ($isRule) {
+                        $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'failed_rule');
+                        $this->log->warning("[PHASE 1] {$noRawat}: ✗ Permanent Rule Error -> {$errorMessage}");
+                    } elseif ($isCode) {
+                        $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'invalid_code');
+                        $this->log->warning("[PHASE 1] {$noRawat}: ✗ Permanent Code Error -> {$errorMessage}");
+                    } else {
+                        $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $errorMessage);
+                    }
                     $this->failCount++;
                 }
             }
@@ -177,8 +191,7 @@ class SatuSehatMedicationDispenseProcessor
             $statusPemberian = $p['status_pemberian'];
 
             $localState = $this->db->getMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur);
-
-            if ($localState === 'updated') {
+            if (in_array($localState, ['updated', 'privacy_error', 'failed_rule', 'invalid_code'], true)) {
                 $this->skipCount++;
                 continue;
             }
@@ -222,7 +235,23 @@ class SatuSehatMedicationDispenseProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated MedicationDispense {$idDispense}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
+                $isRule = (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false);
+                $isCode = (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false);
+
+                if ($isPrivacy) {
+                    $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'privacy_error');
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Permanent Privacy Error -> {$errorMessage}");
+                } elseif ($isRule) {
+                    $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'failed_rule');
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Permanent Rule Error -> {$errorMessage}");
+                } elseif ($isCode) {
+                    $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'invalid_code');
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Permanent Code Error -> {$errorMessage}");
+                } else {
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . $errorMessage);
+                }
                 $this->failCount++;
             }
         }

@@ -739,15 +739,15 @@ class SatuSehatPayloadBuilder
                 [
                     'system' => 'http://sys-ids.kemkes.go.id/medication/' . $orgId,
                     'use'    => 'official',
-                    'value'  => $p['kode_brng']
+                    'value'  => trim($p['kode_brng'])
                 ]
             ],
             'code' => [
                 'coding' => [
                     [
-                        'system'  => $p['obat_system'],
-                        'code'    => $p['obat_code'],
-                        'display' => $p['obat_display']
+                        'system'  => trim($p['obat_system']),
+                        'code'    => trim($p['obat_code']),
+                        'display' => trim($p['obat_display'])
                     ]
                 ]
             ],
@@ -755,9 +755,9 @@ class SatuSehatPayloadBuilder
             'form' => [
                 'coding' => [
                     [
-                        'system'  => $p['form_system'],
-                        'code'    => $p['form_code'],
-                        'display' => $p['form_display']
+                        'system'  => trim($p['form_system']),
+                        'code'    => trim($p['form_code']),
+                        'display' => trim($p['form_display'])
                     ]
                 ]
             ],
@@ -891,9 +891,9 @@ class SatuSehatPayloadBuilder
                     'route' => [
                         'coding' => [
                             [
-                                'system'  => $p['route_system'],
-                                'code'    => $p['route_code'],
-                                'display' => $p['route_display']
+                                'system'  => isset($p['route_system']) ? trim($p['route_system']) : null,
+                                'code'    => isset($p['route_code']) ? trim($p['route_code']) : null,
+                                'display' => isset($p['route_display']) ? trim($p['route_display']) : null
                             ]
                         ]
                     ],
@@ -901,9 +901,9 @@ class SatuSehatPayloadBuilder
                         [
                             'doseQuantity' => [
                                 'value'  => $signa1,
-                                'unit'   => $p['denominator_code'],
-                                'system' => $p['denominator_system'],
-                                'code'   => $p['denominator_code']
+                                'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
+                                'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
+                                'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
                             ]
                         ]
                     ]
@@ -912,9 +912,9 @@ class SatuSehatPayloadBuilder
             'dispenseRequest' => [
                 'quantity' => [
                     'value'  => (float)$p['jml'],
-                    'unit'   => $p['denominator_code'],
-                    'system' => $p['denominator_system'],
-                    'code'   => $p['denominator_code']
+                    'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
+                    'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
+                    'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
                 ]
             ]
         ];
@@ -1027,8 +1027,8 @@ class SatuSehatPayloadBuilder
             ],
             'quantity' => [
                 'value'  => (float)$p['jml'],
-                'system' => $p['denominator_system'],
-                'code'   => $p['denominator_code']
+                'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
+                'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
             ],
             'whenPrepared'   => $whenPrepared,
             'whenHandedOver' => $whenHandedOver,
@@ -1046,9 +1046,9 @@ class SatuSehatPayloadBuilder
                     'route' => [
                         'coding' => [
                             [
-                                'system'  => $p['route_system'],
-                                'code'    => $p['route_code'],
-                                'display' => $p['route_display']
+                                'system'  => isset($p['route_system']) ? trim($p['route_system']) : null,
+                                'code'    => isset($p['route_code']) ? trim($p['route_code']) : null,
+                                'display' => isset($p['route_display']) ? trim($p['route_display']) : null
                             ]
                         ]
                     ],
@@ -1056,9 +1056,9 @@ class SatuSehatPayloadBuilder
                         [
                             'doseQuantity' => [
                                 'value'  => $signa1,
-                                'unit'   => $p['denominator_code'],
-                                'system' => $p['denominator_system'],
-                                'code'   => $p['denominator_code']
+                                'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
+                                'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
+                                'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
                             ]
                         ]
                     ]
@@ -1169,9 +1169,9 @@ class SatuSehatPayloadBuilder
                     'route' => [
                         'coding' => [
                             [
-                                'system'  => $p['route_system'],
-                                'code'    => $p['route_code'],
-                                'display' => $p['route_display']
+                                'system'  => isset($p['route_system']) ? trim($p['route_system']) : null,
+                                'code'    => isset($p['route_code']) ? trim($p['route_code']) : null,
+                                'display' => isset($p['route_display']) ? trim($p['route_display']) : null
                             ]
                         ]
                     ],
@@ -1179,9 +1179,9 @@ class SatuSehatPayloadBuilder
                         [
                             'doseQuantity' => [
                                 'value'  => $signa1,
-                                'unit'   => $p['denominator_code'],
-                                'system' => $p['denominator_system'],
-                                'code'   => $p['denominator_code']
+                                'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
+                                'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
+                                'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
                             ]
                         ]
                     ]
