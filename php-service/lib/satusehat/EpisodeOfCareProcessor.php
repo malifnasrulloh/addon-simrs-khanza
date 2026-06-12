@@ -89,6 +89,13 @@ class SatuSehatEpisodeOfCareProcessor
                 continue;
             }
 
+            // Local State check: skip if previously failed due to privacy rules or business constraints
+            $localState = $this->db->getEocLocalState($noRawat);
+            if ($localState === 'privacy_error' || $localState === 'failed_rule' || $localState === 'invalid_code') {
+                $this->skipCount++;
+                continue;
+            }
+
             // 1. Detect Episode Type
             $type = EpisodeOfCareType::fromIcdCode($kdPenyakit);
             if (!$type) {
@@ -145,8 +152,17 @@ class SatuSehatEpisodeOfCareProcessor
                         $processedNoRawat[$noRawat] = $recoveryResult;
                     } else {
                         $this->log->error("[PHASE 1] {$noRawat}: ✗ Failed to recover duplicate EpisodeOfCare.");
-                        $this->failCount++;
+                        $this->db->updateEocLocalState($noRawat, 'failed_rule');
+                        $this->skipCount++;
                     }
+                } elseif (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                    $this->db->updateEocLocalState($noRawat, 'privacy_error');
+                    $this->log->warning("[PHASE 1] {$noRawat}: Skip future retries due to privacy/consent settings.");
+                    $this->skipCount++;
+                } elseif (stripos($errorMessage, 'Rule Number: 10110') !== false || stripos($errorMessage, 'found another EpisodeOfCare') !== false) {
+                    $this->db->updateEocLocalState($noRawat, 'failed_rule');
+                    $this->log->warning("[PHASE 1] {$noRawat}: Skip future retries due to active EpisodeOfCare rule conflict.");
+                    $this->skipCount++;
                 } else {
                     $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $errorMessage);
                     $this->failCount++;
@@ -181,7 +197,7 @@ class SatuSehatEpisodeOfCareProcessor
 
             $localState = $this->db->getEocLocalState($noRawat);
 
-            if ($localState === 'finished') {
+            if ($localState === 'finished' || $localState === 'privacy_error' || $localState === 'failed_rule' || $localState === 'invalid_code') {
                 $this->skipCount++;
                 continue;
             }
@@ -203,18 +219,17 @@ class SatuSehatEpisodeOfCareProcessor
                 continue;
             }
 
-            $payload = SatuSehatPayloadBuilder::episodeOfCare(
-                $this->config->orgId,
-                $p,
-                $idPasien,
-                $idDokter,
-                'finished',
-                $type,
-                $p['id_episode_of_care']
-            );
+            // Transition using PATCH instead of PUT for cleaner status updates
+            $finishedWaktu = $p['waktu_pulang'] ?? null;
+            $operations = [
+                ['op' => 'replace', 'path' => '/status', 'value' => 'finished'],
+            ];
+            if ($finishedWaktu) {
+                $operations[] = ['op' => 'replace', 'path' => '/period/end', 'value' => $finishedWaktu];
+            }
 
-            $this->log->info("[PHASE 2] {$noRawat}: PUT /EpisodeOfCare/{$p['id_episode_of_care']} (finished)");
-            $result = $this->api->put("/EpisodeOfCare/{$p['id_episode_of_care']}", $payload);
+            $this->log->info("[PHASE 2] {$noRawat}: PATCH /EpisodeOfCare/{$p['id_episode_of_care']} (finished)");
+            $result = $this->api->patch("/EpisodeOfCare/{$p['id_episode_of_care']}", $operations);
 
             if ($result['success']) {
                 $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $p['id_episode_of_care']);
@@ -222,8 +237,22 @@ class SatuSehatEpisodeOfCareProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to finished");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message']));
-                $this->failCount++;
+                $errorMessage = $result['data']['issue'][0]['details']['text'] 
+                    ?? $result['data']['issue'][0]['diagnostics'] 
+                    ?? $result['message'];
+
+                if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                    $this->db->updateEocLocalState($noRawat, 'privacy_error');
+                    $this->log->warning("[PHASE 2] {$noRawat}: Skip future retries due to privacy/consent settings.");
+                    $this->skipCount++;
+                } elseif (stripos($errorMessage, 'Rule Number: 10110') !== false || stripos($errorMessage, 'found another EpisodeOfCare') !== false) {
+                    $this->db->updateEocLocalState($noRawat, 'failed_rule');
+                    $this->log->warning("[PHASE 2] {$noRawat}: Skip future retries due to active EpisodeOfCare rule conflict.");
+                    $this->skipCount++;
+                } else {
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . $errorMessage);
+                    $this->failCount++;
+                }
             }
         }
     }
