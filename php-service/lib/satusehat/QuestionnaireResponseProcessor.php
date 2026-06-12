@@ -77,6 +77,14 @@ class SatuSehatQuestionnaireResponseProcessor
 
         foreach ($records as $qr) {
             $noResep = $qr['no_resep'];
+
+            // Local state check to prevent resubmitting terminal failures
+            $localState = $this->db->getQuestionnaireResponseLocalState($noResep);
+            if ($localState === 'active' || $localState === 'updated' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
             $nikPasien = $qr['no_ktp'];
             $nikPraktisi = $qr['ktppraktisi'];
             $idEncounter = $qr['id_encounter'];
@@ -97,7 +105,13 @@ class SatuSehatQuestionnaireResponseProcessor
 
             // Check if there is already a remote QuestionnaireResponse for this encounter/practitioner and prescription to avoid duplicate POSTs
             $idQR = $this->resolveDuplicateQuestionnaireResponse($idEncounter, $idPraktisi, $noResep);
-            if ($idQR) {
+            if ($idQR === false) {
+                $this->log->warning("[PHASE 1] {$noResep}: API error during duplicate check. Skipped.");
+                $this->failCount++;
+                continue;
+            }
+
+            if ($idQR !== null) {
                 $this->db->saveQuestionnaireResponse($noResep, $idQR);
                 $this->db->updateQuestionnaireResponseLocalState($noResep, 'active');
                 $this->log->info("[PHASE 1] {$noResep}: ✓ Recovered existing QuestionnaireResponse {$idQR} from Satu Sehat");
@@ -122,7 +136,50 @@ class SatuSehatQuestionnaireResponseProcessor
                 $this->successCount++;
             } else {
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+
+                // Self-healing: check if duplicate error from Satu Sehat
+                $isDuplicate = false;
+                if (isset($result['data']['issue'])) {
+                    foreach ($result['data']['issue'] as $issue) {
+                        $issueText = $issue['details']['text'] ?? $issue['diagnostics'] ?? '';
+                        if (stripos($issueText, 'duplicate') !== false || stripos($issueText, 'RuleNumber: 20002') !== false) {
+                            $isDuplicate = true;
+                            break;
+                        }
+                    }
+                }
+
+                if ($isDuplicate) {
+                    $this->log->info("[PHASE 1] {$noResep}: Duplicate error detected. Attempting to recover ID from Satu Sehat...");
+                    $recoveredId = $this->resolveDuplicateQuestionnaireResponse($idEncounter, $idPraktisi, $noResep);
+                    if ($recoveredId && $recoveredId !== false) {
+                        $this->db->saveQuestionnaireResponse($noResep, $recoveredId);
+                        $this->db->updateQuestionnaireResponseLocalState($noResep, 'active');
+                        $this->log->info("[PHASE 1] {$noResep}: ✓ Recovered ID {$recoveredId} after duplicate collision");
+                        $this->successCount++;
+                        continue;
+                    }
+                }
+
                 $this->log->warning("[PHASE 1] {$noResep}: ✗ Failed -> " . $errorMessage);
+
+                // Categorize and cache permanent/terminal failures
+                $state = 'fail';
+                $isTransient = ($result['code'] === 429 || ($result['code'] >= 500 && $result['code'] <= 599) || $result['code'] === 0);
+                if (!$isTransient) {
+                    if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                        $state = 'privacy_error';
+                    } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false) {
+                        $state = 'failed_rule';
+                    } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                        $state = 'invalid_code';
+                    }
+
+                    if ($state !== 'fail') {
+                        $this->db->updateQuestionnaireResponseLocalState($noResep, $state);
+                    }
+                }
+
                 $this->failCount++;
             }
         }
@@ -144,9 +201,10 @@ class SatuSehatQuestionnaireResponseProcessor
         foreach ($records as $qr) {
             $noResep = $qr['no_resep'];
             $idQR = $qr['id_questionresponse'];
-            $localState = $this->db->getQuestionnaireResponseLocalState($noResep);
 
-            if ($localState === 'updated') {
+            // Local state check to prevent resubmitting terminal failures
+            $localState = $this->db->getQuestionnaireResponseLocalState($noResep);
+            if ($localState === 'updated' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
                 $this->skipCount++;
                 continue;
             }
@@ -183,7 +241,26 @@ class SatuSehatQuestionnaireResponseProcessor
                 $this->log->info("[PHASE 2] {$noResep}: ✓ Updated QuestionnaireResponse {$idQR}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noResep}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $this->log->warning("[PHASE 2] {$noResep}: ✗ Failed -> " . $errorMessage);
+
+                // Categorize and cache permanent/terminal failures
+                $state = 'fail';
+                $isTransient = ($result['code'] === 429 || ($result['code'] >= 500 && $result['code'] <= 599) || $result['code'] === 0);
+                if (!$isTransient) {
+                    if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                        $state = 'privacy_error';
+                    } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false) {
+                        $state = 'failed_rule';
+                    } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                        $state = 'invalid_code';
+                    }
+
+                    if ($state !== 'fail') {
+                        $this->db->updateQuestionnaireResponseLocalState($noResep, $state);
+                    }
+                }
+
                 $this->failCount++;
             }
         }
@@ -191,13 +268,19 @@ class SatuSehatQuestionnaireResponseProcessor
 
     /**
      * Resolves an existing QuestionnaireResponse in Satu Sehat by encounter, author, and prescription ID.
+     * 
+     * @return string|null|false Returns ID string if found, null if definitely not found, or false on API error.
      */
-    private function resolveDuplicateQuestionnaireResponse(string $idEncounter, string $idPraktisi, string $noResep): ?string
+    private function resolveDuplicateQuestionnaireResponse(string $idEncounter, string $idPraktisi, string $noResep)
     {
         $endpoint = "/QuestionnaireResponse?encounter={$idEncounter}&author={$idPraktisi}";
         $result = $this->api->get($endpoint);
 
-        if (!$result['success'] || empty($result['data']['entry'])) {
+        if (!$result['success']) {
+            return false;
+        }
+
+        if (empty($result['data']['entry'])) {
             return null;
         }
 
