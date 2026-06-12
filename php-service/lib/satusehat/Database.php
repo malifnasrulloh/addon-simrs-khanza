@@ -173,6 +173,13 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for Patient lookup failure state tracking (TTL cache)
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS patient_sync_state (
+            nik VARCHAR(20) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -341,16 +348,31 @@ class SatuSehatDatabase
         $stmt->execute(['nik' => $nik]);
         $row = $stmt->fetch();
 
+        $mysqlVal = null;
         if ($row && !empty($row['ihspasien'])) {
-            $val = trim($row['ihspasien']);
-            if ($val === '' || $val === '-') {
+            $mysqlVal = trim($row['ihspasien']);
+            if ($mysqlVal !== '' && $mysqlVal !== '-') {
+                return $mysqlVal;
+            }
+        }
+
+        // MySQL has no mapping OR has '-' mapping. Check SQLite TTL cache.
+        $stmt = $this->sqlite->prepare("SELECT status, updated_at FROM patient_sync_state WHERE nik = :nik LIMIT 1");
+        $stmt->execute(['nik' => $nik]);
+        $stateRow = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($stateRow) {
+            $elapsed = time() - strtotime($stateRow['updated_at']);
+            $ttl = 30 * 86400; // 30-day TTL for self-healing retries
+            if ($elapsed < $ttl) {
+                $this->log->debug("[DB] Patient NIK '{$nik}' has cached failure state '{$stateRow['status']}' in SQLite (updated " . round($elapsed / 86400, 2) . " days ago). Skipping API lookup.");
                 return null;
             }
-            return $val;
+            $this->log->info("[DB] Patient NIK '{$nik}' failure cache in SQLite has expired (updated " . round($elapsed / 86400, 2) . " days ago). Retrying API lookup...");
         }
 
         // Fallback to API lookup
-        $this->log->info("[API] Patient NIK {$nik} not found in DB. Searching via Satu Sehat...");
+        $this->log->info("[API] Patient NIK {$nik} not found or cached as failed. Searching via Satu Sehat...");
         $result = $this->client->get("/Patient?identifier=https://fhir.kemkes.go.id/id/nik|{$nik}");
         
         if ($result['success']) {
@@ -360,18 +382,37 @@ class SatuSehatDatabase
                 
                 $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:n, :i) ON DUPLICATE KEY UPDATE ihspasien = :i2");
                 $insert->execute(['n' => $nik, 'i' => $ihsId, 'i2' => $ihsId]);
+                
+                // Clear SQLite state on success
+                $delete = $this->sqlite->prepare("DELETE FROM patient_sync_state WHERE nik = :nik");
+                $delete->execute(['nik' => $nik]);
+
                 return $ihsId;
             } else {
                 // Not registered in Satu Sehat
                 $this->log->warning("[API] Patient NIK {$nik} is NOT registered in Satu Sehat. Caching '-' in DB...");
                 $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:n, '-') ON DUPLICATE KEY UPDATE ihspasien = '-'");
                 $insert->execute(['n' => $nik]);
+
+                // Record failure state in SQLite
+                $insertSqlite = $this->sqlite->prepare("INSERT OR REPLACE INTO patient_sync_state (nik, status, updated_at) VALUES (:nik, 'not_found', CURRENT_TIMESTAMP)");
+                $insertSqlite->execute(['nik' => $nik]);
             }
-        } elseif (isset($result['code']) && $result['code'] === 400) {
-            // Invalid NIK format/value rejected by Satu Sehat API
-            $this->log->warning("[API] Patient NIK {$nik} lookup rejected (HTTP 400). Caching '-' in DB...");
-            $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:n, '-') ON DUPLICATE KEY UPDATE ihspasien = '-'");
-            $insert->execute(['n' => $nik]);
+        } else {
+            $httpCode = $result['code'] ?? 0;
+            if ($httpCode === 400) {
+                // Invalid NIK format/value rejected by Satu Sehat API
+                $this->log->warning("[API] Patient NIK {$nik} lookup rejected (HTTP 400). Caching '-' in DB...");
+                $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:n, '-') ON DUPLICATE KEY UPDATE ihspasien = '-'");
+                $insert->execute(['n' => $nik]);
+
+                // Record failure state in SQLite
+                $insertSqlite = $this->sqlite->prepare("INSERT OR REPLACE INTO patient_sync_state (nik, status, updated_at) VALUES (:nik, 'invalid_nik', CURRENT_TIMESTAMP)");
+                $insertSqlite->execute(['nik' => $nik]);
+            } else {
+                // Transient error => do not write or update SQLite state, so it retries on next event/run
+                $this->log->error("[API] Patient NIK {$nik} lookup transient failure (HTTP {$httpCode}). Will retry next cycle.");
+            }
         }
 
         return null;
