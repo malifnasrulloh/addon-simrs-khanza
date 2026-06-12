@@ -76,6 +76,14 @@ class SatuSehatDiagnosticReportLabMbProcessor
             $idTemplate = (int)$p['id_template'];
             $kdJenisPrw = $p['kd_jenis_prw'];
             $pemeriksaan = $p['Pemeriksaan'];
+            $code = $p['code'] ?? '';
+
+            // Check local SQLite state
+            $localState = $this->db->getDiagnosticReportLabMbLocalState($noorder, $idTemplate, $code);
+            if (in_array($localState, ['skipped', 'invalid_code', 'active', 'updated'], true)) {
+                $this->skipCount++;
+                continue;
+            }
 
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_dokter']);
@@ -105,24 +113,44 @@ class SatuSehatDiagnosticReportLabMbProcessor
             if ($result['success'] && isset($result['data']['id'])) {
                 $idDiagnosticReport = $result['data']['id'];
                 $this->db->saveDiagnosticReportLabMB($noorder, $kdJenisPrw, $idTemplate, $idDiagnosticReport);
+                $this->db->updateDiagnosticReportLabMbLocalState($noorder, $idTemplate, $code, 'active');
                 $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Created Diagnostic Report {$idDiagnosticReport}");
                 $this->successCount++;
             } else {
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
                 
-                // Duplicate Handling Fallback using identifier
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                $isDuplicate = (
+                    stripos($errorMessage, 'duplicate') !== false || 
+                    $result['code'] === 409 || 
+                    ($result['code'] === 400 && stripos($errorMessage, 'already exists') !== false)
+                );
+
+                $isTerminologyError = (
+                    $result['code'] === 400 && (
+                        stripos($errorMessage, 'Code not found') !== false ||
+                        stripos($errorMessage, 'not found in value set') !== false ||
+                        stripos($errorMessage, 'invalid code') !== false ||
+                        stripos($errorMessage, 'terminology') !== false
+                    )
+                );
+
+                if ($isDuplicate) {
                     $this->log->warning("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: Duplicated Diagnostic Report detected. Searching existing records...");
                     $idDiagnosticReport = $this->resolveDuplicateDiagnosticReport($noorder, $idTemplate);
 
                     if ($idDiagnosticReport) {
                         $this->db->saveDiagnosticReportLabMB($noorder, $kdJenisPrw, $idTemplate, $idDiagnosticReport);
+                        $this->db->updateDiagnosticReportLabMbLocalState($noorder, $idTemplate, $code, 'active');
                         $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Recovered Diagnostic Report {$idDiagnosticReport} from Satu Sehat");
                         $this->successCount++;
                     } else {
                         $this->log->error("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed to recover duplicate Diagnostic Report.");
                         $this->failCount++;
                     }
+                } elseif ($isTerminologyError) {
+                    $this->db->updateDiagnosticReportLabMbLocalState($noorder, $idTemplate, $code, 'invalid_code');
+                    $this->log->warning("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: Skipped -> Validation / Terminology Error: " . $errorMessage);
+                    $this->skipCount++;
                 } else {
                     $this->log->warning("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
                     $this->failCount++;
@@ -150,6 +178,14 @@ class SatuSehatDiagnosticReportLabMbProcessor
             $kdJenisPrw = $p['kd_jenis_prw'];
             $pemeriksaan = $p['Pemeriksaan'];
             $idDiagnosticReport = $p['id_diagnosticreport'];
+            $code = $p['code'] ?? '';
+
+            // Check local SQLite state
+            $localState = $this->db->getDiagnosticReportLabMbLocalState($noorder, $idTemplate, $code);
+            if (in_array($localState, ['skipped', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
 
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_dokter']);
@@ -178,11 +214,28 @@ class SatuSehatDiagnosticReportLabMbProcessor
             $result = $this->api->put("/DiagnosticReport/{$idDiagnosticReport}", $payload);
 
             if ($result['success']) {
+                $this->db->updateDiagnosticReportLabMbLocalState($noorder, $idTemplate, $code, 'updated');
                 $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Updated Diagnostic Report {$idDiagnosticReport}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
-                $this->failCount++;
+                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $isTerminologyError = (
+                    $result['code'] === 400 && (
+                        stripos($errorMessage, 'Code not found') !== false ||
+                        stripos($errorMessage, 'not found in value set') !== false ||
+                        stripos($errorMessage, 'invalid code') !== false ||
+                        stripos($errorMessage, 'terminology') !== false
+                    )
+                );
+
+                if ($isTerminologyError) {
+                    $this->db->updateDiagnosticReportLabMbLocalState($noorder, $idTemplate, $code, 'invalid_code');
+                    $this->log->warning("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: Skipped -> Validation / Terminology Error: " . $errorMessage);
+                    $this->skipCount++;
+                } else {
+                    $this->log->warning("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
+                    $this->failCount++;
+                }
             }
         }
     }

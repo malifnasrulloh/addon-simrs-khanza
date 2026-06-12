@@ -138,6 +138,20 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for DiagnosticReport Lab PK state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS diagnosticreport_lab_pk_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
+
+        // Table for DiagnosticReport Lab MB state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS diagnosticreport_lab_mb_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -1836,6 +1850,50 @@ class SatuSehatDatabase
         $stmt->execute(['ck' => $compositeKey, 'st' => $localStatus]);
     }
 
+    // ─── DIAGNOSTIC REPORT LAB PK STATE TRACKING ──────────────────────────────
+
+    public function getDiagnosticReportLabPkLocalState(string $noorder, int $idTemplate, string $code): ?string
+    {
+        $compositeKey = $noorder . '_' . $idTemplate . '_' . $code;
+        $stmt = $this->sqlite->prepare("SELECT status FROM diagnosticreport_lab_pk_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateDiagnosticReportLabPkLocalState(string $noorder, int $idTemplate, string $code, string $status): void
+    {
+        $compositeKey = $noorder . '_' . $idTemplate . '_' . $code;
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO diagnosticreport_lab_pk_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    // ─── DIAGNOSTIC REPORT LAB MB STATE TRACKING ──────────────────────────────
+
+    public function getDiagnosticReportLabMbLocalState(string $noorder, int $idTemplate, string $code): ?string
+    {
+        $compositeKey = $noorder . '_' . $idTemplate . '_' . $code;
+        $stmt = $this->sqlite->prepare("SELECT status FROM diagnosticreport_lab_mb_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateDiagnosticReportLabMbLocalState(string $noorder, int $idTemplate, string $code, string $status): void
+    {
+        $compositeKey = $noorder . '_' . $idTemplate . '_' . $code;
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO diagnosticreport_lab_mb_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
     // ─── CLINICAL IMPRESSION MYSQL OPERATIONS ───────────────────────────────────
 
     public function fetchPendingClinicalImpressionActive(string $dateFrom, string $dateTo): array
@@ -2839,13 +2897,13 @@ class SatuSehatDatabase
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
-                per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
-                sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
-                tl.Pemeriksaan, sml.code, sml.system, sml.display,
-                sssr.id_servicerequest, pdpl.id_template, sssp.id_specimen,
-                sso.id_observation, '' as id_diagnosticreport, skl.kesan,
-                pdpl.kd_jenis_prw
+            rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+            per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
+            sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
+            tl.Pemeriksaan, sml.code, sml.system, sml.display,
+            sssr.id_servicerequest, pdpl.id_template, sssp.id_specimen,
+            sso.id_observation, '' as id_diagnosticreport, skl.kesan,
+            pdpl.kd_jenis_prw
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
@@ -2863,7 +2921,7 @@ class SatuSehatDatabase
               AND per.tgl_periksa = pl.tgl_hasil
               AND per.jam = pl.jam_hasil
               AND per.dokter_perujuk = pl.dokter_perujuk
-            INNER JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
+            LEFT JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
               AND per.tgl_periksa = skl.tgl_periksa
               AND per.jam = skl.jam
             INNER JOIN satu_sehat_observation_lab sso ON sssp.noorder = sso.noorder
@@ -2888,13 +2946,13 @@ class SatuSehatDatabase
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
-                per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
-                sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
-                tl.Pemeriksaan, sml.code, sml.system, sml.display,
-                sssr.id_servicerequest, pdpl.id_template, sssp.id_specimen,
-                sso.id_observation, ssdr.id_diagnosticreport, skl.kesan,
-                pdpl.kd_jenis_prw
+            rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+            per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
+            sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
+            tl.Pemeriksaan, sml.code, sml.system, sml.display,
+            sssr.id_servicerequest, pdpl.id_template, sssp.id_specimen,
+            sso.id_observation, ssdr.id_diagnosticreport, skl.kesan,
+            pdpl.kd_jenis_prw
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
@@ -2912,7 +2970,7 @@ class SatuSehatDatabase
               AND per.tgl_periksa = pl.tgl_hasil
               AND per.jam = pl.jam_hasil
               AND per.dokter_perujuk = pl.dokter_perujuk
-            INNER JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
+            LEFT JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
               AND per.tgl_periksa = skl.tgl_periksa
               AND per.jam = skl.jam
             INNER JOIN satu_sehat_observation_lab sso ON sssp.noorder = sso.noorder
@@ -2956,13 +3014,13 @@ class SatuSehatDatabase
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
-                per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
-                sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
-                tl.Pemeriksaan, sml.code, sml.system, sml.display,
-                sssr.id_servicerequest, pdpl.id_template, sssp.id_specimen,
-                sso.id_observation, '' as id_diagnosticreport, skl.kesan,
-                pdpl.kd_jenis_prw
+            rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+            per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
+            sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
+            tl.Pemeriksaan, sml.code, sml.system, sml.display,
+            sssr.id_servicerequest, pdpl.id_template, sssp.id_specimen,
+            sso.id_observation, '' as id_diagnosticreport, skl.kesan,
+            pdpl.kd_jenis_prw
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
@@ -2980,7 +3038,7 @@ class SatuSehatDatabase
               AND per.tgl_periksa = pl.tgl_hasil
               AND per.jam = pl.jam_hasil
               AND per.dokter_perujuk = pl.dokter_perujuk
-            INNER JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
+            LEFT JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
               AND per.tgl_periksa = skl.tgl_periksa
               AND per.jam = skl.jam
             INNER JOIN satu_sehat_observation_lab_mb sso ON sssp.noorder = sso.noorder
@@ -3005,13 +3063,13 @@ class SatuSehatDatabase
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
-                per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
-                sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
-                tl.Pemeriksaan, sml.code, sml.system, sml.display,
-                sssr.id_servicerequest, pdpl.id_template, sssp.id_specimen,
-                sso.id_observation, ssdr.id_diagnosticreport, skl.kesan,
-                pdpl.kd_jenis_prw
+            rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+            per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
+            sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
+            tl.Pemeriksaan, sml.code, sml.system, sml.display,
+            sssr.id_servicerequest, pdpl.id_template, sssp.id_specimen,
+            sso.id_observation, ssdr.id_diagnosticreport, skl.kesan,
+            pdpl.kd_jenis_prw
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
@@ -3029,7 +3087,7 @@ class SatuSehatDatabase
               AND per.tgl_periksa = pl.tgl_hasil
               AND per.jam = pl.jam_hasil
               AND per.dokter_perujuk = pl.dokter_perujuk
-            INNER JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
+            LEFT JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
               AND per.tgl_periksa = skl.tgl_periksa
               AND per.jam = skl.jam
             INNER JOIN satu_sehat_observation_lab_mb sso ON sssp.noorder = sso.noorder
