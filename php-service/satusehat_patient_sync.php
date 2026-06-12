@@ -70,17 +70,34 @@ foreach ($patients as $idx => $patient) {
         $endpoint = "/Patient?identifier=https://fhir.kemkes.go.id/id/nik|{$nik}";
         $res = $client->get($endpoint);
         
-        if ($res['success'] && !empty($res['data']['entry'])) {
-            $resource = $res['data']['entry'][0]['resource'];
-            $ihsNumber = $resource['id'];
-            
-            $insertStmt = $pdo->prepare("REPLACE INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:nik, :ihs)");
-            $insertStmt->execute(['nik' => $nik, 'ihs' => $ihsNumber]);
-            
-            $log->info("  -> Success: Mapped IHS {$ihsNumber}");
-            $successCount++;
+        if ($res['success']) {
+            if (!empty($res['data']['entry'])) {
+                $resource = $res['data']['entry'][0]['resource'];
+                $ihsNumber = $resource['id'];
+                
+                $insertStmt = $pdo->prepare("REPLACE INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:nik, :ihs)");
+                $insertStmt->execute(['nik' => $nik, 'ihs' => $ihsNumber]);
+                
+                $log->info("  -> Success: Mapped IHS {$ihsNumber}");
+                $successCount++;
+            } else {
+                // HTTP 200 OK but empty entry => not found in Satu Sehat
+                $insertStmt = $pdo->prepare("REPLACE INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:nik, '-')");
+                $insertStmt->execute(['nik' => $nik]);
+                $log->warning("  -> Failed: Not registered in Satu Sehat. Caching '-' to skip next time.");
+                $failCount++;
+            }
         } else {
-            $log->info("  -> Failed: Not found in Satu Sehat.");
+            $httpCode = $res['code'] ?? 0;
+            if ($httpCode === 400) {
+                // Bad Request => permanent invalid NIK format rejected by API
+                $insertStmt = $pdo->prepare("REPLACE INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:nik, '-')");
+                $insertStmt->execute(['nik' => $nik]);
+                $log->warning("  -> Failed: Invalid NIK format (HTTP 400). Caching '-' to skip next time.");
+            } else {
+                // Transient error (e.g., 429 Rate Limit, 500 Server Error) => do not cache so it retries
+                $log->error("  -> Failed: Transient API error (HTTP {$httpCode}). Will retry next cycle.");
+            }
             $failCount++;
         }
         
