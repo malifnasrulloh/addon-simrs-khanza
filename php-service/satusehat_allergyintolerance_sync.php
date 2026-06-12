@@ -174,7 +174,7 @@ if ($isParallel && $totalPending > 1) {
                 exit(1);
             }
 
-            $dictionary = new SatuSehatAllergyDictionary(BASE_DIR . '/lib/satusehat/dictionary_allergy.iyem', $log);
+            $dictionary = new SatuSehatAllergyDictionary(BASE_DIR . '/cache/alergisatusehat.iyem', $log);
             $processor = new SatuSehatAllergyIntoleranceProcessor($childDb, $childClient, $config, $log, $dictionary);
             $stats = $processor->run($actChunk, $updChunk);
 
@@ -200,7 +200,7 @@ if ($isParallel && $totalPending > 1) {
 
 } else {
     // ── SINGLE PROCESS FALLBACK ──
-    $dictionary = new SatuSehatAllergyDictionary(BASE_DIR . '/lib/satusehat/dictionary_allergy.iyem', $log);
+    $dictionary = new SatuSehatAllergyDictionary(BASE_DIR . '/cache/alergisatusehat.iyem', $log);
     $processor = new SatuSehatAllergyIntoleranceProcessor($db, $client, $config, $log, $dictionary);
     try {
         $stats = $processor->run($activeRecords, $updateRecords);

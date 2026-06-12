@@ -105,6 +105,12 @@ class SatuSehatAllergyIntoleranceProcessor
             // Look up mapping in dictionary
             $allergyData = $this->dictionary->lookup($alergi);
 
+            if ($allergyData['coding_code'] === 'unknown') {
+                $this->log->warning("[PHASE 1] {$noRawat}: Allergy keyword '{$alergi}' is unmapped. Skipped until mapped in cache/alergisatusehat.iyem.");
+                $this->skipCount++;
+                continue;
+            }
+
             $payload = SatuSehatPayloadBuilder::allergyIntolerance(
                 $a,
                 $allergyData,
@@ -133,7 +139,7 @@ class SatuSehatAllergyIntoleranceProcessor
                     if ($idAllergy) {
                         $this->db->saveAllergyIntolerance($noRawat, $tglPerawatan, $jamRawat, $statusRawat, $idAllergy);
                         $this->db->updateAllergyLocalState($noRawat, $tglPerawatan, $jamRawat, $alergi, 'active');
-                        $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered AllergyIntolerance {$idAllergy} from BPJS");
+                        $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered AllergyIntolerance {$idAllergy} from Satu Sehat");
                         $this->successCount++;
                     } else {
                         $this->log->error("[PHASE 1] {$noRawat}: ✗ Failed to recover duplicate AllergyIntolerance.");
@@ -192,6 +198,12 @@ class SatuSehatAllergyIntoleranceProcessor
             }
 
             $allergyData = $this->dictionary->lookup($alergi);
+
+            if ($allergyData['coding_code'] === 'unknown') {
+                $this->log->warning("[PHASE 2] {$noRawat}: Allergy keyword '{$alergi}' is unmapped. Skipped until mapped in cache/alergisatusehat.iyem.");
+                $this->skipCount++;
+                continue;
+            }
 
             $payload = SatuSehatPayloadBuilder::allergyIntolerance(
                 $a,

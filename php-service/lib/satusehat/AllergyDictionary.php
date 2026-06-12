@@ -35,9 +35,39 @@ class SatuSehatAllergyDictionary
 
         if (json_last_error() === JSON_ERROR_NONE && isset($data['alergi']) && is_array($data['alergi'])) {
             $this->dictionary = $data['alergi'];
+            $this->cleanInvalidEntries();
         } else {
             $this->log->warning("[DICTIONARY] Failed to parse cache file. Starting fresh.");
             $this->dictionary = [];
+        }
+    }
+
+    private function cleanInvalidEntries(): void
+    {
+        $initialCount = count($this->dictionary);
+        $cleanedDictionary = [];
+        $hasChanges = false;
+
+        $negatives = [
+            '', '-', 'tidakada', 'tidakadaalergi', 'tidak', 'tak', 'nihil', 
+            'negatif', 'none', 'noallergy', 'normal'
+        ];
+
+        foreach ($this->dictionary as $entry) {
+            $kw = isset($entry['keyword']) ? trim(preg_replace('/\s+/', ' ', strtolower($entry['keyword']))) : '';
+            $cleanedKw = trim(preg_replace('/[^a-z0-9]/', '', $kw));
+
+            if ($kw === '' || $kw === '-' || in_array($kw, ['tidak', 'tak', 'nihil', 'negatif', 'none', 'no allergy', 'normal']) || in_array($cleanedKw, $negatives)) {
+                $hasChanges = true;
+                continue;
+            }
+            $cleanedDictionary[] = $entry;
+        }
+
+        if ($hasChanges) {
+            $this->dictionary = $cleanedDictionary;
+            $this->log->info("[DICTIONARY] Cleaned up " . ($initialCount - count($this->dictionary)) . " invalid negative entries from cache.");
+            $this->save();
         }
     }
 
@@ -55,8 +85,14 @@ class SatuSehatAllergyDictionary
         // Normalize keyword (remove newlines, tabs, and lowercase)
         $normalized = trim(preg_replace('/\s+/', ' ', strtolower($keyword)));
 
-        // Handle empty or "No Known Allergy" cases
-        if ($normalized === '' || $normalized === 'tidak ada alergi') {
+        // Handle empty, non-alphanumeric, or Indonesian negative indicators
+        $cleaned = trim(preg_replace('/[^a-z0-9]/', '', $normalized));
+        $negatives = [
+            '', '-', 'tidakada', 'tidakadaalergi', 'tidak', 'tak', 'nihil', 
+            'negatif', 'none', 'noallergy', 'normal'
+        ];
+
+        if ($normalized === '' || $normalized === '-' || in_array($normalized, ['tidak', 'tak', 'nihil', 'negatif', 'none', 'no allergy', 'normal']) || in_array($cleaned, $negatives)) {
             return [
                 'category'       => 'environment',
                 'coding_system'  => 'http://snomed.info/sct',

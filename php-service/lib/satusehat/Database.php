@@ -3328,17 +3328,36 @@ class SatuSehatDatabase
                     break;
 
                 case 'allergy_intolerance':
-                    $stmtTotal = $this->mysql->prepare("SELECT COUNT(*) FROM alergi_pasien ap INNER JOIN reg_periksa rp ON ap.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt");
-                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $sqlTotal = "
+                        SELECT COUNT(*) FROM (
+                            SELECT pr.no_rawat FROM pemeriksaan_ralan pr 
+                            INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat 
+                            WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND pr.alergi <> ''
+                            UNION ALL
+                            SELECT pi.no_rawat FROM pemeriksaan_ranap pi 
+                            INNER JOIN reg_periksa rp ON pi.no_rawat = rp.no_rawat 
+                            WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2 AND pi.alergi <> ''
+                        ) AS combined
+                    ";
+                    $stmtTotal = $this->mysql->prepare($sqlTotal);
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt, 'df2' => $df, 'dt2' => $dt]);
                     $total = (int) $stmtTotal->fetchColumn();
 
-                    $stmtNoEnc = $this->mysql->prepare("
-                        SELECT COUNT(*) FROM alergi_pasien ap
-                        INNER JOIN reg_periksa rp ON ap.no_rawat = rp.no_rawat
-                        LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND sse.id_encounter IS NULL
-                    ");
-                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt]);
+                    $sqlNoEnc = "
+                        SELECT COUNT(*) FROM (
+                            SELECT pr.no_rawat FROM pemeriksaan_ralan pr 
+                            INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat 
+                            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                            WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND pr.alergi <> '' AND sse.id_encounter IS NULL
+                            UNION ALL
+                            SELECT pi.no_rawat FROM pemeriksaan_ranap pi 
+                            INNER JOIN reg_periksa rp ON pi.no_rawat = rp.no_rawat 
+                            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                            WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2 AND pi.alergi <> '' AND sse.id_encounter IS NULL
+                        ) AS combined
+                    ";
+                    $stmtNoEnc = $this->mysql->prepare($sqlNoEnc);
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt, 'df2' => $df, 'dt2' => $dt]);
                     $noEnc = (int) $stmtNoEnc->fetchColumn();
 
                     $stmtSynced = $this->mysql->prepare("
