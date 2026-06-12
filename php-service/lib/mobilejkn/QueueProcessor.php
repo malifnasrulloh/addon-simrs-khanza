@@ -148,10 +148,7 @@ class QueueProcessor
                 $regInfo = $this->db->fetchPatientRegInfo($b['no_rawat']);
                 $jamReg = $regInfo['jam_reg'] ?? '08:00:00';
 
-                $datajam = $this->db->resolveTask3WaktuJkn($b['no_rawat'], $b['tanggalperiksa'], $jamMulai);
-                if (empty($datajam) || str_contains($datajam, '00:00:00')) {
-                    $datajam = RobotInference::inferTask3($b['tanggalperiksa'], $jamReg, $jamMulai);
-                }
+                $datajam = RobotInference::inferTask3($b['tanggalperiksa'], $jamReg, $jamMulai);
 
                 if (!empty($datajam)) {
                     $r = $this->sendTaskId($nb, $b['no_rawat'], '3', $datajam, 'BLOCK 1');

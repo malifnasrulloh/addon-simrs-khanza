@@ -382,58 +382,6 @@ SQL;
         return $row ? $row : null;
     }
 
-    /**
-     * Get task 3 waktu:
-     * Prioritizes JKN validation check-in time (referensi_mobilejkn_bpjs.validasi),
-     * and falls back to actual counter registration time (reg_periksa.jam_reg).
-     */
-    public function resolveTask3Waktu(string $noRawat, string $tglRegistrasi, string $jamMulai): string
-    {
-        // 1. Fetch validasi from JKN references (actual QR scan / self-checkin kiosk)
-        $sqlVal = "SELECT validasi FROM referensi_mobilejkn_bpjs WHERE no_rawat = :nr LIMIT 1";
-        $stmtVal = $this->pdo->prepare($sqlVal);
-        $stmtVal->execute(['nr' => $noRawat]);
-        $rowVal = $stmtVal->fetch();
-        $validasi = $rowVal['validasi'] ?? '';
-        if (!empty($validasi) && !str_starts_with($validasi, '0000') && $validasi !== '0000-00-00 00:00:00') {
-            return $this->alignTimeToDate($validasi, $tglRegistrasi);
-        }
-
-        // 2. Fallback to physical on-site counter registration time (reg_periksa.tgl_registrasi + jam_reg)
-        $sqlReg = "SELECT tgl_registrasi, jam_reg FROM reg_periksa WHERE no_rawat = :nr LIMIT 1";
-        $stmtReg = $this->pdo->prepare($sqlReg);
-        $stmtReg->execute(['nr' => $noRawat]);
-        $rowReg = $stmtReg->fetch();
-        if ($rowReg) {
-            $regTime = $rowReg['tgl_registrasi'] . ' ' . $rowReg['jam_reg'];
-            if (!empty($regTime) && !str_starts_with($regTime, '0000') && !str_ends_with($regTime, '00:00:00')) {
-                return $this->alignTimeToDate($regTime, $tglRegistrasi);
-            }
-        }
-
-        return '';
-    }
-
-    /**
-     * Aligns the date portion of a timestamp to the target date while preserving HH:ii:ss.
-     */
-    private function alignTimeToDate(string $datetime, string $targetDate): string
-    {
-        if (empty($datetime) || str_starts_with($datetime, '0000') || empty($targetDate)) {
-            return $datetime;
-        }
-        $timePart = substr($datetime, 11, 8); // Extracts 'HH:ii:ss'
-        return $targetDate . ' ' . $timePart;
-    }
-
-    /**
-     * Get task 3 waktu for JKN patients.
-     * Aligns with the same unified check-in / validation priority logic.
-     */
-    public function resolveTask3WaktuJkn(string $noRawat, string $tglRegistrasi, string $jamMulai): string
-    {
-        return $this->resolveTask3Waktu($noRawat, $tglRegistrasi, $jamMulai);
-    }
 
 
 
