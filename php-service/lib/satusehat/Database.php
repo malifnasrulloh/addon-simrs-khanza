@@ -321,20 +321,36 @@ class SatuSehatDatabase
         $row = $stmt->fetch();
 
         if ($row && !empty($row['ihspasien'])) {
-            return $row['ihspasien'];
+            $val = trim($row['ihspasien']);
+            if ($val === '' || $val === '-') {
+                return null;
+            }
+            return $val;
         }
 
         // Fallback to API lookup
         $this->log->info("[API] Patient NIK {$nik} not found in DB. Searching via Satu Sehat...");
         $result = $this->client->get("/Patient?identifier=https://fhir.kemkes.go.id/id/nik|{$nik}");
         
-        if ($result['success'] && isset($result['data']['entry'][0]['resource']['id'])) {
-            $ihsId = $result['data']['entry'][0]['resource']['id'];
-            $this->log->info("[API] Found IHS Patient ID: {$ihsId}. Saving to DB...");
-            
-            $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:n, :i) ON DUPLICATE KEY UPDATE ihspasien = :i2");
-            $insert->execute(['n' => $nik, 'i' => $ihsId, 'i2' => $ihsId]);
-            return $ihsId;
+        if ($result['success']) {
+            if (isset($result['data']['entry'][0]['resource']['id'])) {
+                $ihsId = $result['data']['entry'][0]['resource']['id'];
+                $this->log->info("[API] Found IHS Patient ID: {$ihsId}. Saving to DB...");
+                
+                $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:n, :i) ON DUPLICATE KEY UPDATE ihspasien = :i2");
+                $insert->execute(['n' => $nik, 'i' => $ihsId, 'i2' => $ihsId]);
+                return $ihsId;
+            } else {
+                // Not registered in Satu Sehat
+                $this->log->warning("[API] Patient NIK {$nik} is NOT registered in Satu Sehat. Caching '-' in DB...");
+                $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:n, '-') ON DUPLICATE KEY UPDATE ihspasien = '-'");
+                $insert->execute(['n' => $nik]);
+            }
+        } elseif (isset($result['code']) && $result['code'] === 400) {
+            // Invalid NIK format/value rejected by Satu Sehat API
+            $this->log->warning("[API] Patient NIK {$nik} lookup rejected (HTTP 400). Caching '-' in DB...");
+            $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_patient (nikpasien, ihspasien) VALUES (:n, '-') ON DUPLICATE KEY UPDATE ihspasien = '-'");
+            $insert->execute(['n' => $nik]);
         }
 
         return null;
@@ -353,20 +369,36 @@ class SatuSehatDatabase
         $row = $stmt->fetch();
 
         if ($row && !empty($row['ihspegawai'])) {
-            return $row['ihspegawai'];
+            $val = trim($row['ihspegawai']);
+            if ($val === '' || $val === '-') {
+                return null;
+            }
+            return $val;
         }
 
         // Fallback to API lookup
         $this->log->info("[API] Practitioner NIK {$nik} not found in DB. Searching via Satu Sehat...");
         $result = $this->client->get("/Practitioner?identifier=https://fhir.kemkes.go.id/id/nik|{$nik}");
         
-        if ($result['success'] && isset($result['data']['entry'][0]['resource']['id'])) {
-            $ihsId = $result['data']['entry'][0]['resource']['id'];
-            $this->log->info("[API] Found IHS Practitioner ID: {$ihsId}. Saving to DB...");
-            
-            $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_practitioner (nikpegawai, ihspegawai) VALUES (:n, :i) ON DUPLICATE KEY UPDATE ihspegawai = :i2");
-            $insert->execute(['n' => $nik, 'i' => $ihsId, 'i2' => $ihsId]);
-            return $ihsId;
+        if ($result['success']) {
+            if (isset($result['data']['entry'][0]['resource']['id'])) {
+                $ihsId = $result['data']['entry'][0]['resource']['id'];
+                $this->log->info("[API] Found IHS Practitioner ID: {$ihsId}. Saving to DB...");
+                
+                $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_practitioner (nikpegawai, ihspegawai) VALUES (:n, :i) ON DUPLICATE KEY UPDATE ihspegawai = :i2");
+                $insert->execute(['n' => $nik, 'i' => $ihsId, 'i2' => $ihsId]);
+                return $ihsId;
+            } else {
+                // Not registered in Satu Sehat
+                $this->log->warning("[API] Practitioner NIK {$nik} is NOT registered in Satu Sehat. Caching '-' in DB...");
+                $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_practitioner (nikpegawai, ihspegawai) VALUES (:n, '-') ON DUPLICATE KEY UPDATE ihspegawai = '-'");
+                $insert->execute(['n' => $nik]);
+            }
+        } elseif (isset($result['code']) && $result['code'] === 400) {
+            // Invalid NIK format/value rejected by Satu Sehat API
+            $this->log->warning("[API] Practitioner NIK {$nik} lookup rejected (HTTP 400). Caching '-' in DB...");
+            $insert = $this->mysql->prepare("INSERT INTO satu_sehat_ihs_practitioner (nikpegawai, ihspegawai) VALUES (:n, '-') ON DUPLICATE KEY UPDATE ihspegawai = '-'");
+            $insert->execute(['n' => $nik]);
         }
 
         return null;
