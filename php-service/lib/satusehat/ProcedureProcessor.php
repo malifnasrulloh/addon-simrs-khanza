@@ -75,6 +75,7 @@ class SatuSehatProcedureProcessor
             $noRawat = $p['no_rawat'];
             $kode = $p['kode'];
             $statusRawat = $p['status'];
+            $idEncounter = $p['id_encounter'];
 
             $nik = $p['no_ktp'];
 
@@ -83,6 +84,16 @@ class SatuSehatProcedureProcessor
             if (!$idPasien) {
                 $this->log->warning("[PHASE 1] {$noRawat}: Missing IHS ID for Patient. Skipped.");
                 $this->skipCount++;
+                continue;
+            }
+
+            // Preemptive Duplicate Check: Search if there is already a remote Procedure for this patient, encounter and code to avoid duplicate POSTs
+            $idProcedure = $this->resolveDuplicateProcedure($idPasien, $idEncounter, $kode);
+            if ($idProcedure) {
+                $this->db->saveProcedure($noRawat, $kode, $statusRawat, $idProcedure);
+                $this->db->updateProcedureLocalState($noRawat, $kode, 'active');
+                $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered existing Procedure {$idProcedure} from Satu Sehat (ICD-9: {$kode})");
+                $this->successCount++;
                 continue;
             }
 
@@ -102,25 +113,8 @@ class SatuSehatProcedureProcessor
                 $this->successCount++;
             } else {
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
-                
-                // Duplicate Handling Fallback
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
-                    $this->log->warning("[PHASE 1] {$noRawat}: Duplicated Procedure detected. Searching existing records...");
-                    $idProcedure = $this->resolveDuplicateProcedure($idPasien, $p['id_encounter'], $kode);
-
-                    if ($idProcedure) {
-                        $this->db->saveProcedure($noRawat, $kode, $statusRawat, $idProcedure);
-                        $this->db->updateProcedureLocalState($noRawat, $kode, 'active');
-                        $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered Procedure {$idProcedure} from BPJS");
-                        $this->successCount++;
-                    } else {
-                        $this->log->error("[PHASE 1] {$noRawat}: ✗ Failed to recover duplicate Procedure.");
-                        $this->failCount++;
-                    }
-                } else {
-                    $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $errorMessage);
-                    $this->failCount++;
-                }
+                $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $errorMessage);
+                $this->failCount++;
             }
         }
     }
