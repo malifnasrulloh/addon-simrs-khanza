@@ -76,6 +76,12 @@ class SatuSehatConditionProcessor
             $kdPenyakit = $p['kd_penyakit'];
             $statusRawat = $p['status'];
 
+            $localState = $this->db->getConditionLocalState($noRawat, $kdPenyakit);
+            if ($localState === 'active' || $localState === 'updated' || $localState === 'skipped' || $localState === 'invalid_code') {
+                $this->skipCount++;
+                continue;
+            }
+
             $nik = $p['no_ktp'];
 
             $idPasien = $this->db->getIhsPatient($nik);
@@ -103,15 +109,22 @@ class SatuSehatConditionProcessor
             } else {
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
                 
-                // Duplicate Handling Fallback
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                $isValidationError = (stripos($errorMessage, 'Code not found') !== false || 
+                                       stripos($errorMessage, 'invalid') !== false || 
+                                       stripos($errorMessage, 'incorrect') !== false);
+                
+                if ($isValidationError) {
+                    $this->log->warning("[PHASE 1] {$noRawat}: ✗ Skipped -> Invalid ICD-10 Code '{$kdPenyakit}' (Satu Sehat Terminology rejected it)");
+                    $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code');
+                    $this->skipCount++;
+                } else if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("[PHASE 1] {$noRawat}: Duplicated Condition detected. Searching existing records...");
                     $idCondition = $this->resolveDuplicateCondition($idPasien, $p['id_encounter'], $kdPenyakit);
 
                     if ($idCondition) {
                         $this->db->saveCondition($noRawat, $kdPenyakit, $statusRawat, $idCondition);
                         $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'active');
-                        $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered Condition {$idCondition} from BPJS");
+                        $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered Condition {$idCondition} from Satu Sehat");
                         $this->successCount++;
                     } else {
                         $this->log->error("[PHASE 1] {$noRawat}: ✗ Failed to recover duplicate Condition.");
@@ -144,7 +157,7 @@ class SatuSehatConditionProcessor
             $statusRawat = $p['status'];
             $localState = $this->db->getConditionLocalState($noRawat, $kdPenyakit);
 
-            if ($localState === 'updated') {
+            if ($localState === 'updated' || $localState === 'skipped' || $localState === 'invalid_code') {
                 $this->skipCount++;
                 continue;
             }
@@ -173,8 +186,20 @@ class SatuSehatConditionProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Condition {$p['id_condition']}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
-                $this->failCount++;
+                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                
+                $isValidationError = (stripos($errorMessage, 'Code not found') !== false || 
+                                       stripos($errorMessage, 'invalid') !== false || 
+                                       stripos($errorMessage, 'incorrect') !== false);
+                
+                if ($isValidationError) {
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Skipped -> Invalid ICD-10 Code '{$kdPenyakit}' (Satu Sehat Terminology rejected it on update)");
+                    $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code');
+                    $this->skipCount++;
+                } else {
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . $errorMessage);
+                    $this->failCount++;
+                }
             }
         }
     }

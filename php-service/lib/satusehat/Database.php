@@ -1816,18 +1816,18 @@ class SatuSehatDatabase
 
     // ─── CLINICAL IMPRESSION STATE TRACKING ──────────────────────────────────────
 
-    public function getClinicalImpressionLocalState(string $noRawat, string $tglPerawatan, string $jamRawat, string $status): ?string
+    public function getClinicalImpressionLocalState(string $noRawat, string $tglPerawatan, string $jamRawat, string $status, string $kdPenyakit = ''): ?string
     {
-        $compositeKey = $noRawat . '_' . $tglPerawatan . '_' . $jamRawat . '_' . $status;
+        $compositeKey = $noRawat . '_' . $tglPerawatan . '_' . $jamRawat . '_' . $status . ($kdPenyakit !== '' ? '_' . $kdPenyakit : '');
         $stmt = $this->sqlite->prepare("SELECT status FROM clinical_impression_state WHERE composite_key = :ck");
         $stmt->execute(['ck' => $compositeKey]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return $row ? $row['status'] : null;
     }
 
-    public function updateClinicalImpressionLocalState(string $noRawat, string $tglPerawatan, string $jamRawat, string $status, string $localStatus): void
+    public function updateClinicalImpressionLocalState(string $noRawat, string $tglPerawatan, string $jamRawat, string $status, string $localStatus, string $kdPenyakit = ''): void
     {
-        $compositeKey = $noRawat . '_' . $tglPerawatan . '_' . $jamRawat . '_' . $status;
+        $compositeKey = $noRawat . '_' . $tglPerawatan . '_' . $jamRawat . '_' . $status . ($kdPenyakit !== '' ? '_' . $kdPenyakit : '');
         $stmt = $this->sqlite->prepare("
             INSERT INTO clinical_impression_state (composite_key, status, updated_at) 
             VALUES (:ck, :st, CURRENT_TIMESTAMP)

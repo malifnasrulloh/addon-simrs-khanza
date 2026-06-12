@@ -78,6 +78,12 @@ class SatuSehatClinicalImpressionProcessor
             $status = $p['status_lanjut'];
             $kdPenyakit = $p['kd_penyakit'];
 
+            $localState = $this->db->getClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, $kdPenyakit);
+            if ($localState === 'active' || $localState === 'updated' || $localState === 'skipped' || $localState === 'invalid_code') {
+                $this->skipCount++;
+                continue;
+            }
+
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_praktisi']);
 
@@ -99,20 +105,27 @@ class SatuSehatClinicalImpressionProcessor
             if ($result['success'] && isset($result['data']['id'])) {
                 $idClinImp = $result['data']['id'];
                 $this->db->saveClinicalImpression($noRawat, $tglPerawatan, $jamRawat, $status, $idClinImp);
-                $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'active');
+                $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'active', $kdPenyakit);
                 $this->log->info("[PHASE 1] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✓ Created ClinicalImpression {$idClinImp}");
                 $this->successCount++;
             } else {
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
                 
-                // Duplicate Handling Fallback
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                $isValidationError = (stripos($errorMessage, 'Code not found') !== false || 
+                                       stripos($errorMessage, 'invalid') !== false || 
+                                       stripos($errorMessage, 'incorrect') !== false);
+                
+                if ($isValidationError) {
+                    $this->log->warning("[PHASE 1] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✗ Skipped -> Invalid ICD-10 Code '{$kdPenyakit}' (Satu Sehat Terminology rejected it)");
+                    $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'invalid_code', $kdPenyakit);
+                    $this->skipCount++;
+                } else if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("[PHASE 1] {$noRawat} [{$tglPerawatan} {$jamRawat}]: Duplicated ClinicalImpression detected. Searching existing records...");
                     $idClinImp = $this->resolveDuplicateClinicalImpression($idPasien, $p['id_encounter'], $kdPenyakit);
 
                     if ($idClinImp) {
                         $this->db->saveClinicalImpression($noRawat, $tglPerawatan, $jamRawat, $status, $idClinImp);
-                        $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'active');
+                        $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'active', $kdPenyakit);
                         $this->log->info("[PHASE 1] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✓ Recovered ClinicalImpression {$idClinImp} from Satu Sehat");
                         $this->successCount++;
                     } else {
@@ -147,9 +160,9 @@ class SatuSehatClinicalImpressionProcessor
             $status = $p['status_lanjut'];
             $kdPenyakit = $p['kd_penyakit'];
 
-            $localState = $this->db->getClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status);
+            $localState = $this->db->getClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, $kdPenyakit);
 
-            if ($localState === 'updated') {
+            if ($localState === 'updated' || $localState === 'skipped' || $localState === 'invalid_code') {
                 $this->skipCount++;
                 continue;
             }
@@ -174,12 +187,24 @@ class SatuSehatClinicalImpressionProcessor
             $result = $this->api->put("/ClinicalImpression/{$p['id_clinicalimpression']}", $payload);
 
             if ($result['success']) {
-                $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'updated');
+                $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'updated', $kdPenyakit);
                 $this->log->info("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✓ Updated ClinicalImpression {$p['id_clinicalimpression']}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
-                $this->failCount++;
+                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                
+                $isValidationError = (stripos($errorMessage, 'Code not found') !== false || 
+                                       stripos($errorMessage, 'invalid') !== false || 
+                                       stripos($errorMessage, 'incorrect') !== false);
+                
+                if ($isValidationError) {
+                    $this->log->warning("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✗ Skipped -> Invalid ICD-10 Code '{$kdPenyakit}' (Satu Sehat Terminology rejected it on update)");
+                    $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'invalid_code', $kdPenyakit);
+                    $this->skipCount++;
+                } else {
+                    $this->log->warning("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✗ Failed -> " . $errorMessage);
+                    $this->failCount++;
+                }
             }
         }
     }
