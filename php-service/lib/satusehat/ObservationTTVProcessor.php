@@ -82,7 +82,7 @@ class SatuSehatObservationTTVProcessor
             $jamObs  = $p['jam_observasi'];
 
             $localState = $this->db->getObservationLocalState($ttvTypeKey, $noRawat, $tglObs, $jamObs);
-            if ($localState === 'sent') {
+            if ($localState === 'sent' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
                 $this->skipCount++;
                 continue;
             }
@@ -149,6 +149,18 @@ class SatuSehatObservationTTVProcessor
                     }
                 } else {
                     $this->log->warning("    ✗ Failed -> " . $errorMessage);
+                    
+                    // Categorize and cache permanent/terminal failures
+                    $state = 'fail';
+                    if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                        $state = 'privacy_error';
+                    } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false) {
+                        $state = 'failed_rule';
+                    } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                        $state = 'invalid_code';
+                    }
+                    
+                    $this->db->updateObservationLocalState($ttvTypeKey, $noRawat, $tglObs, $jamObs, $state);
                     $this->failCount++;
                 }
             }

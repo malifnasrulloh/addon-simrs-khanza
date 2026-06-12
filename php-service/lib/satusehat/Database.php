@@ -159,6 +159,20 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for Observation Lab PK state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS observation_lab_pk_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
+
+        // Table for Observation Lab MB state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS observation_lab_mb_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -612,6 +626,48 @@ class SatuSehatDatabase
         $compositeKey = "{$ttvType}_{$noRawat}_{$tgl}_{$jam}";
         $stmt = $this->sqlite->prepare("
             INSERT INTO observationttv_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    // ─── OBSERVATION LAB PK/MB STATE TRACKING ──────────────────────────────────
+
+    public function getObservationLabPKLocalState(string $noorder, string $kdJenisPrw, int $idTemplate): ?string
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM observation_lab_pk_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateObservationLabPKLocalState(string $noorder, string $kdJenisPrw, int $idTemplate, string $status): void
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO observation_lab_pk_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    public function getObservationLabMBLocalState(string $noorder, string $kdJenisPrw, int $idTemplate): ?string
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM observation_lab_mb_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateObservationLabMBLocalState(string $noorder, string $kdJenisPrw, int $idTemplate, string $status): void
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO observation_lab_mb_state (composite_key, status, updated_at) 
             VALUES (:ck, :st, CURRENT_TIMESTAMP)
             ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
         ");

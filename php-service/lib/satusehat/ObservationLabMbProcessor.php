@@ -77,6 +77,13 @@ class SatuSehatObservationLabMbProcessor
             $kdJenisPrw = $p['kd_jenis_prw'];
             $pemeriksaan = $p['Pemeriksaan'];
 
+            // SQLite Local State Check
+            $localState = $this->db->getObservationLabMBLocalState($noorder, $kdJenisPrw, $idTemplate);
+            if ($localState === 'sent' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_dokter']);
 
@@ -105,6 +112,7 @@ class SatuSehatObservationLabMbProcessor
             if ($result['success'] && isset($result['data']['id'])) {
                 $idObservation = $result['data']['id'];
                 $this->db->saveObservationLabMB($noorder, $kdJenisPrw, $idTemplate, $idObservation);
+                $this->db->updateObservationLabMBLocalState($noorder, $kdJenisPrw, $idTemplate, 'sent');
                 $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Created Observation {$idObservation}");
                 $this->successCount++;
             } else {
@@ -117,6 +125,7 @@ class SatuSehatObservationLabMbProcessor
 
                     if ($idObservation) {
                         $this->db->saveObservationLabMB($noorder, $kdJenisPrw, $idTemplate, $idObservation);
+                        $this->db->updateObservationLabMBLocalState($noorder, $kdJenisPrw, $idTemplate, 'sent');
                         $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Recovered Observation {$idObservation} from Satu Sehat");
                         $this->successCount++;
                     } else {
@@ -125,6 +134,18 @@ class SatuSehatObservationLabMbProcessor
                     }
                 } else {
                     $this->log->warning("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
+                    
+                    // Categorize and cache permanent/terminal failures
+                    $state = 'fail';
+                    if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                        $state = 'privacy_error';
+                    } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false) {
+                        $state = 'failed_rule';
+                    } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                        $state = 'invalid_code';
+                    }
+                    
+                    $this->db->updateObservationLabMBLocalState($noorder, $kdJenisPrw, $idTemplate, $state);
                     $this->failCount++;
                 }
             }
@@ -150,6 +171,13 @@ class SatuSehatObservationLabMbProcessor
             $kdJenisPrw = $p['kd_jenis_prw'];
             $pemeriksaan = $p['Pemeriksaan'];
             $idObservation = $p['id_observation'];
+
+            // SQLite Local State Check
+            $localState = $this->db->getObservationLabMBLocalState($noorder, $kdJenisPrw, $idTemplate);
+            if ($localState === 'sent' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
 
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_dokter']);
@@ -178,10 +206,24 @@ class SatuSehatObservationLabMbProcessor
             $result = $this->api->put("/Observation/{$idObservation}", $payload);
 
             if ($result['success']) {
+                $this->db->updateObservationLabMBLocalState($noorder, $kdJenisPrw, $idTemplate, 'sent');
                 $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Updated Observation {$idObservation}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $this->log->warning("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
+                
+                // Categorize and cache permanent/terminal failures
+                $state = 'fail';
+                if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                    $state = 'privacy_error';
+                } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false) {
+                    $state = 'failed_rule';
+                } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                    $state = 'invalid_code';
+                }
+                
+                $this->db->updateObservationLabMBLocalState($noorder, $kdJenisPrw, $idTemplate, $state);
                 $this->failCount++;
             }
         }
