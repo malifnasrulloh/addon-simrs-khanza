@@ -77,6 +77,13 @@ class SatuSehatServiceRequestLabPkProcessor
             $kdJenisPrw = $p['kd_jenis_prw'];
             $pemeriksaan = $p['Pemeriksaan'];
 
+            // Local state check to prevent resubmitting terminal failures
+            $localState = $this->db->getServiceRequestLabPKLocalState($noorder, $kdJenisPrw, $idTemplate);
+            if ($localState === 'active' || $localState === 'updated' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_praktisi']);
 
@@ -99,26 +106,64 @@ class SatuSehatServiceRequestLabPkProcessor
             if ($result['success'] && isset($result['data']['id'])) {
                 $idServiceRequest = $result['data']['id'];
                 $this->db->saveServiceRequestLabPK($noorder, $kdJenisPrw, $idTemplate, $idServiceRequest);
+                $this->db->updateServiceRequestLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'active');
                 $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Created ServiceRequest {$idServiceRequest}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
                 
                 // Duplicate Handling Fallback using identifier
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                $isDuplicate = false;
+                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
+                    $isDuplicate = true;
+                } elseif ($result['code'] === 400 && isset($result['data']['issue'])) {
+                    foreach ($result['data']['issue'] as $issue) {
+                        $issueText = $issue['details']['text'] ?? $issue['diagnostics'] ?? '';
+                        if (stripos($issueText, 'duplicate') !== false || stripos($issueText, 'RuleNumber: 20002') !== false) {
+                            $isDuplicate = true;
+                            break;
+                        }
+                    }
+                }
+
+                if ($isDuplicate) {
                     $this->log->warning("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: Duplicated ServiceRequest detected. Searching existing records...");
                     $idServiceRequest = $this->resolveDuplicateServiceRequest($noorder, $idTemplate);
 
-                    if ($idServiceRequest) {
+                    if ($idServiceRequest && $idServiceRequest !== false) {
                         $this->db->saveServiceRequestLabPK($noorder, $kdJenisPrw, $idTemplate, $idServiceRequest);
+                        $this->db->updateServiceRequestLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'active');
                         $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Recovered ServiceRequest {$idServiceRequest} from Satu Sehat");
                         $this->successCount++;
+                        continue;
                     } else {
+                        if ($idServiceRequest === false) {
+                            $this->log->warning("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: API error during duplicate recovery. Skipped.");
+                            $this->failCount++;
+                            continue;
+                        }
                         $this->log->error("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed to recover duplicate ServiceRequest.");
                         $this->failCount++;
                     }
                 } else {
                     $this->log->warning("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
+                    
+                    // Categorize and cache permanent/terminal failures
+                    $state = 'fail';
+                    $isTransient = ($result['code'] === 429 || ($result['code'] >= 500 && $result['code'] <= 599) || $result['code'] === 0);
+                    if (!$isTransient) {
+                        if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                            $state = 'privacy_error';
+                        } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false || stripos($errorMessage, 'date') !== false) {
+                            $state = 'failed_rule';
+                        } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                            $state = 'invalid_code';
+                        }
+
+                        if ($state !== 'fail') {
+                            $this->db->updateServiceRequestLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, $state);
+                        }
+                    }
                     $this->failCount++;
                 }
             }
@@ -145,6 +190,13 @@ class SatuSehatServiceRequestLabPkProcessor
             $pemeriksaan = $p['Pemeriksaan'];
             $idServiceRequest = $p['id_servicerequest'];
 
+            // Local state check to prevent resubmitting terminal failures
+            $localState = $this->db->getServiceRequestLabPKLocalState($noorder, $kdJenisPrw, $idTemplate);
+            if ($localState === 'updated' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_praktisi']);
 
@@ -166,23 +218,51 @@ class SatuSehatServiceRequestLabPkProcessor
             $result = $this->api->put("/ServiceRequest/{$idServiceRequest}", $payload);
 
             if ($result['success']) {
+                $this->db->updateServiceRequestLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'updated');
                 $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Updated ServiceRequest {$idServiceRequest}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $this->log->warning("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
+                
+                // Categorize and cache permanent/terminal failures
+                $state = 'fail';
+                $isTransient = ($result['code'] === 429 || ($result['code'] >= 500 && $result['code'] <= 599) || $result['code'] === 0);
+                if (!$isTransient) {
+                    if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                        $state = 'privacy_error';
+                    } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false || stripos($errorMessage, 'date') !== false) {
+                        $state = 'failed_rule';
+                    } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                        $state = 'invalid_code';
+                    }
+
+                    if ($state !== 'fail') {
+                        $this->db->updateServiceRequestLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, $state);
+                    }
+                }
                 $this->failCount++;
             }
         }
     }
 
-    private function resolveDuplicateServiceRequest(string $noorder, int $idTemplate): ?string
+    /**
+     * Resolves an existing ServiceRequest in Satu Sehat by its identifier.
+     * 
+     * @return string|null|false Returns ID string if found, null if definitely not found, or false on API error.
+     */
+    private function resolveDuplicateServiceRequest(string $noorder, int $idTemplate)
     {
         $orgId = $this->config->orgId;
         $identifier = "{$noorder}.{$idTemplate}";
         $endpoint = "/ServiceRequest?identifier=http://sys-ids.kemkes.go.id/servicerequest/{$orgId}|{$identifier}";
         $result = $this->api->get($endpoint);
 
-        if (!$result['success'] || empty($result['data']['entry'])) {
+        if (!$result['success']) {
+            return false;
+        }
+
+        if (empty($result['data']['entry'])) {
             return null;
         }
 

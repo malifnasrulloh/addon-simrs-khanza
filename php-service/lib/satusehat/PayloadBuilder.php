@@ -1781,10 +1781,22 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idServiceRequest = ''
     ): array {
+        $tgl = $p['tgl_permintaan'];
         $time = !empty($p['jam_permintaan']) && $p['jam_permintaan'] !== '00:00:00' 
             ? $p['jam_permintaan'] 
             : '00:00:00';
-        $dateTimeStr = $p['tgl_permintaan'] . 'T' . $time . '+07:00';
+
+        $year = (int)substr($tgl, 0, 4);
+        if ($year < 2014) {
+            if (!empty($p['tgl_registrasi'])) {
+                $tgl = $p['tgl_registrasi'];
+                $time = !empty($p['jam_reg']) && $p['jam_reg'] !== '00:00:00' ? $p['jam_reg'] : '00:00:00';
+            } else {
+                $tgl = date('Y-m-d');
+                $time = date('H:i:s');
+            }
+        }
+        $dateTimeStr = $tgl . 'T' . $time . '+07:00';
 
         $payload = [
             'resourceType' => 'ServiceRequest',
@@ -1810,9 +1822,9 @@ class SatuSehatPayloadBuilder
             'code' => [
                 'coding' => [
                     [
-                        'system'  => !empty($p['system']) ? $p['system'] : '',
-                        'code'    => !empty($p['code']) ? $p['code'] : '',
-                        'display' => !empty($p['display']) ? $p['display'] : ''
+                        'system'  => !empty($p['system']) ? trim($p['system']) : '',
+                        'code'    => !empty($p['code']) ? trim($p['code']) : '',
+                        'display' => !empty($p['display']) ? trim($p['display']) : ''
                     ]
                 ],
                 'text' => !empty($p['Pemeriksaan']) ? $p['Pemeriksaan'] : ''

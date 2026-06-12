@@ -180,6 +180,20 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for ServiceRequest Lab PK state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS servicerequest_lab_pk_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
+
+        // Table for ServiceRequest Lab MB state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS servicerequest_lab_mb_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -709,6 +723,46 @@ class SatuSehatDatabase
         $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
         $stmt = $this->sqlite->prepare("
             INSERT INTO observation_lab_mb_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    public function getServiceRequestLabPKLocalState(string $noorder, string $kdJenisPrw, int $idTemplate): ?string
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM servicerequest_lab_pk_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateServiceRequestLabPKLocalState(string $noorder, string $kdJenisPrw, int $idTemplate, string $status): void
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO servicerequest_lab_pk_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    public function getServiceRequestLabMBLocalState(string $noorder, string $kdJenisPrw, int $idTemplate): ?string
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM servicerequest_lab_mb_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateServiceRequestLabMBLocalState(string $noorder, string $kdJenisPrw, int $idTemplate, string $status): void
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO servicerequest_lab_mb_state (composite_key, status, updated_at) 
             VALUES (:ck, :st, CURRENT_TIMESTAMP)
             ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
         ");
@@ -2507,6 +2561,7 @@ class SatuSehatDatabase
             SELECT DISTINCT 
                 rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
                 rp.kd_dokter, peg.nama as nm_dokter, peg.no_ktp as nik_praktisi,
+                rp.tgl_registrasi, rp.jam_reg,
                 sse.id_encounter, pl.noorder, pl.tgl_permintaan, pl.jam_permintaan, pl.diagnosa_klinis,
                 tl.Pemeriksaan, sml.code, sml.system, sml.display,
                 '' as id_servicerequest, pdpl.id_template, pdpl.kd_jenis_prw
@@ -2535,6 +2590,7 @@ class SatuSehatDatabase
             SELECT DISTINCT 
                 rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
                 rp.kd_dokter, peg.nama as nm_dokter, peg.no_ktp as nik_praktisi,
+                rp.tgl_registrasi, rp.jam_reg,
                 sse.id_encounter, pl.noorder, pl.tgl_permintaan, pl.jam_permintaan, pl.diagnosa_klinis,
                 tl.Pemeriksaan, sml.code, sml.system, sml.display,
                 sssl.id_servicerequest, pdpl.id_template, pdpl.kd_jenis_prw
@@ -2584,6 +2640,7 @@ class SatuSehatDatabase
             SELECT DISTINCT 
                 rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
                 rp.kd_dokter, peg.nama as nm_dokter, peg.no_ktp as nik_praktisi,
+                rp.tgl_registrasi, rp.jam_reg,
                 sse.id_encounter, pl.noorder, pl.tgl_permintaan, pl.jam_permintaan, pl.diagnosa_klinis,
                 tl.Pemeriksaan, sml.code, sml.system, sml.display,
                 '' as id_servicerequest, pdpl.id_template, pdpl.kd_jenis_prw
@@ -2612,6 +2669,7 @@ class SatuSehatDatabase
             SELECT DISTINCT 
                 rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
                 rp.kd_dokter, peg.nama as nm_dokter, peg.no_ktp as nik_praktisi,
+                rp.tgl_registrasi, rp.jam_reg,
                 sse.id_encounter, pl.noorder, pl.tgl_permintaan, pl.jam_permintaan, pl.diagnosa_klinis,
                 tl.Pemeriksaan, sml.code, sml.system, sml.display,
                 sssl.id_servicerequest, pdpl.id_template, pdpl.kd_jenis_prw
