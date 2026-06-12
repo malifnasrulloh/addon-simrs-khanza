@@ -95,8 +95,8 @@ class SatuSehatQuestionnaireResponseProcessor
                 continue;
             }
 
-            // Check if there is already a remote QuestionnaireResponse for this encounter/practitioner to avoid duplicate POSTs
-            $idQR = $this->resolveDuplicateQuestionnaireResponse($idEncounter, $idPraktisi);
+            // Check if there is already a remote QuestionnaireResponse for this encounter/practitioner and prescription to avoid duplicate POSTs
+            $idQR = $this->resolveDuplicateQuestionnaireResponse($idEncounter, $idPraktisi, $noResep);
             if ($idQR) {
                 $this->db->saveQuestionnaireResponse($noResep, $idQR);
                 $this->db->updateQuestionnaireResponseLocalState($noResep, 'active');
@@ -190,9 +190,9 @@ class SatuSehatQuestionnaireResponseProcessor
     }
 
     /**
-     * Resolves an existing QuestionnaireResponse in Satu Sehat by encounter and author.
+     * Resolves an existing QuestionnaireResponse in Satu Sehat by encounter, author, and prescription ID.
      */
-    private function resolveDuplicateQuestionnaireResponse(string $idEncounter, string $idPraktisi): ?string
+    private function resolveDuplicateQuestionnaireResponse(string $idEncounter, string $idPraktisi, string $noResep): ?string
     {
         $endpoint = "/QuestionnaireResponse?encounter={$idEncounter}&author={$idPraktisi}";
         $result = $this->api->get($endpoint);
@@ -203,7 +203,24 @@ class SatuSehatQuestionnaireResponseProcessor
 
         foreach ($result['data']['entry'] as $entry) {
             $res = $entry['resource'] ?? [];
-            if (isset($res['id'])) {
+            if (empty($res['item'])) {
+                continue;
+            }
+
+            // Find no-resep inside items
+            $foundResep = null;
+            foreach ($res['item'] as $item) {
+                if ($item['linkId'] === 'identitas' && !empty($item['item'])) {
+                    foreach ($item['item'] as $subItem) {
+                        if ($subItem['linkId'] === 'no-resep' && !empty($subItem['answer'][0]['valueString'])) {
+                            $foundResep = $subItem['answer'][0]['valueString'];
+                            break 2;
+                        }
+                    }
+                }
+            }
+
+            if ($foundResep === $noResep && isset($res['id'])) {
                 return $res['id']; // Match found
             }
         }
