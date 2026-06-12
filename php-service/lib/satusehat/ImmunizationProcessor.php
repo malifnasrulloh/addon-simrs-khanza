@@ -83,6 +83,13 @@ class SatuSehatImmunizationProcessor
             $noBatch = $imm['no_batch'];
             $noFaktur = $imm['no_faktur'];
 
+            // Skip records already successfully processed or permanently failed
+            $localState = $this->db->getImmunizationLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur);
+            if (in_array($localState, ['active', 'updated', 'privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
             $nikPasien = $imm['no_ktp'];
             $nikPraktisi = $imm['ktppraktisi'];
 
@@ -133,7 +140,23 @@ class SatuSehatImmunizationProcessor
                         $this->failCount++;
                     }
                 } else {
-                    $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $errorMessage);
+                    // Cache permanent API failures
+                    $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
+                    $isRule = (stripos($errorMessage, 'Rule Number') !== false || stripos($errorMessage, 'rule violation') !== false);
+                    $isInvalidCode = (stripos($errorMessage, 'not found in value set') !== false || stripos($errorMessage, 'invalid code') !== false);
+
+                    if ($isPrivacy) {
+                        $this->db->updateImmunizationLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'privacy_error');
+                        $this->log->warning("[PHASE 1] {$noRawat}: ✗ Skipped permanently due to consent/privacy restrictions.");
+                    } elseif ($isRule) {
+                        $this->db->updateImmunizationLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'failed_rule');
+                        $this->log->warning("[PHASE 1] {$noRawat}: ✗ Skipped permanently due to Satu Sehat business rules.");
+                    } elseif ($isInvalidCode) {
+                        $this->db->updateImmunizationLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'invalid_code');
+                        $this->log->warning("[PHASE 1] {$noRawat}: ✗ Skipped permanently due to invalid vaccine code mapping.");
+                    } else {
+                        $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $errorMessage);
+                    }
                     $this->failCount++;
                 }
             }
@@ -164,7 +187,7 @@ class SatuSehatImmunizationProcessor
 
             $localState = $this->db->getImmunizationLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur);
 
-            if ($localState === 'updated') {
+            if (in_array($localState, ['updated', 'privacy_error', 'failed_rule', 'invalid_code'], true)) {
                 $this->skipCount++;
                 continue;
             }
@@ -201,7 +224,25 @@ class SatuSehatImmunizationProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Immunization {$idImmunization}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+
+                // Cache permanent API failures
+                $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
+                $isRule = (stripos($errorMessage, 'Rule Number') !== false || stripos($errorMessage, 'rule violation') !== false);
+                $isInvalidCode = (stripos($errorMessage, 'not found in value set') !== false || stripos($errorMessage, 'invalid code') !== false);
+
+                if ($isPrivacy) {
+                    $this->db->updateImmunizationLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'privacy_error');
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Skipped permanently due to consent/privacy restrictions.");
+                } elseif ($isRule) {
+                    $this->db->updateImmunizationLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'failed_rule');
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Skipped permanently due to Satu Sehat business rules.");
+                } elseif ($isInvalidCode) {
+                    $this->db->updateImmunizationLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'invalid_code');
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Skipped permanently due to invalid vaccine code mapping.");
+                } else {
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . $errorMessage);
+                }
                 $this->failCount++;
             }
         }

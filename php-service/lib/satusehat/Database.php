@@ -15,20 +15,27 @@ class SatuSehatDatabase
     private Logger $log;
     private SatuSehatClient $client;
     private $lockFile;
+    private static ?int $parentPid = null;
 
     public function __construct(SatuSehatConfig $config, Logger $log, SatuSehatClient $client)
     {
         $this->log = $log;
         $this->client = $client;
 
-        // ── Process Lock to Prevent Cron Overlap
-        $lockName = defined('SERVICE_NAME') ? SERVICE_NAME : 'satusehat_default';
-        $lockFilePath = sys_get_temp_dir() . '/' . preg_replace('/[^a-zA-Z0-9_]/', '', $lockName) . '.lock';
-        $this->lockFile = fopen($lockFilePath, 'c');
-        if ($this->lockFile) {
-            if (!flock($this->lockFile, LOCK_EX | LOCK_NB)) {
-                $this->log->warning("[LOCK] Another instance of {$lockName} is already running. Exiting.");
-                exit(0);
+        if (self::$parentPid === null) {
+            self::$parentPid = getmypid() ?: null;
+        }
+
+        // ── Process Lock to Prevent Cron Overlap (Only for Parent Process)
+        if (getmypid() === self::$parentPid) {
+            $lockName = defined('SERVICE_NAME') ? SERVICE_NAME : 'satusehat_default';
+            $lockFilePath = sys_get_temp_dir() . '/' . preg_replace('/[^a-zA-Z0-9_]/', '', $lockName) . '.lock';
+            $this->lockFile = fopen($lockFilePath, 'c');
+            if ($this->lockFile) {
+                if (!flock($this->lockFile, LOCK_EX | LOCK_NB)) {
+                    $this->log->warning("[LOCK] Another instance of {$lockName} is already running. Exiting.");
+                    exit(0);
+                }
             }
         }
 
