@@ -396,7 +396,7 @@ SQL;
         $rowVal = $stmtVal->fetch();
         $validasi = $rowVal['validasi'] ?? '';
         if (!empty($validasi) && !str_starts_with($validasi, '0000') && $validasi !== '0000-00-00 00:00:00') {
-            return $validasi;
+            return $this->alignTimeToDate($validasi, $tglRegistrasi);
         }
 
         // 2. Fallback to physical on-site counter registration time (reg_periksa.tgl_registrasi + jam_reg)
@@ -407,11 +407,23 @@ SQL;
         if ($rowReg) {
             $regTime = $rowReg['tgl_registrasi'] . ' ' . $rowReg['jam_reg'];
             if (!empty($regTime) && !str_starts_with($regTime, '0000') && !str_ends_with($regTime, '00:00:00')) {
-                return $regTime;
+                return $this->alignTimeToDate($regTime, $tglRegistrasi);
             }
         }
 
         return '';
+    }
+
+    /**
+     * Aligns the date portion of a timestamp to the target date while preserving HH:ii:ss.
+     */
+    private function alignTimeToDate(string $datetime, string $targetDate): string
+    {
+        if (empty($datetime) || str_starts_with($datetime, '0000') || empty($targetDate)) {
+            return $datetime;
+        }
+        $timePart = substr($datetime, 11, 8); // Extracts 'HH:ii:ss'
+        return $targetDate . ' ' . $timePart;
     }
 
     /**
