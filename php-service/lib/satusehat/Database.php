@@ -14,11 +14,13 @@ class SatuSehatDatabase
     private PDO $sqlite;
     private Logger $log;
     private SatuSehatClient $client;
+    private SatuSehatConfig $config;
     private $lockFile;
     private static ?int $parentPid = null;
 
     public function __construct(SatuSehatConfig $config, Logger $log, SatuSehatClient $client)
     {
+        $this->config = $config;
         $this->log = $log;
         $this->client = $client;
 
@@ -4717,5 +4719,116 @@ class SatuSehatDatabase
             $this->log->warning("   [DIAGNOSTICS] Failed to calculate diagnostic metrics: " . $e->getMessage());
         }
         $this->log->info("──────────────────────────────────────────────────────────────");
+    }
+
+    /**
+     * Self-healing mechanism for failed or stuck DICOM webhook callbacks.
+     * Queries Satu Sehat directly by accession number (ACSN) identifier,
+     * and recovers/updates the local imaging study ID if found.
+     *
+     * @param string|null $dateFrom Optional lookback date start
+     * @param string|null $dateTo Optional lookback date end
+     * @return int Number of records successfully healed
+     */
+    public function healFailedImagingStudies(?string $dateFrom = null, ?string $dateTo = null): int
+    {
+        $this->log->info("[HEALING] Starting ImagingStudy self-healing check...");
+        
+        $sql = "
+            SELECT ssi.noorder, ssi.kd_jenis_prw, ssi.acsn, ssi.status_webhook 
+            FROM satu_sehat_imagingstudy_radiologi ssi
+        ";
+        
+        $params = [];
+        if ($dateFrom !== null && $dateTo !== null) {
+            $sql .= "
+                INNER JOIN permintaan_radiologi pr ON ssi.noorder = pr.noorder
+                WHERE pr.tgl_permintaan BETWEEN :df AND :dt
+                  AND (ssi.id_imaging IS NULL OR ssi.id_imaging = '' OR ssi.id_imaging = '-')
+                  AND (ssi.status_webhook = 'FAILED' OR ssi.status_webhook = 'PENDING')
+                  AND ssi.acsn IS NOT NULL AND ssi.acsn <> '' AND ssi.acsn <> '-'
+            ";
+            $params['df'] = $dateFrom;
+            $params['dt'] = $dateTo;
+        } else {
+            $sql .= "
+                WHERE (ssi.id_imaging IS NULL OR ssi.id_imaging = '' OR ssi.id_imaging = '-')
+                  AND (ssi.status_webhook = 'FAILED' OR ssi.status_webhook = 'PENDING')
+                  AND ssi.acsn IS NOT NULL AND ssi.acsn <> '' AND ssi.acsn <> '-'
+            ";
+        }
+        
+        try {
+            $stmt = $this->mysql->prepare($sql);
+            $stmt->execute($params);
+            $records = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            $this->log->error("[HEALING] Database query failed: " . $e->getMessage());
+            return 0;
+        }
+        
+        $totalFound = count($records);
+        if ($totalFound === 0) {
+            $this->log->info("[HEALING] No unsynced/failed ImagingStudy records found for self-healing.");
+            return 0;
+        }
+        
+        $this->log->info("[HEALING] Found {$totalFound} potentially eligible records to check on Satu Sehat.");
+        $healedCount = 0;
+        
+        foreach ($records as $record) {
+            $noorder = $record['noorder'];
+            $kdJenisPrw = $record['kd_jenis_prw'];
+            $acsn = $record['acsn'];
+            
+            $this->log->debug("[HEALING] Checking ACSN '{$acsn}' on Satu Sehat...");
+            
+            // Format identifier: http://sys-ids.kemkes.go.id/acsn/{orgId}|{acsn}
+            $identifier = "http://sys-ids.kemkes.go.id/acsn/" . $this->config->orgId . "|" . $acsn;
+            $endpoint = "/ImagingStudy?identifier=" . urlencode($identifier);
+            
+            $res = $this->client->get($endpoint);
+            
+            if (!$res['success']) {
+                $this->log->warning("[HEALING] Failed to query Satu Sehat for ACSN '{$acsn}': " . ($res['message'] ?? 'Unknown API Error'));
+                continue;
+            }
+            
+            $bundle = $res['data'] ?? [];
+            if (!empty($bundle['entry']) && is_array($bundle['entry'])) {
+                $resource = $bundle['entry'][0]['resource'] ?? [];
+                $imagingId = $resource['id'] ?? '';
+                
+                if (!empty($imagingId)) {
+                    $this->log->info("[HEALING] Found existing ImagingStudy '{$imagingId}' on Satu Sehat for ACSN '{$acsn}'. Healing database record...");
+                    
+                    try {
+                        $updateSql = "
+                            UPDATE satu_sehat_imagingstudy_radiologi 
+                            SET id_imaging = :id, 
+                                status_webhook = 'SUCCESS', 
+                                message_webhook = 'DICOM berhasil dikirim (self-healed)' 
+                            WHERE noorder = :noorder AND kd_jenis_prw = :kd
+                        ";
+                        $updateStmt = $this->mysql->prepare($updateSql);
+                        $updateStmt->execute([
+                            'id' => $imagingId,
+                            'noorder' => $noorder,
+                            'kd' => $kdJenisPrw
+                        ]);
+                        $healedCount++;
+                    } catch (\PDOException $e) {
+                        $this->log->error("[HEALING] Failed to update MySQL database for ACSN '{$acsn}': " . $e->getMessage());
+                    }
+                } else {
+                    $this->log->debug("[HEALING] Empty resource ID in entry for ACSN '{$acsn}'.");
+                }
+            } else {
+                $this->log->debug("[HEALING] ImagingStudy not found on Satu Sehat for ACSN '{$acsn}'.");
+            }
+        }
+        
+        $this->log->info("[HEALING] ImagingStudy self-healing completed. Healed: {$healedCount} / {$totalFound} checked.");
+        return $healedCount;
     }
 }

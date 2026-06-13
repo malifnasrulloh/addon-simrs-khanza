@@ -32,6 +32,20 @@ define('BASE_DIR', __DIR__);
 require_once BASE_DIR . '/lib/Logger.php';
 require_once BASE_DIR . '/lib/satusehat/Config.php';
 
+/**
+ * Resolves the actual client IP address, supporting reverse proxies.
+ */
+function getClientIp(): string {
+    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+        $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
+        return trim($ips[0]);
+    }
+    if (!empty($_SERVER['HTTP_X_REAL_IP'])) {
+        return $_SERVER['HTTP_X_REAL_IP'];
+    }
+    return $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+}
+
 try {
     $config = new SatuSehatConfig(BASE_DIR . '/.env');
     $log = new Logger($config->logDir, 'satusehat_webhook', $config->logLevel, false);
@@ -44,7 +58,8 @@ try {
         header('WWW-Authenticate: Basic realm="SatuSehat DICOM Webhook"');
         http_response_code(401);
         echo json_encode(['success' => false, 'message' => 'Unauthorized']);
-        $log->warning("Unauthorized webhook access attempt from IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+        $suppliedUser = !empty($authUser) ? "'{$authUser}'" : "none";
+        $log->warning("Unauthorized webhook access attempt from IP: " . getClientIp() . " | Supplied User: {$suppliedUser}");
         exit;
     }
 
@@ -56,7 +71,7 @@ try {
     if (!is_array($input)) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'Invalid JSON payload']);
-        $log->error("Invalid JSON payload received from IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+        $log->error("Invalid JSON payload received from IP: " . getClientIp());
         exit;
     }
 
@@ -104,18 +119,31 @@ try {
     // ─── BACKGROUND PROCESSING ───
     $log->info("Starting background processing for ACSN: {$acsn} | Status: " . ($status ? "SUCCESS" : "FAILED") . " | Stage: {$stage}");
 
-    // Initialize Database Connection
-    $pdo = new PDO(
-        "mysql:host={$config->dbHost};port={$config->dbPort};dbname={$config->dbName}",
-        $config->dbUser,
-        $config->dbPass,
-        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-    );
+    // Initialize Database Connection with retries
+    $dsn = "mysql:host={$config->dbHost};port={$config->dbPort};dbname={$config->dbName};charset=utf8mb4";
+    $maxDbAttempts = 3;
+    $dbDelayMs = 500;
+    $pdo = null;
+    
+    for ($dbAttempt = 1; $dbAttempt <= $maxDbAttempts; $dbAttempt++) {
+        try {
+            $pdo = new PDO($dsn, $config->dbUser, $config->dbPass, [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+            ]);
+            break;
+        } catch (PDOException $e) {
+            if ($dbAttempt === $maxDbAttempts) {
+                throw $e;
+            }
+            usleep($dbDelayMs * 1000);
+        }
+    }
 
     // Check if ACSN exists in database
-    $stmt = $pdo->prepare("SELECT noorder, kd_jenis_prw, id_imaging FROM satu_sehat_imagingstudy_radiologi WHERE acsn = :acsn");
+    $stmt = $pdo->prepare("SELECT noorder, kd_jenis_prw, id_imaging, status_webhook FROM satu_sehat_imagingstudy_radiologi WHERE acsn = :acsn");
     $stmt->execute(['acsn' => $acsn]);
-    $record = $stmt->fetch(PDO::FETCH_ASSOC);
+    $record = $stmt->fetch();
 
     if (!$record) {
         $log->warning("No record found in satu_sehat_imagingstudy_radiologi for ACSN: {$acsn}");
@@ -123,6 +151,12 @@ try {
     }
 
     if (!$status) {
+        // Out-of-Order / Concurrency Guard: Do not overwrite SUCCESS status
+        if ($record['status_webhook'] === 'SUCCESS' || (!empty($record['id_imaging']) && $record['id_imaging'] !== '-')) {
+            $log->info("Received FAILED webhook callback for ACSN {$acsn} but it is already marked as SUCCESS/has valid ID. Ignoring callback.");
+            exit;
+        }
+
         $errors = $input['error'] ?? [];
         $errStr = '';
         if (is_array($errors)) {
@@ -144,8 +178,11 @@ try {
 
     if (empty($imagingStudyId)) {
         $log->error("DICOM Router reported SUCCESS but imagingStudyId is empty for ACSN: {$acsn}");
-        $updateStmt = $pdo->prepare("UPDATE satu_sehat_imagingstudy_radiologi SET status_webhook = 'FAILED', message_webhook = 'imagingStudyId empty' WHERE acsn = :acsn");
-        $updateStmt->execute(['acsn' => $acsn]);
+        // Only set to FAILED if not already SUCCESS
+        if ($record['status_webhook'] !== 'SUCCESS' && (empty($record['id_imaging']) || $record['id_imaging'] === '-')) {
+            $updateStmt = $pdo->prepare("UPDATE satu_sehat_imagingstudy_radiologi SET status_webhook = 'FAILED', message_webhook = 'imagingStudyId empty' WHERE acsn = :acsn");
+            $updateStmt->execute(['acsn' => $acsn]);
+        }
         exit;
     }
 

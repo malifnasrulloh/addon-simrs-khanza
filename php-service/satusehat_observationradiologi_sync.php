@@ -123,6 +123,9 @@ if ($config->lookbackDays > 0) {
 // Run Diagnostics
 $db->printSyncDiagnostics('observation_radiologi', $dateFrom, $dateTo);
 
+// Run Self-Healing on failed webhooks first
+$db->healFailedImagingStudies($dateFrom, $dateTo);
+
 // 1. Fetch pending records
 $activeRecords = $db->fetchPendingObservationRadiologiActive($dateFrom, $dateTo);
 $updateRecords = $db->fetchPendingObservationRadiologiUpdate($dateFrom, $dateTo);
