@@ -3039,6 +3039,146 @@ if ($action === 'getAnalyticsStats' && $method === 'GET') {
     }
 }
 
+if ($action === 'getDiagnostics' && $method === 'GET') {
+    if ($userRole !== 'admin') {
+        jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);
+    }
+
+    $diagnostics = [];
+
+    // 1. MySQL Connectivity
+    try {
+        $stmt = $pdo->query("SELECT 1");
+        $stmt->closeCursor();
+        $diagnostics['database'] = ['status' => 'healthy', 'message' => 'Connected to local MySQL database'];
+    } catch (Exception $e) {
+        $diagnostics['database'] = ['status' => 'error', 'message' => 'MySQL Error: ' . $e->getMessage()];
+    }
+
+    // 2. SQLite local state check
+    try {
+        $sqlitePath = rtrim($config->logDir, '/') . '/satusehat_state.sqlite';
+        if (!file_exists($sqlitePath)) {
+            $diagnostics['sqlite'] = ['status' => 'warning', 'message' => 'SQLite file not initialized yet (will be created automatically on sync)'];
+        } else {
+            $sqlitePdo = new PDO("sqlite:{$sqlitePath}");
+            $sqlitePdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $stmt = $sqlitePdo->query("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1");
+            $stmt->closeCursor();
+            $diagnostics['sqlite'] = ['status' => 'healthy', 'message' => 'Connected to SQLite local state'];
+        }
+    } catch (Exception $e) {
+        $diagnostics['sqlite'] = ['status' => 'error', 'message' => 'SQLite Error: ' . $e->getMessage()];
+    }
+
+    // 3. SatuSehat API connection check
+    try {
+        $baseUrl = rtrim($config->authUrl, '/');
+        if (empty($baseUrl)) {
+            $diagnostics['satusehat'] = ['status' => 'error', 'message' => 'SatuSehat auth url is not configured'];
+        } else {
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $baseUrl);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($httpCode > 0) {
+                $diagnostics['satusehat'] = ['status' => 'healthy', 'message' => "SatuSehat auth endpoint reachable (HTTP {$httpCode})"];
+            } else {
+                $diagnostics['satusehat'] = ['status' => 'error', 'message' => 'SatuSehat auth endpoint unreachable (Connection timeout)'];
+            }
+        }
+    } catch (Exception $e) {
+        $diagnostics['satusehat'] = ['status' => 'error', 'message' => 'SatuSehat Check Error: ' . $e->getMessage()];
+    }
+
+    // 4. Orthanc PACS connection check
+    try {
+        $orthancHost = rtrim($config->orthancUrl, '/');
+        if (empty($orthancHost)) {
+            $diagnostics['orthanc'] = ['status' => 'error', 'message' => 'Orthanc URL is not configured'];
+        } else {
+            $orthancUrl = $orthancHost . ':' . $config->orthancPort . '/system';
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $orthancUrl);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+
+            $user = $config->orthancUser;
+            $pass = $config->orthancPass;
+            curl_setopt($ch, CURLOPT_USERPWD, "{$user}:{$pass}");
+
+            curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($httpCode === 200) {
+                $diagnostics['orthanc'] = ['status' => 'healthy', 'message' => 'Connected to Orthanc PACS'];
+            } else {
+                $diagnostics['orthanc'] = ['status' => 'error', 'message' => "Orthanc returned HTTP {$httpCode} (Authentication/Endpoint error)"];
+            }
+        }
+    } catch (Exception $e) {
+        $diagnostics['orthanc'] = ['status' => 'error', 'message' => 'Orthanc Check Error: ' . $e->getMessage()];
+    }
+
+    // 5. DB Structure Analyzer
+    $requiredTables = [
+        'reg_periksa' => ['no_rawat', 'no_rkm_medis', 'tgl_registrasi', 'kd_dokter', 'kd_poli', 'status_bayar'],
+        'pasien' => ['no_rkm_medis', 'nm_pasien', 'no_ktp'],
+        'pegawai' => ['nik', 'nama', 'no_ktp'],
+        'poliklinik' => ['kd_poli', 'nm_poli'],
+        'satu_sehat_mapping_lokasi_ralan' => ['kd_poli', 'id_lokasi_satusehat'],
+        'satu_sehat_encounter' => ['no_rawat', 'id_encounter'],
+        'diagnosa_pasien' => ['no_rawat', 'kd_penyakit', 'status'],
+        'penyakit' => ['kd_penyakit', 'nm_penyakit'],
+        'satu_sehat_condition' => ['no_rawat', 'kd_penyakit', 'id_condition'],
+        'satu_sehat_ihs_patient' => ['nikpasien', 'ihspasien'],
+        'satu_sehat_ihs_practitioner' => ['nikpegawai', 'ihspegawai'],
+        'satu_sehat_episode_of_care' => ['no_rawat', 'kd_penyakit', 'id_episode_of_care']
+    ];
+
+    $analyzerResults = [];
+    foreach ($requiredTables as $tableName => $columns) {
+        try {
+            // Check if table exists
+            $stmt = $pdo->prepare("SELECT 1 FROM {$tableName} LIMIT 1");
+            $stmt->execute();
+            $stmt->closeCursor();
+
+            // Check if columns exist
+            $missingColumns = [];
+            foreach ($columns as $col) {
+                try {
+                    $checkCol = $pdo->prepare("SELECT {$col} FROM {$tableName} LIMIT 1");
+                    $checkCol->execute();
+                    $checkCol->closeCursor();
+                } catch (Exception $colEx) {
+                    $missingColumns[] = $col;
+                }
+            }
+
+            if (empty($missingColumns)) {
+                $analyzerResults[$tableName] = ['status' => 'healthy', 'message' => 'Table exists with all required columns'];
+            } else {
+                $analyzerResults[$tableName] = ['status' => 'warning', 'message' => 'Missing columns: ' . implode(', ', $missingColumns), 'details' => $missingColumns];
+            }
+        } catch (Exception $tableEx) {
+            $analyzerResults[$tableName] = ['status' => 'error', 'message' => 'Table is missing or inaccessible', 'details' => $columns];
+        }
+    }
+
+    jsonResponse([
+        'success' => true,
+        'diagnostics' => $diagnostics,
+        'db_analyzer' => $analyzerResults
+    ]);
+}
+
 function executeWorkflowSync($pdo, SatuSehatDatabase $db, SatuSehatClient $client, SatuSehatConfig $config, Logger $log, string $noRawat): array {
     $results = [];
 
