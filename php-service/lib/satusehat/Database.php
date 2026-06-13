@@ -249,10 +249,10 @@ class SatuSehatDatabase
 
     public function close(): void
     {
-        if ($this->lockFile) {
-            flock($this->lockFile, LOCK_UN);
-            fclose($this->lockFile);
-        }
+        // We do NOT unlock or close $this->lockFile here.
+        // In parallel mode (--parallel), $db->close() is called before fork to avoid shared-connection issues.
+        // If we release the lock here, a new cron instance could start while workers are still running.
+        // Instead, we let the OS automatically release the lock when the parent process exits.
         unset($this->mysql);
         unset($this->sqlite);
     }
