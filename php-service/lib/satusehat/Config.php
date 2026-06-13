@@ -42,6 +42,16 @@ class SatuSehatConfig
     public readonly string $webhookUser;
     public readonly string $webhookPassword;
 
+    // ─── PACS / Orthanc & DICOM Converter ────────────────────────────────────────
+    public readonly string $orthancUrl;
+    public readonly int    $orthancPort;
+    public readonly string $orthancUser;
+    public readonly string $orthancPass;
+    public readonly string $dicomConverterUrl;
+    public readonly int    $dicomConverterPort;
+    public readonly string $dicomRouterAe;
+    public readonly string $simrsWebappsUrl;
+
     public function __construct(string $envPath)
     {
         if (!file_exists($envPath)) {
@@ -61,6 +71,15 @@ class SatuSehatConfig
 
         $this->webhookUser     = $this->get('WEBHOOK_USER', 'user_webhook_rs');
         $this->webhookPassword = $this->get('WEBHOOK_PASSWORD', 'password_webhook_rs');
+
+        $this->orthancUrl         = $this->get('ORTHANC_URL', 'http://localhost');
+        $this->orthancPort        = (int) $this->get('ORTHANC_PORT', '8042');
+        $this->orthancUser        = $this->get('ORTHANC_USER', 'admin');
+        $this->orthancPass        = $this->get('ORTHANC_PASS', 'password');
+        $this->dicomConverterUrl  = $this->get('DICOM_CONVERTER_URL', 'http://localhost');
+        $this->dicomConverterPort = (int) $this->get('DICOM_CONVERTER_PORT', '8080');
+        $this->dicomRouterAe      = $this->get('DICOM_ROUTER_AE', 'DCMROUTER');
+        $this->simrsWebappsUrl    = rtrim($this->get('SIMRS_WEBAPPS_URL', 'http://localhost/webapps'), '/');
 
         $this->orgId        = $this->require('SATUSEHAT_ORG_ID');
 

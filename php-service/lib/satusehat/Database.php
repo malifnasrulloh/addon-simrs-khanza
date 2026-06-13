@@ -238,6 +238,13 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for ImagingStudy Radiologi state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS imagingstudy_radiologi_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -929,6 +936,26 @@ class SatuSehatDatabase
         $compositeKey = "{$noorder}_{$kdJenisPrw}";
         $stmt = $this->sqlite->prepare("
             INSERT INTO diagnosticreport_radiologi_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    public function getImagingStudyLocalState(string $noorder, string $kdJenisPrw): ?string
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM imagingstudy_radiologi_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateImagingStudyLocalState(string $noorder, string $kdJenisPrw, string $status): void
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO imagingstudy_radiologi_state (composite_key, status, updated_at) 
             VALUES (:ck, :st, CURRENT_TIMESTAMP)
             ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
         ");
@@ -4073,6 +4100,48 @@ class SatuSehatDatabase
                     $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
                     break;
 
+                case 'imagingstudy_radiologi':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT COUNT(*) 
+                        FROM periksa_radiologi prad
+                        INNER JOIN permintaan_radiologi pr ON pr.no_rawat = prad.no_rawat AND pr.tgl_hasil = prad.tgl_periksa
+                        INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder AND ppr.kd_jenis_prw = prad.kd_jenis_prw
+                        WHERE prad.tgl_periksa BETWEEN :df AND :dt
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtNoReq = $this->mysql->prepare("
+                        SELECT COUNT(*) 
+                        FROM periksa_radiologi prad
+                        INNER JOIN permintaan_radiologi pr ON pr.no_rawat = prad.no_rawat AND pr.tgl_hasil = prad.tgl_periksa
+                        INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder AND ppr.kd_jenis_prw = prad.kd_jenis_prw
+                        LEFT JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
+                        WHERE prad.tgl_periksa BETWEEN :df AND :dt 
+                          AND (ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '' OR ssr.id_servicerequest = '-')
+                    ");
+                    $stmtNoReq->execute(['df' => $df, 'dt' => $dt]);
+                    $noReq = (int) $stmtNoReq->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*) 
+                        FROM satu_sehat_imagingstudy_radiologi ssi
+                        INNER JOIN permintaan_radiologi pr ON ssi.noorder = pr.noorder
+                        WHERE pr.tgl_hasil BETWEEN :df AND :dt
+                          AND ssi.id_imaging IS NOT NULL AND ssi.id_imaging <> '' AND ssi.id_imaging <> '-'
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $noReq - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Radiology Exams in SIMRS      : {$total}");
+                    $this->log->info("   ├─ Blocked (No ServiceRequest Mapped)  : {$noReq}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
                 case 'diagnosticreport_radiologi':
                     $stmtTotal = $this->mysql->prepare("
                         SELECT COUNT(*)
@@ -4940,5 +5009,137 @@ class SatuSehatDatabase
         
         $this->log->info("[HEALING] ImagingStudy self-healing completed. Healed: {$healedCount} / {$totalFound} checked.");
         return $healedCount;
+    }
+
+    public function fetchPendingImagingStudies(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT 
+                prad.no_rawat,
+                prad.kd_jenis_prw,
+                prad.tgl_periksa,
+                prad.jam AS jam_periksa,
+                pr.noorder,
+                pr.tgl_permintaan,
+                pr.jam_permintaan,
+                jpr.nm_perawatan,
+                d_perujuk.nm_dokter AS nm_dokter_perujuk,
+                d_dokter.nm_dokter AS nm_dokter,
+                p.no_rkm_medis AS no_rm,
+                p.nm_pasien,
+                p.tgl_lahir,
+                p.jk,
+                ssr.id_servicerequest,
+                ssi.id_imaging,
+                ssi.status_webhook,
+                ssi.message_webhook,
+                sse.id_encounter
+            FROM periksa_radiologi prad
+            INNER JOIN permintaan_radiologi pr ON pr.no_rawat = prad.no_rawat AND pr.tgl_hasil = prad.tgl_periksa
+            INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder AND ppr.kd_jenis_prw = prad.kd_jenis_prw
+            INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = prad.kd_jenis_prw
+            INNER JOIN reg_periksa rp ON rp.no_rawat = prad.no_rawat
+            INNER JOIN pasien p ON p.no_rkm_medis = rp.no_rkm_medis
+            LEFT JOIN dokter d_perujuk ON d_perujuk.kd_dokter = prad.dokter_perujuk
+            LEFT JOIN dokter d_dokter ON d_dokter.kd_dokter = prad.kd_dokter
+            INNER JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
+            LEFT JOIN satu_sehat_imagingstudy_radiologi ssi ON ssi.noorder = ppr.noorder AND ssi.kd_jenis_prw = ppr.kd_jenis_prw
+            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            WHERE prad.tgl_periksa BETWEEN :df AND :dt
+              AND ssr.id_servicerequest IS NOT NULL AND ssr.id_servicerequest <> '' AND ssr.id_servicerequest <> '-'
+              AND (
+                  ssi.id_imaging IS NULL 
+                  OR ssi.id_imaging = '' 
+                  OR ssi.id_imaging = '-' 
+                  OR ssi.status_webhook = 'FAILED'
+              )
+        ";
+        try {
+            $stmt = $this->mysql->prepare($sql);
+            $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+            return $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            $this->log->error("[DATABASE] Failed to fetch pending ImagingStudies: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    public function fetchRadiologyImages(string $noRawat, string $kdJenisPrw, string $noorder): array
+    {
+        $sql = "
+            SELECT gr.lokasi_gambar 
+            FROM periksa_radiologi prad
+            INNER JOIN gambar_radiologi gr ON gr.no_rawat = prad.no_rawat 
+                AND gr.tgl_periksa = prad.tgl_periksa 
+                AND gr.jam = prad.jam
+            INNER JOIN permintaan_radiologi pr ON pr.no_rawat = prad.no_rawat 
+                AND pr.tgl_hasil = prad.tgl_periksa
+            WHERE prad.no_rawat = :norawat 
+              AND prad.kd_jenis_prw = :kd 
+              AND pr.noorder = :noorder
+        ";
+        try {
+            $stmt = $this->mysql->prepare($sql);
+            $stmt->execute([
+                'norawat' => $noRawat,
+                'kd' => $kdJenisPrw,
+                'noorder' => $noorder
+            ]);
+            return $stmt->fetchAll(\PDO::FETCH_COLUMN);
+        } catch (\PDOException $e) {
+            $this->log->error("[DATABASE] Failed to fetch radiology images: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    public function saveImagingStudyInitial(string $noorder, string $kdJenisPrw, string $acsn, ?string $idServiceRequest): void
+    {
+        $sql = "
+            INSERT INTO satu_sehat_imagingstudy_radiologi (noorder, kd_jenis_prw, id_servicerequest, acsn, status_webhook, message_webhook)
+            VALUES (:noorder, :kd_jenis_prw, :id_servicerequest, :acsn, 'PENDING', 'DICOM router transmission pending')
+            ON DUPLICATE KEY UPDATE 
+                id_servicerequest = VALUES(id_servicerequest),
+                acsn = VALUES(acsn),
+                status_webhook = VALUES(status_webhook),
+                message_webhook = VALUES(message_webhook)
+        ";
+        try {
+            $stmt = $this->mysql->prepare($sql);
+            $stmt->execute([
+                'noorder' => $noorder,
+                'kd_jenis_prw' => $kdJenisPrw,
+                'id_servicerequest' => $idServiceRequest,
+                'acsn' => $acsn
+            ]);
+        } catch (\PDOException $e) {
+            $this->log->error("[DATABASE] Failed to save/update initial ImagingStudy: " . $e->getMessage());
+        }
+    }
+
+    public function updateImagingStudyMySQLState(string $noorder, string $kdJenisPrw, string $status, string $message, ?string $idImaging = null): void
+    {
+        $sql = "
+            UPDATE satu_sehat_imagingstudy_radiologi 
+            SET status_webhook = :status,
+                message_webhook = :message
+        ";
+        $params = [
+            'status' => $status,
+            'message' => $message,
+            'noorder' => $noorder,
+            'kd' => $kdJenisPrw
+        ];
+        if ($idImaging !== null) {
+            $sql .= ", id_imaging = :id";
+            $params['id'] = $idImaging;
+        }
+        $sql .= " WHERE noorder = :noorder AND kd_jenis_prw = :kd";
+        
+        try {
+            $stmt = $this->mysql->prepare($sql);
+            $stmt->execute($params);
+        } catch (\PDOException $e) {
+            $this->log->error("[DATABASE] Failed to update MySQL ImagingStudy state: " . $e->getMessage());
+        }
     }
 }
