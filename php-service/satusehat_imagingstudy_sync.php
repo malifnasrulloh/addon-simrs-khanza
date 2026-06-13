@@ -30,6 +30,14 @@ if (php_sapi_name() !== 'cli') {
     exit('This script can only be run from the command line.');
 }
 
+// Prevent concurrent executions of the same service
+$lockFilePath = sys_get_temp_dir() . '/' . SERVICE_NAME . '.lock';
+$lockFile = fopen($lockFilePath, 'c');
+if (!$lockFile || !flock($lockFile, LOCK_EX | LOCK_NB)) {
+    fwrite(STDERR, "[INFO] Another instance of " . SERVICE_NAME . " is already running. Exiting.\n");
+    exit(0);
+}
+
 $options = getopt('', ['help', 'verbose', 'parallel::']);
 
 if (isset($options['help'])) {
