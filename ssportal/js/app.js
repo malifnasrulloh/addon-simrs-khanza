@@ -1584,7 +1584,7 @@ async function startSelectedSync() {
         appendConsole(`[${i+1}/${keys.length}] Syncing record: ${key}...`, 'info');
         
         try {
-            const res = await apiFetch(`${API_BASE}?action=syncSingleRecord&resource=${selectedResource}&id=${key}`, {
+            const res = await apiFetch(`${API_BASE}?action=triggerBatchSync&resource=${selectedResource}&no_rawat=${encodeURIComponent(key)}`, {
                 method: 'POST'
             });
             if (res.success) {
