@@ -104,6 +104,7 @@ function setupAuthContext() {
             <button class="nav-tab" onclick="switchSection('patient_search')">🔍 Patient Search</button>
             <button class="nav-tab" onclick="switchSection('sync')">🔄 Sync Center</button>
             <button class="nav-tab" onclick="switchSection('troubleshoot')">🗺️ Mapping Center</button>
+            <button class="nav-tab" onclick="switchSection('explorer')">🌐 FHIR Explorer</button>
             <button class="nav-tab" onclick="switchSection('logs')">📋 Log Viewer</button>
         `;
         if (diagWidget) diagWidget.style.display = 'grid';
@@ -775,14 +776,19 @@ async function loadSyncRecords(targetPage = 1) {
                 else if (r.status === 'failed') statusBadge = `<span class="badge danger" title="${r.message || ''}">Failed</span>`;
                 else statusBadge = '<span class="badge warning">Pending</span>';
 
+                const isPreviewable = ['encounter', 'condition', 'procedure'].includes(selectedResource.toLowerCase());
                 const actionBtn = `
                     <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+                        ${isPreviewable ? `<button class="btn btn-secondary" style="width: auto; height: 32px; padding: 0 0.5rem; font-size: 0.8rem; border-color: rgba(168, 85, 247, 0.4); color: var(--text-muted);" onclick="openPayloadEditor('${selectedResource}', '${r.id}')" title="Edit/Preview FHIR JSON">JSON</button>` : ''}
                         <button class="btn btn-secondary" style="width: auto; height: 32px; padding: 0 0.75rem; font-size: 0.8rem;" onclick="syncSingleRecord('${r.no_rawat || r.nik || r.id}')">Sync</button>
                         <button class="btn" style="width: auto; height: 32px; padding: 0 0.75rem; font-size: 0.8rem;" onclick="syncWorkflow('${r.no_rawat}')" ${!r.no_rawat ? 'disabled' : ''}>Flow</button>
                     </div>
                 `;
 
                 tr.innerHTML = `
+                    <td style="text-align: center; vertical-align: middle;">
+                        <input type="checkbox" class="row-sync-checkbox" data-key="${r.id}">
+                    </td>
                     <td style="font-family: monospace;">
                         <div>${keyText}</div>
                         <div style="margin-top: 0.25rem;">${metaBadges}</div>
@@ -793,6 +799,10 @@ async function loadSyncRecords(targetPage = 1) {
                     <td style="text-align: right;">${actionBtn}</td>
                 `;
                 tbody.appendChild(tr);
+                
+                // Reset select-all checkbox when reloading
+                const selectAllChk = document.getElementById('sync-select-all');
+                if (selectAllChk) selectAllChk.checked = false;
             });
 
             renderSyncPagination(data.total_count, data.page);
@@ -1133,12 +1143,23 @@ async function loadMappingList(targetPage = 1) {
                 else if (selectedMappingType === 'medication') placeholderText = 'KFA Drug Code';
                 else placeholderText = 'KFA Vaccine Code';
 
-                const actionDiv = `
-                    <div style="display: flex; gap: 0.5rem;">
-                        <input type="text" id="map-input-${r.key}" class="form-control" placeholder="${placeholderText}" style="height: 34px; padding: 0 0.5rem; font-size: 0.85rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15)">
-                        <button class="btn" onclick="saveMapping('${r.key}')" style="width: auto; height: 34px; padding: 0 0.85rem; font-size: 0.85rem;">Save</button>
-                    </div>
-                `;
+                let actionDiv = '';
+                if (selectedMappingType === 'practitioner') {
+                    actionDiv = `
+                        <div style="display: flex; gap: 0.5rem; width: 100%;">
+                            <input type="text" id="map-input-${r.key}" class="form-control" placeholder="${placeholderText}" style="height: 34px; padding: 0 0.5rem; font-size: 0.85rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); flex-grow: 1;">
+                            <button class="btn btn-secondary" onclick="lookupPractitionerLive('${r.extra}', '${r.key}')" style="width: auto; height: 34px; padding: 0 0.5rem; font-size: 0.8rem; background: rgba(251,191,36,0.15); color: #fbbf24; border-color: rgba(251,191,36,0.3);">Lookup NIK</button>
+                            <button class="btn" onclick="saveMapping('${r.key}')" style="width: auto; height: 34px; padding: 0 0.85rem; font-size: 0.85rem;">Save</button>
+                        </div>
+                    `;
+                } else {
+                    actionDiv = `
+                        <div style="display: flex; gap: 0.5rem;">
+                            <input type="text" id="map-input-${r.key}" class="form-control" placeholder="${placeholderText}" style="height: 34px; padding: 0 0.5rem; font-size: 0.85rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15)">
+                            <button class="btn" onclick="saveMapping('${r.key}')" style="width: auto; height: 34px; padding: 0 0.85rem; font-size: 0.85rem;">Save</button>
+                        </div>
+                    `;
+                }
 
                 tr.innerHTML = `
                     <td style="font-family: monospace; color: var(--primary-color);">${r.key}</td>
@@ -1228,6 +1249,31 @@ async function saveMapping(key) {
         }
     } catch (err) {
         alert('Error: ' + err.message);
+    }
+}
+
+async function lookupPractitionerLive(nik, key) {
+    const input = document.getElementById(`map-input-${key}`);
+    if (!input) return;
+
+    const originalVal = input.value;
+    input.value = 'Searching...';
+    input.disabled = true;
+
+    try {
+        const res = await apiFetch(`${API_BASE}?action=lookupPractitionerSatuSehat&nik=${nik}`);
+        if (res.success && res.id) {
+            input.value = res.id;
+            appendConsole(`Successfully resolved IHS Practitioner ID for NIK ${nik}: ${res.id} (${res.name})`, 'success');
+        } else {
+            input.value = originalVal;
+            alert(res.message || 'Practitioner NIK ' + nik + ' not found in SatuSehat API sandbox.');
+        }
+    } catch (err) {
+        input.value = originalVal;
+        alert('Error: ' + err.message);
+    } finally {
+        input.disabled = false;
     }
 }
 
@@ -1387,29 +1433,239 @@ function renderLogsPagination(total, currentPage) {
 function showModal(title, jsonPayload, saveCallback = null) {
     const overlay = document.getElementById('modal-container');
     const titleEl = document.getElementById('modal-title');
-    const bodyEl = document.getElementById('modal-body');
-    const actionsEl = document.getElementById('modal-actions');
+    const viewEl = document.getElementById('modal-body-view');
+    const editContainer = document.getElementById('modal-body-edit-container');
+    const editTextarea = document.getElementById('modal-body-edit');
+    const cancelBtn = document.getElementById('modal-cancel-btn');
+    const submitBtn = document.getElementById('modal-submit-btn');
 
     titleEl.innerText = title;
     overlay.style.display = 'flex';
 
     if (saveCallback) {
-        bodyEl.innerHTML = `<textarea id="modal-textarea" style="width: 100%; height: 250px; background: #1e1e2e; color: #fff; border: 1px solid var(--border-color); font-family: monospace; font-size: 0.8rem; padding: 0.5rem;">${JSON.stringify(jsonPayload, null, 2)}</textarea>`;
-        actionsEl.innerHTML = `
-            <button class="btn btn-secondary" style="width: auto; margin-right: 0.5rem;" onclick="closeModal()">Cancel</button>
-            <button class="btn" style="width: auto;" id="modal-save-btn">Confirm creation</button>
-        `;
-        document.getElementById('modal-save-btn').onclick = () => {
-            const text = document.getElementById('modal-textarea').value;
-            saveCallback(text);
+        viewEl.style.display = 'none';
+        editContainer.style.display = 'flex';
+        editTextarea.value = typeof jsonPayload === 'string' ? jsonPayload : JSON.stringify(jsonPayload, null, 2);
+        
+        cancelBtn.innerText = 'Cancel';
+        submitBtn.style.display = 'inline-block';
+        submitBtn.innerText = 'Confirm creation';
+        submitBtn.onclick = () => {
+            saveCallback(editTextarea.value);
             closeModal();
         };
     } else {
-        bodyEl.innerText = JSON.stringify(jsonPayload, null, 2);
-        actionsEl.innerHTML = `<button class="btn btn-secondary" style="width: auto;" onclick="closeModal()">Close</button>`;
+        viewEl.style.display = 'block';
+        editContainer.style.display = 'none';
+        viewEl.innerText = typeof jsonPayload === 'string' ? jsonPayload : JSON.stringify(jsonPayload, null, 2);
+        
+        cancelBtn.innerText = 'Close';
+        submitBtn.style.display = 'none';
     }
 }
 
 function closeModal() {
     document.getElementById('modal-container').style.display = 'none';
+}
+
+async function openPayloadEditor(resource, key) {
+    const overlay = document.getElementById('modal-container');
+    const titleEl = document.getElementById('modal-title');
+    const viewEl = document.getElementById('modal-body-view');
+    const editContainer = document.getElementById('modal-body-edit-container');
+    const editTextarea = document.getElementById('modal-body-edit');
+    const cancelBtn = document.getElementById('modal-cancel-btn');
+    const submitBtn = document.getElementById('modal-submit-btn');
+
+    titleEl.innerText = `Edit ${resource.charAt(0).toUpperCase() + resource.slice(1)} Payload: ${key}`;
+    overlay.style.display = 'flex';
+    
+    viewEl.style.display = 'block';
+    editContainer.style.display = 'none';
+    viewEl.innerText = 'Generating live preview from database... Please wait.';
+    submitBtn.style.display = 'none';
+
+    try {
+        const res = await apiFetch(`${API_BASE}?action=previewFHIRPayload&resource=${resource}&key=${key}`);
+        if (res.success && res.payload) {
+            viewEl.style.display = 'none';
+            editContainer.style.display = 'flex';
+            editTextarea.value = JSON.stringify(res.payload, null, 2);
+            
+            cancelBtn.innerText = 'Cancel';
+            submitBtn.style.display = 'inline-block';
+            submitBtn.innerText = 'Sync Override';
+            submitBtn.onclick = async () => {
+                submitBtn.disabled = true;
+                submitBtn.innerText = 'Sending...';
+                try {
+                    const syncRes = await apiFetch(`${API_BASE}?action=syncFHIRPayloadOverride`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            resource: resource,
+                            key: key,
+                            payload: editTextarea.value
+                        })
+                    });
+                    if (syncRes.success) {
+                        appendConsole(`Manual Sync Override Success: ${syncRes.message} (IHS ID: ${syncRes.ihs_id || 'N/A'})`, 'success');
+                        closeModal();
+                        loadSyncRecords(syncRecordsPage);
+                        loadStats();
+                    } else {
+                        alert('Error synchronizing: ' + syncRes.message);
+                    }
+                } catch (err) {
+                    alert('Network error: ' + err.message);
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = 'Sync Override';
+                }
+            };
+        } else {
+            viewEl.innerText = 'Failed to generate payload: ' + (res.message || 'Unknown error');
+        }
+    } catch (err) {
+        viewEl.innerText = 'Network error: ' + err.message;
+    }
+}
+
+function toggleSelectAllSync(master) {
+    const checkboxes = document.querySelectorAll('.row-sync-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = master.checked;
+    });
+}
+
+async function startSelectedSync() {
+    const checkboxes = document.querySelectorAll('.row-sync-checkbox:checked');
+    if (checkboxes.length === 0) {
+        alert('Please select at least one record to sync.');
+        return;
+    }
+
+    const keys = [];
+    checkboxes.forEach(cb => {
+        keys.push(cb.getAttribute('data-key'));
+    });
+
+    if (!confirm(`Are you sure you want to synchronize the ${keys.length} selected records?`)) {
+        return;
+    }
+
+    const consoleEl = document.getElementById('sync-console');
+    const progressContainer = document.getElementById('sync-progress-container');
+    const progressFill = document.getElementById('sync-progress-fill');
+    const progressText = document.getElementById('sync-progress-text');
+    const countsEl = document.getElementById('sync-counts');
+    const successCountEl = document.getElementById('sync-success-count');
+    const failedCountEl = document.getElementById('sync-failed-count');
+
+    consoleEl.style.display = 'flex';
+    consoleEl.innerHTML = '';
+    progressContainer.style.display = 'block';
+    progressFill.style.width = '0%';
+    progressText.innerText = '0%';
+    countsEl.style.display = 'flex';
+    successCountEl.innerText = '0';
+    failedCountEl.innerText = '0';
+
+    appendConsole(`Starting manual sync of ${keys.length} selected ${selectedResource} records...`, 'info');
+
+    let successCount = 0;
+    let failedCount = 0;
+    
+    document.getElementById('sync-action-btn').disabled = true;
+    document.getElementById('sync-selected-btn').disabled = true;
+
+    for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        appendConsole(`[${i+1}/${keys.length}] Syncing record: ${key}...`, 'info');
+        
+        try {
+            const res = await apiFetch(`${API_BASE}?action=syncSingleRecord&resource=${selectedResource}&id=${key}`, {
+                method: 'POST'
+            });
+            if (res.success) {
+                successCount++;
+                successCountEl.innerText = successCount;
+                appendConsole(`[SUCCESS] Record ${key}: ${res.message || 'Synced successfully'}`, 'success');
+            } else {
+                failedCount++;
+                failedCountEl.innerText = failedCount;
+                appendConsole(`[FAILED] Record ${key}: ${res.message || 'Sync failed'}`, 'error');
+            }
+        } catch (err) {
+            failedCount++;
+            failedCountEl.innerText = failedCount;
+            appendConsole(`[ERROR] Record ${key}: ${err.message}`, 'error');
+        }
+
+        const pct = Math.round(((i + 1) / keys.length) * 100);
+        progressFill.style.width = `${pct}%`;
+        progressText.innerText = `${pct}%`;
+    }
+
+    appendConsole(`Synchronization complete! Success: ${successCount}, Failed: ${failedCount}`, successCount > 0 ? 'success' : 'info');
+    
+    document.getElementById('sync-action-btn').disabled = false;
+    document.getElementById('sync-selected-btn').disabled = false;
+    
+    loadSyncRecords(syncRecordsPage);
+    loadStats();
+}
+
+// ==========================================
+// PANEL 6: FHIR RESOURCE EXPLORER
+// ==========================================
+function handleExplorerKey(e) {
+    if (e.key === 'Enter') {
+        runExplorerQuery();
+    }
+}
+
+async function runExplorerQuery() {
+    const endpointInput = document.getElementById('explorer-endpoint-input');
+    const loader = document.getElementById('explorer-loader');
+    const resultContainer = document.getElementById('explorer-result-container');
+    const responseCodeEl = document.getElementById('explorer-response-code');
+    const resultPre = document.getElementById('explorer-result-pre');
+
+    const endpoint = endpointInput.value.trim();
+    if (!endpoint) {
+        alert('Please specify a FHIR endpoint.');
+        return;
+    }
+
+    loader.style.display = 'block';
+    resultContainer.style.display = 'none';
+
+    try {
+        const res = await apiFetch(`${API_BASE}?action=querySatuSehatResource&endpoint=${encodeURIComponent(endpoint)}`);
+        loader.style.display = 'none';
+        resultContainer.style.display = 'flex';
+        
+        responseCodeEl.innerText = res.code || (res.success ? '200' : 'Unknown');
+        if (res.success) {
+            responseCodeEl.style.color = '#4ade80';
+            resultPre.innerText = JSON.stringify(res.data, null, 2);
+        } else {
+            responseCodeEl.style.color = '#f87171';
+            resultPre.innerText = JSON.stringify(res.data || { error: res.message }, null, 2);
+        }
+    } catch (err) {
+        loader.style.display = 'none';
+        resultContainer.style.display = 'flex';
+        responseCodeEl.innerText = 'Error';
+        responseCodeEl.style.color = '#f87171';
+        resultPre.innerText = err.message;
+    }
+}
+
+function copyExplorerResult() {
+    const pre = document.getElementById('explorer-result-pre');
+    navigator.clipboard.writeText(pre.innerText)
+        .then(() => alert('Response copied to clipboard!'))
+        .catch(err => alert('Failed to copy: ' + err.message));
 }

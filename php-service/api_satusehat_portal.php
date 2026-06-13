@@ -1462,6 +1462,272 @@ if ($action === 'getSyncStats' && $method === 'GET') {
     }
 }
 
+if ($action === 'lookupPractitionerSatuSehat' && $method === 'GET') {
+    if ($userRole !== 'admin') {
+        jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);
+    }
+    $nik = $_GET['nik'] ?? '';
+    if (empty($nik)) {
+        jsonResponse(['success' => false, 'message' => 'Parameter NIK is required.'], 400);
+    }
+    $res = $client->get("/Practitioner?identifier=https://fhir.kemkes.go.id/id/nik|{$nik}");
+    if ($res['success'] && !empty($res['data']['entry'])) {
+        $entry = $res['data']['entry'][0]['resource'];
+        jsonResponse([
+            'success' => true,
+            'id' => $entry['id'],
+            'name' => $entry['name'][0]['text'] ?? ''
+        ]);
+    } else {
+        jsonResponse([
+            'success' => false,
+            'message' => 'Practitioner NIK ' . $nik . ' not found in SatuSehat.'
+        ]);
+    }
+}
+
+if ($action === 'querySatuSehatResource' && $method === 'GET') {
+    if ($userRole !== 'admin') {
+        jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);
+    }
+    $endpoint = $_GET['endpoint'] ?? '';
+    if (empty($endpoint)) {
+        jsonResponse(['success' => false, 'message' => 'Parameter endpoint is required.'], 400);
+    }
+    if ($endpoint[0] !== '/') {
+        $endpoint = '/' . $endpoint;
+    }
+    $res = $client->get($endpoint);
+    if ($res['success']) {
+        jsonResponse([
+            'success' => true,
+            'code' => $res['code'],
+            'data' => $res['data']
+        ]);
+    } else {
+        jsonResponse([
+            'success' => false,
+            'code' => $res['code'],
+            'message' => $res['message'] ?? 'API query failed',
+            'data' => $res['data'] ?? null
+        ]);
+    }
+}
+
+if ($action === 'previewFHIRPayload' && $method === 'GET') {
+    if ($userRole !== 'admin') {
+        jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);
+    }
+    $resource = strtolower($_GET['resource'] ?? '');
+    $key = $_GET['key'] ?? '';
+    if (empty($resource) || empty($key)) {
+        jsonResponse(['success' => false, 'message' => 'Parameters resource and key are required.'], 400);
+    }
+
+    try {
+        require_once BASE_DIR . '/lib/satusehat/Database.php';
+        require_once BASE_DIR . '/lib/satusehat/PayloadBuilder.php';
+        $db = new SatuSehatDatabase($config, $log, $client);
+        $payload = null;
+
+        if ($resource === 'encounter') {
+            $sql = "
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                    p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter, 
+                    rp.kd_poli, pol.nm_poli, smlr.id_lokasi_satusehat, rp.stts, rp.status_lanjut,
+                    sse.id_encounter
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
+                INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
+                LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
+                LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                WHERE rp.no_rawat = :nr
+            ";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute(['nr' => $key]);
+            $p = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$p) jsonResponse(['success' => false, 'message' => 'Encounter record not found.'], 404);
+
+            $idPasien = $db->getIhsPatient($p['no_ktp']);
+            $idDokter = $db->getIhsPractitioner($p['ktpdokter']);
+
+            $status = 'arrived';
+            if ($p['id_encounter']) {
+                $status = 'in-progress';
+                $diagnoses = $db->fetchDiagnoses($key);
+                if (!empty($diagnoses)) {
+                    $status = 'finished';
+                }
+            }
+
+            if ($status === 'finished') {
+                $payload = SatuSehatPayloadBuilder::encounter($config->orgId, $p, $idPasien, $idDokter, 'finished', $diagnoses, $p['id_encounter']);
+            } else if ($status === 'in-progress') {
+                $payload = SatuSehatPayloadBuilder::encounter($config->orgId, $p, $idPasien, $idDokter, 'in-progress', [], $p['id_encounter']);
+            } else {
+                $payload = SatuSehatPayloadBuilder::encounter($config->orgId, $p, $idPasien, $idDokter, 'arrived');
+            }
+        } else if ($resource === 'condition') {
+            $parts = explode('-', $key);
+            $noRawat = $parts[0];
+            $kdPenyakit = $parts[1] ?? '';
+            
+            $sql = "
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                    p.nm_pasien, p.no_ktp, rp.stts, rp.status_lanjut, 
+                    CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang, 
+                    sse.id_encounter, dp.kd_penyakit, py.nm_penyakit, dp.status,
+                    ssc.id_condition
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN diagnosa_pasien dp ON dp.no_rawat = rp.no_rawat
+                INNER JOIN penyakit py ON dp.kd_penyakit = py.kd_penyakit
+                LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = dp.no_rawat 
+                    AND ssc.kd_penyakit = dp.kd_penyakit 
+                    AND ssc.status = dp.status
+                WHERE rp.no_rawat = :nr AND dp.kd_penyakit = :kd
+            ";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute(['nr' => $noRawat, 'kd' => $kdPenyakit]);
+            $p = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$p) jsonResponse(['success' => false, 'message' => 'Condition record not found.'], 404);
+
+            $idPasien = $db->getIhsPatient($p['no_ktp']);
+            $payload = SatuSehatPayloadBuilder::condition($p, $idPasien, $p['id_condition'] ?? '');
+        } else if ($resource === 'procedure') {
+            $parts = explode('-', $key);
+            $noRawat = $parts[0];
+            $kode = $parts[1] ?? '';
+
+            $sql = "
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                    p.nm_pasien, p.no_ktp, rp.stts, rp.status_lanjut, 
+                    CONCAT(rp.tgl_registrasi, 'T', rp.jam_reg, '+07:00') as waktu_registrasi, 
+                    sse.id_encounter, pp.kode, py.deskripsi_panjang, pp.status,
+                    CASE 
+                        WHEN rp.status_lanjut = 'Ralan' THEN (SELECT CONCAT(tanggal, 'T', jam, '+07:00') FROM nota_jalan WHERE no_rawat = rp.no_rawat LIMIT 1)
+                        WHEN rp.status_lanjut = 'Ranap' THEN (SELECT CONCAT(tanggal, 'T', jam, '+07:00') FROM nota_inap WHERE no_rawat = rp.no_rawat LIMIT 1)
+                    END as waktu_pulang,
+                    ssp.id_procedure
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN prosedur_pasien pp ON pp.no_rawat = rp.no_rawat
+                INNER JOIN icd9 py ON pp.kode = py.kode
+                LEFT JOIN satu_sehat_procedure ssp ON ssp.no_rawat = pp.no_rawat 
+                    AND ssp.kode = pp.kode 
+                    AND ssp.status = pp.status
+                WHERE rp.no_rawat = :nr AND pp.kode = :kd
+            ";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute(['nr' => $noRawat, 'kd' => $kode]);
+            $p = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$p) jsonResponse(['success' => false, 'message' => 'Procedure record not found.'], 404);
+
+            $idPasien = $db->getIhsPatient($p['no_ktp']);
+            $payload = SatuSehatPayloadBuilder::procedure($p, $idPasien, $p['id_procedure'] ?? '');
+        } else {
+            jsonResponse(['success' => false, 'message' => "Preview payload for resource '{$resource}' is not supported yet. You can still query this resource using the FHIR Explorer."], 400);
+        }
+
+        jsonResponse([
+            'success' => true,
+            'payload' => $payload
+        ]);
+
+    } catch (Exception $e) {
+        jsonResponse(['success' => false, 'message' => $e->getMessage()], 500);
+    }
+}
+
+if ($action === 'syncFHIRPayloadOverride' && $method === 'POST') {
+    if ($userRole !== 'admin') {
+        jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);
+    }
+
+    $rawInput = file_get_contents('php://input');
+    $inputData = json_decode($rawInput, true);
+    
+    $resource = strtolower($inputData['resource'] ?? '');
+    $key = $inputData['key'] ?? '';
+    $customPayload = $inputData['payload'] ?? null;
+
+    if (empty($resource) || empty($key) || !$customPayload) {
+        jsonResponse(['success' => false, 'message' => 'Parameters resource, key and payload JSON are required.'], 400);
+    }
+
+    try {
+        require_once BASE_DIR . '/lib/satusehat/Database.php';
+        $db = new SatuSehatDatabase($config, $log, $client);
+
+        if (is_string($customPayload)) {
+            $payloadObj = json_decode($customPayload, true);
+        } else {
+            $payloadObj = $customPayload;
+        }
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            jsonResponse(['success' => false, 'message' => 'Invalid JSON payload format: ' . json_last_error_msg()], 400);
+        }
+
+        $endpoint = '';
+        $methodType = 'POST';
+        $ihsId = $payloadObj['id'] ?? '';
+
+        if (!empty($ihsId)) {
+            $endpoint = '/' . ucfirst($resource) . '/' . $ihsId;
+            $methodType = 'PUT';
+            $res = $client->put($endpoint, $payloadObj);
+        } else {
+            $endpoint = '/' . ucfirst($resource);
+            $res = $client->post($endpoint, $payloadObj);
+        }
+
+        if ($res['success'] && (isset($res['data']['id']) || $methodType === 'PUT')) {
+            $savedId = $res['data']['id'] ?? $ihsId;
+
+            if ($resource === 'encounter') {
+                $db->saveEncounter($key, $savedId);
+                $db->updateLocalState($key, 'finished');
+            } else if ($resource === 'condition') {
+                $parts = explode('-', $key);
+                $noRawat = $parts[0];
+                $kdPenyakit = $parts[1] ?? '';
+                $status = $payloadObj['clinicalStatus']['coding'][0]['code'] ?? 'active';
+                $db->saveCondition($noRawat, $kdPenyakit, $status, $savedId);
+            } else if ($resource === 'procedure') {
+                $parts = explode('-', $key);
+                $noRawat = $parts[0];
+                $kode = $parts[1] ?? '';
+                $status = $payloadObj['status'] ?? 'completed';
+                $db->saveProcedure($noRawat, $kode, $status, $savedId);
+            }
+
+            jsonResponse([
+                'success' => true,
+                'message' => "Successfully synchronized manual payload override.",
+                'ihs_id' => $savedId,
+                'data' => $res['data']
+            ]);
+        } else {
+            $errorMsg = $res['data']['issue'][0]['diagnostics'] ?? $res['message'] ?? 'API sync failed';
+            jsonResponse([
+                'success' => false,
+                'message' => 'SatuSehat API Error: ' . $errorMsg,
+                'data' => $res['data'] ?? null
+            ]);
+        }
+
+    } catch (Exception $e) {
+        jsonResponse(['success' => false, 'message' => $e->getMessage()], 500);
+    }
+}
+
 if ($action === 'triggerBatchSync' && $method === 'POST') {
     if ($userRole !== 'admin') {
         jsonResponse(['success' => false, 'message' => 'Forbidden. Admin privileges required.'], 403);

@@ -271,6 +271,7 @@ header('Content-Type: text/html; charset=utf-8');
                 <!-- Control Buttons -->
                 <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; align-items: center;">
                     <button id="sync-action-btn" class="btn" style="width: auto;" onclick="startBatchSync()">Sync Filtered Batch</button>
+                    <button id="sync-selected-btn" class="btn btn-secondary" style="width: auto; background: rgba(255,255,255,0.05); color: #fff; border-color: rgba(255,255,255,0.1);" onclick="startSelectedSync()">Sync Selected</button>
                     <button id="sync-cancel-btn" class="btn btn-danger" style="width: auto; display: none;" onclick="cancelBatchSync()">Cancel Sync</button>
                     <div id="sync-counts" style="display: none; gap: 1rem; font-size: 0.9rem; color: var(--text-muted);">
                         <span>Success: <strong id="sync-success-count" style="color: #4ade80">0</strong></span>
@@ -311,6 +312,7 @@ header('Content-Type: text/html; charset=utf-8');
                         <table>
                             <thead>
                                 <tr>
+                                    <th style="width: 40px; text-align: center;"><input type="checkbox" id="sync-select-all" onclick="toggleSelectAllSync(this)"></th>
                                     <th>Transaction Key</th>
                                     <th>Patient Details</th>
                                     <th>Service/Dates</th>
@@ -364,6 +366,35 @@ header('Content-Type: text/html; charset=utf-8');
                 </div>
             </div>
 
+            <!-- Panel 6: FHIR Resource Explorer -->
+            <div id="section-explorer" class="glass section-panel">
+                <h2 style="color: var(--primary-color); margin-bottom: 1.5rem;">🌐 FHIR Resource Explorer</h2>
+                <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.5rem; line-height: 1.4;">
+                    Directly query the SatuSehat sandbox API. Specify any FHIR endpoint, e.g. <code>/Encounter/encounter-uuid-here</code>, <code>/Patient?identifier=https://fhir.kemkes.go.id/id/nik|1234567890123456</code>, or <code>/Practitioner?name=Doctor Name</code>.
+                </div>
+                
+                <div style="display: flex; gap: 0.75rem; margin-bottom: 1.5rem;">
+                    <div style="display: flex; align-items: center; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 8px; padding-left: 0.75rem; flex-grow: 1;">
+                        <span style="font-family: monospace; color: var(--text-muted); font-weight: bold; margin-right: 0.25rem;">GET</span>
+                        <input type="text" id="explorer-endpoint-input" class="form-control" placeholder="/Patient/10002891234" style="border: none; background: transparent; height: 38px; box-shadow: none;" onkeydown="handleExplorerKey(event)">
+                    </div>
+                    <button class="btn" style="width: auto; height: 40px; padding: 0 1.5rem;" onclick="runExplorerQuery()">Query API</button>
+                </div>
+
+                <div id="explorer-loader" style="text-align: center; padding: 3rem; display: none;">
+                    <div class="spinner" style="margin: 0 auto 1rem auto;"></div>
+                    <p style="color: var(--text-muted)">Querying SatuSehat Sandbox...</p>
+                </div>
+
+                <div id="explorer-result-container" style="display: none; flex-direction: column; gap: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 0.9rem; font-weight: 500; color: #fff;">Response Code: <strong id="explorer-response-code" style="color: #4ade80;">200</strong></span>
+                        <button class="btn btn-secondary" style="width: auto; padding: 0.25rem 0.75rem; font-size: 0.8rem;" onclick="copyExplorerResult()">Copy to Clipboard</button>
+                    </div>
+                    <pre id="explorer-result-pre" style="background: #090810; color: #fff; padding: 1.5rem; border: 1px solid var(--border-color); border-radius: 8px; overflow-x: auto; max-height: 500px; font-family: monospace; font-size: 0.8rem; text-align: left; margin: 0;"></pre>
+                </div>
+            </div>
+
             <!-- Panel 5: Log Viewer -->
             <div id="section-logs" class="glass section-panel">
                 <h2 style="color: var(--primary-color); margin-bottom: 1.5rem;">📋 System Log Viewer</h2>
@@ -400,14 +431,26 @@ header('Content-Type: text/html; charset=utf-8');
 
     <!-- Modal Dialogs overlay -->
     <div id="modal-container" class="modal-overlay" style="display: none;">
-        <div class="modal-content">
+        <div class="modal-content" style="max-width: 800px; width: 95%;">
             <div class="modal-header">
                 <div class="modal-title" id="modal-title">FHIR JSON Output</div>
                 <button class="modal-close" onclick="closeModal()">&times;</button>
             </div>
-            <pre id="modal-body" style="background: #090810; color: #fff; padding: 1.5rem; border-radius: 8px; overflow-x: auto; max-height: 50vh; font-family: monospace; font-size: 0.8rem; text-align: left;"></pre>
-            <div id="modal-actions" style="margin-top: 1.5rem; text-align: right;">
-                <button class="btn btn-secondary" style="width: auto;" onclick="closeModal()">Close</button>
+            
+            <!-- View Mode -->
+            <pre id="modal-body-view" style="background: #090810; color: #fff; padding: 1.5rem; border-radius: 8px; overflow-x: auto; max-height: 55vh; font-family: monospace; font-size: 0.8rem; text-align: left; margin: 0;"></pre>
+            
+            <!-- Edit Mode -->
+            <div id="modal-body-edit-container" style="display: none; flex-direction: column; gap: 0.5rem;">
+                <textarea id="modal-body-edit" style="width: 100%; height: 50vh; background: #090810; color: #fff; border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; font-family: monospace; font-size: 0.8rem; resize: vertical; outline: none;"></textarea>
+                <div style="font-size: 0.75rem; color: var(--text-muted);">
+                    Tip: You can modify fields directly (e.g. Practitioner NIK, Location ID) before sending the payload. Keep standard JSON format.
+                </div>
+            </div>
+
+            <div id="modal-actions" style="margin-top: 1.5rem; display: flex; justify-content: flex-end; gap: 0.75rem;">
+                <button class="btn btn-secondary" id="modal-cancel-btn" style="width: auto;" onclick="closeModal()">Close</button>
+                <button class="btn" id="modal-submit-btn" style="width: auto; display: none;">Sync Override</button>
             </div>
         </div>
     </div>
