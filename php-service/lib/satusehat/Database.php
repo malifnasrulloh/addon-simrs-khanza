@@ -194,6 +194,20 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for Specimen Lab PK state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS specimen_lab_pk_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
+
+        // Table for Specimen Lab MB state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS specimen_lab_mb_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -763,6 +777,46 @@ class SatuSehatDatabase
         $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
         $stmt = $this->sqlite->prepare("
             INSERT INTO servicerequest_lab_mb_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    public function getSpecimenLabPKLocalState(string $noorder, string $kdJenisPrw, int $idTemplate): ?string
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM specimen_lab_pk_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateSpecimenLabPKLocalState(string $noorder, string $kdJenisPrw, int $idTemplate, string $status): void
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO specimen_lab_pk_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    public function getSpecimenLabMBLocalState(string $noorder, string $kdJenisPrw, int $idTemplate): ?string
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM specimen_lab_mb_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateSpecimenLabMBLocalState(string $noorder, string $kdJenisPrw, int $idTemplate, string $status): void
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO specimen_lab_mb_state (composite_key, status, updated_at) 
             VALUES (:ck, :st, CURRENT_TIMESTAMP)
             ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
         ");
@@ -2720,7 +2774,8 @@ class SatuSehatDatabase
                 rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
                 pl.noorder, pl.tgl_sampel, pl.jam_sampel, tl.Pemeriksaan,
                 sml.sampel_code, sml.sampel_system, sml.sampel_display, sssl.id_servicerequest,
-                pdpl.id_template, '' as id_specimen, pdpl.kd_jenis_prw
+                pdpl.id_template, '' as id_specimen, pdpl.kd_jenis_prw,
+                rp.tgl_registrasi, rp.jam_reg
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN permintaan_lab pl ON pl.no_rawat = rp.no_rawat
@@ -2749,7 +2804,8 @@ class SatuSehatDatabase
                 rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
                 pl.noorder, pl.tgl_sampel, pl.jam_sampel, tl.Pemeriksaan,
                 sml.sampel_code, sml.sampel_system, sml.sampel_display, sssl.id_servicerequest,
-                pdpl.id_template, sssp.id_specimen, pdpl.kd_jenis_prw
+                pdpl.id_template, sssp.id_specimen, pdpl.kd_jenis_prw,
+                rp.tgl_registrasi, rp.jam_reg
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN permintaan_lab pl ON pl.no_rawat = rp.no_rawat
@@ -2799,7 +2855,8 @@ class SatuSehatDatabase
                 rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
                 pl.noorder, pl.tgl_sampel, pl.jam_sampel, tl.Pemeriksaan,
                 sml.sampel_code, sml.sampel_system, sml.sampel_display, sssl.id_servicerequest,
-                pdpl.id_template, '' as id_specimen, pdpl.kd_jenis_prw
+                pdpl.id_template, '' as id_specimen, pdpl.kd_jenis_prw,
+                rp.tgl_registrasi, rp.jam_reg
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN permintaan_labmb pl ON pl.no_rawat = rp.no_rawat
@@ -2828,7 +2885,8 @@ class SatuSehatDatabase
                 rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
                 pl.noorder, pl.tgl_sampel, pl.jam_sampel, tl.Pemeriksaan,
                 sml.sampel_code, sml.sampel_system, sml.sampel_display, sssl.id_servicerequest,
-                pdpl.id_template, sssp.id_specimen, pdpl.kd_jenis_prw
+                pdpl.id_template, sssp.id_specimen, pdpl.kd_jenis_prw,
+                rp.tgl_registrasi, rp.jam_reg
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN permintaan_labmb pl ON pl.no_rawat = rp.no_rawat

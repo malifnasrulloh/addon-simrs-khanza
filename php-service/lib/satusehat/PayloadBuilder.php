@@ -1867,10 +1867,29 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idSpecimen = ''
     ): array {
+        $tgl = $p['tgl_sampel'];
         $time = !empty($p['jam_sampel']) && $p['jam_sampel'] !== '00:00:00' 
             ? $p['jam_sampel'] 
             : '00:00:00';
-        $receivedTime = $p['tgl_sampel'] . 'T' . $time . '+07:00';
+
+        $year = (int)substr($tgl, 0, 4);
+        if ($year < 2014) {
+            if (!empty($p['tgl_registrasi'])) {
+                $tgl = $p['tgl_registrasi'];
+                $time = !empty($p['jam_reg']) && $p['jam_reg'] !== '00:00:00' ? $p['jam_reg'] : '00:00:00';
+            } else {
+                $tgl = date('Y-m-d');
+                $time = date('H:i:s');
+            }
+        }
+        $receivedTime = $tgl . 'T' . $time . '+07:00';
+
+        $sampelSystem = !empty($p['sampel_system']) ? trim($p['sampel_system']) : '';
+        if (strpos($sampelSystem, 'snomed.info') !== false) {
+            $sampelSystem = 'http://snomed.info/sct';
+        }
+        $sampelCode = !empty($p['sampel_code']) ? trim($p['sampel_code']) : '';
+        $sampelDisplay = !empty($p['sampel_display']) ? trim($p['sampel_display']) : '';
 
         $payload = [
             'resourceType' => 'Specimen',
@@ -1884,9 +1903,9 @@ class SatuSehatPayloadBuilder
             'type' => [
                 'coding' => [
                     [
-                        'system'  => !empty($p['sampel_system']) ? $p['sampel_system'] : '',
-                        'code'    => !empty($p['sampel_code']) ? $p['sampel_code'] : '',
-                        'display' => !empty($p['sampel_display']) ? $p['sampel_display'] : ''
+                        'system'  => $sampelSystem,
+                        'code'    => $sampelCode,
+                        'display' => $sampelDisplay
                     ]
                 ]
             ],

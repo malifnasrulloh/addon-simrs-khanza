@@ -77,6 +77,13 @@ class SatuSehatSpecimenLabPkProcessor
             $kdJenisPrw = $p['kd_jenis_prw'];
             $pemeriksaan = $p['Pemeriksaan'];
 
+            // Local state check to prevent resubmitting terminal failures or already sync'd records
+            $localState = $this->db->getSpecimenLabPKLocalState($noorder, $kdJenisPrw, $idTemplate);
+            if ($localState === 'active' || $localState === 'updated' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
 
             if (!$idPasien) {
@@ -97,26 +104,63 @@ class SatuSehatSpecimenLabPkProcessor
             if ($result['success'] && isset($result['data']['id'])) {
                 $idSpecimen = $result['data']['id'];
                 $this->db->saveSpecimenLabPK($noorder, $kdJenisPrw, $idTemplate, $idSpecimen);
+                $this->db->updateSpecimenLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'active');
                 $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Created Specimen {$idSpecimen}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
                 
                 // Duplicate Handling Fallback using identifier
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                $isDuplicate = false;
+                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
+                    $isDuplicate = true;
+                } elseif ($result['code'] === 400 && isset($result['data']['issue'])) {
+                    foreach ($result['data']['issue'] as $issue) {
+                        $issueText = $issue['details']['text'] ?? $issue['diagnostics'] ?? '';
+                        if (stripos($issueText, 'duplicate') !== false || stripos($issueText, 'RuleNumber: 20002') !== false) {
+                            $isDuplicate = true;
+                            break;
+                        }
+                    }
+                }
+
+                if ($isDuplicate) {
                     $this->log->warning("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: Duplicated Specimen detected. Searching existing records...");
                     $idSpecimen = $this->resolveDuplicateSpecimen($noorder, $idTemplate);
 
-                    if ($idSpecimen) {
+                    if ($idSpecimen && $idSpecimen !== false) {
                         $this->db->saveSpecimenLabPK($noorder, $kdJenisPrw, $idTemplate, $idSpecimen);
+                        $this->db->updateSpecimenLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'active');
                         $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Recovered Specimen {$idSpecimen} from Satu Sehat");
                         $this->successCount++;
                     } else {
+                        if ($idSpecimen === false) {
+                            $this->log->warning("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: API error during duplicate recovery. Skipped.");
+                            $this->failCount++;
+                            continue;
+                        }
                         $this->log->error("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed to recover duplicate Specimen.");
                         $this->failCount++;
                     }
                 } else {
                     $this->log->warning("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
+                    
+                    // Categorize and cache permanent/terminal failures
+                    $state = 'fail';
+                    $isTransient = ($result['code'] === 429 || ($result['code'] >= 500 && $result['code'] <= 599) || $result['code'] === 0);
+                    if (!$isTransient) {
+                        if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                            $state = 'privacy_error';
+                        } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                            $state = 'invalid_code';
+                        } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false || stripos($errorMessage, 'date') !== false) {
+                            $state = 'failed_rule';
+                        }
+
+                        if ($state !== 'fail') {
+                            $this->db->updateSpecimenLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, $state);
+                        }
+                    }
                     $this->failCount++;
                 }
             }
@@ -143,6 +187,13 @@ class SatuSehatSpecimenLabPkProcessor
             $pemeriksaan = $p['Pemeriksaan'];
             $idSpecimen = $p['id_specimen'];
 
+            // Local state check to prevent resubmitting terminal failures or already updated records
+            $localState = $this->db->getSpecimenLabPKLocalState($noorder, $kdJenisPrw, $idTemplate);
+            if ($localState === 'updated' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
 
             if (!$idPasien) {
@@ -162,23 +213,51 @@ class SatuSehatSpecimenLabPkProcessor
             $result = $this->api->put("/Specimen/{$idSpecimen}", $payload);
 
             if ($result['success']) {
+                $this->db->updateSpecimenLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'updated');
                 $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Updated Specimen {$idSpecimen}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $this->log->warning("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
+                
+                // Categorize and cache permanent/terminal failures
+                $state = 'fail';
+                $isTransient = ($result['code'] === 429 || ($result['code'] >= 500 && $result['code'] <= 599) || $result['code'] === 0);
+                if (!$isTransient) {
+                    if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                        $state = 'privacy_error';
+                    } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                        $state = 'invalid_code';
+                    } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false || stripos($errorMessage, 'date') !== false) {
+                        $state = 'failed_rule';
+                    }
+
+                    if ($state !== 'fail') {
+                        $this->db->updateSpecimenLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, $state);
+                    }
+                }
                 $this->failCount++;
             }
         }
     }
 
-    private function resolveDuplicateSpecimen(string $noorder, int $idTemplate): ?string
+    /**
+     * Resolves an existing Specimen in Satu Sehat by its identifier.
+     * 
+     * @return string|null|false Returns ID string if found, null if definitely not found, or false on API error.
+     */
+    private function resolveDuplicateSpecimen(string $noorder, int $idTemplate)
     {
         $orgId = $this->config->orgId;
         $identifier = "{$noorder}.{$idTemplate}";
         $endpoint = "/Specimen?identifier=http://sys-ids.kemkes.go.id/specimen/{$orgId}|{$identifier}";
         $result = $this->api->get($endpoint);
 
-        if (!$result['success'] || empty($result['data']['entry'])) {
+        if (!$result['success']) {
+            return false;
+        }
+
+        if (empty($result['data']['entry'])) {
             return null;
         }
 
