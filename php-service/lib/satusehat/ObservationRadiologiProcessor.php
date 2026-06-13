@@ -76,6 +76,37 @@ class SatuSehatObservationRadiologiProcessor
             $kdJenisPrw = $p['kd_jenis_prw'];
             $nmPerawatan = $p['nm_perawatan'];
 
+            // Local state check to prevent resubmitting terminal failures
+            $localState = $this->db->getObservationRadiologiLocalState($noorder, $kdJenisPrw);
+            if ($localState === 'active' || $localState === 'updated' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
+            // Dependency check: ServiceRequest must be synced first
+            if (empty($p['id_servicerequest']) || $p['id_servicerequest'] === '-') {
+                $this->log->warning("[PHASE 1] {$noorder} [{$kdJenisPrw}]: Missing ServiceRequest ID. Skipped.");
+                $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, 'skipped_missing_servicerequest');
+                $this->skipCount++;
+                continue;
+            }
+
+            // Dependency check: ImagingStudy must be synced first
+            if (empty($p['id_imaging']) || $p['id_imaging'] === '-') {
+                $this->log->warning("[PHASE 1] {$noorder} [{$kdJenisPrw}]: Missing ImagingStudy ID. Skipped.");
+                $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, 'skipped_missing_imagingstudy');
+                $this->skipCount++;
+                continue;
+            }
+
+            // Validation: Observation result must not be empty
+            if (empty(trim((string)($p['hasil'] ?? '')))) {
+                $this->log->warning("[PHASE 1] {$noorder} [{$kdJenisPrw}]: Missing Observation Result (hasil is empty). Skipped.");
+                $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, 'skipped_no_hasil');
+                $this->skipCount++;
+                continue;
+            }
+
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_praktisi']);
 
@@ -98,18 +129,33 @@ class SatuSehatObservationRadiologiProcessor
             if ($result['success'] && isset($result['data']['id'])) {
                 $idObservation = $result['data']['id'];
                 $this->db->saveObservationRadiologi($noorder, $kdJenisPrw, $idObservation);
+                $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, 'active');
                 $this->log->info("[PHASE 1] {$noorder} [{$kdJenisPrw}]: ✓ Created Observation {$idObservation}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
                 
                 // Duplicate Handling Fallback using identifier
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                $isDuplicate = false;
+                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
+                    $isDuplicate = true;
+                } elseif ($result['code'] === 400 && isset($result['data']['issue'])) {
+                    foreach ($result['data']['issue'] as $issue) {
+                        $issueText = $issue['details']['text'] ?? $issue['diagnostics'] ?? '';
+                        if (stripos($issueText, 'duplicate') !== false || stripos($issueText, 'RuleNumber: 20002') !== false) {
+                            $isDuplicate = true;
+                            break;
+                        }
+                    }
+                }
+
+                if ($isDuplicate) {
                     $this->log->warning("[PHASE 1] {$noorder} [{$kdJenisPrw}]: Duplicated Observation detected. Searching existing records...");
                     $idObservation = $this->resolveDuplicateObservation($noorder, $kdJenisPrw);
 
                     if ($idObservation) {
                         $this->db->saveObservationRadiologi($noorder, $kdJenisPrw, $idObservation);
+                        $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, 'active');
                         $this->log->info("[PHASE 1] {$noorder} [{$kdJenisPrw}]: ✓ Recovered Observation {$idObservation} from Satu Sehat");
                         $this->successCount++;
                     } else {
@@ -118,6 +164,23 @@ class SatuSehatObservationRadiologiProcessor
                     }
                 } else {
                     $this->log->warning("[PHASE 1] {$noorder} [{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
+                    
+                    // Categorize and cache permanent/terminal failures
+                    $state = 'fail';
+                    $isTransient = ($result['code'] === 429 || ($result['code'] >= 500 && $result['code'] <= 599) || $result['code'] === 0);
+                    if (!$isTransient) {
+                        if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                            $state = 'privacy_error';
+                        } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false || stripos($errorMessage, 'date') !== false) {
+                            $state = 'failed_rule';
+                        } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                            $state = 'invalid_code';
+                        }
+
+                        if ($state !== 'fail') {
+                            $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, $state);
+                        }
+                    }
                     $this->failCount++;
                 }
             }
@@ -143,6 +206,37 @@ class SatuSehatObservationRadiologiProcessor
             $nmPerawatan = $p['nm_perawatan'];
             $idObservation = $p['id_observation'];
 
+            // Local state check to prevent resubmitting terminal failures
+            $localState = $this->db->getObservationRadiologiLocalState($noorder, $kdJenisPrw);
+            if ($localState === 'updated' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
+            // Dependency check: ServiceRequest must be synced first
+            if (empty($p['id_servicerequest']) || $p['id_servicerequest'] === '-') {
+                $this->log->warning("[PHASE 2] {$noorder} [{$kdJenisPrw}]: Missing ServiceRequest ID. Skipped.");
+                $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, 'skipped_missing_servicerequest');
+                $this->skipCount++;
+                continue;
+            }
+
+            // Dependency check: ImagingStudy must be synced first
+            if (empty($p['id_imaging']) || $p['id_imaging'] === '-') {
+                $this->log->warning("[PHASE 2] {$noorder} [{$kdJenisPrw}]: Missing ImagingStudy ID. Skipped.");
+                $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, 'skipped_missing_imagingstudy');
+                $this->skipCount++;
+                continue;
+            }
+
+            // Validation: Observation result must not be empty
+            if (empty(trim((string)($p['hasil'] ?? '')))) {
+                $this->log->warning("[PHASE 2] {$noorder} [{$kdJenisPrw}]: Missing Observation Result (hasil is empty). Skipped.");
+                $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, 'skipped_no_hasil');
+                $this->skipCount++;
+                continue;
+            }
+
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_praktisi']);
 
@@ -164,10 +258,29 @@ class SatuSehatObservationRadiologiProcessor
             $result = $this->api->put("/Observation/{$idObservation}", $payload);
 
             if ($result['success']) {
+                $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, 'updated');
                 $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: ✓ Updated Observation {$idObservation}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noorder} [{$kdJenisPrw}]: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $this->log->warning("[PHASE 2] {$noorder} [{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
+                
+                // Categorize and cache permanent/terminal failures
+                $state = 'fail';
+                $isTransient = ($result['code'] === 429 || ($result['code'] >= 500 && $result['code'] <= 599) || $result['code'] === 0);
+                if (!$isTransient) {
+                    if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                        $state = 'privacy_error';
+                    } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false || stripos($errorMessage, 'date') !== false) {
+                        $state = 'failed_rule';
+                    } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                        $state = 'invalid_code';
+                    }
+
+                    if ($state !== 'fail') {
+                        $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, $state);
+                    }
+                }
                 $this->failCount++;
             }
         }

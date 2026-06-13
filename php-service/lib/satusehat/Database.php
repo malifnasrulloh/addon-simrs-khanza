@@ -210,6 +210,34 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for ServiceRequest Radiologi state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS servicerequest_radiologi_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
+
+        // Table for Specimen Radiologi state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS specimen_radiologi_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
+
+        // Table for Observation Radiologi state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS observation_radiologi_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
+
+        // Table for DiagnosticReport Radiologi state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS diagnosticreport_radiologi_state (
+            composite_key VARCHAR(150) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -819,6 +847,88 @@ class SatuSehatDatabase
         $compositeKey = "{$noorder}_{$kdJenisPrw}_{$idTemplate}";
         $stmt = $this->sqlite->prepare("
             INSERT INTO specimen_lab_mb_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    // ─── RADIOLOGY STATE TRACKING ────────────────────────────────────────────────────────
+
+    public function getServiceRequestRadiologiLocalState(string $noorder, string $kdJenisPrw): ?string
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM servicerequest_radiologi_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateServiceRequestRadiologiLocalState(string $noorder, string $kdJenisPrw, string $status): void
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO servicerequest_radiologi_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    public function getSpecimenRadiologiLocalState(string $noorder, string $kdJenisPrw): ?string
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM specimen_radiologi_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateSpecimenRadiologiLocalState(string $noorder, string $kdJenisPrw, string $status): void
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO specimen_radiologi_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    public function getObservationRadiologiLocalState(string $noorder, string $kdJenisPrw): ?string
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM observation_radiologi_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateObservationRadiologiLocalState(string $noorder, string $kdJenisPrw, string $status): void
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO observation_radiologi_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $status]);
+    }
+
+    public function getDiagnosticReportRadiologiLocalState(string $noorder, string $kdJenisPrw): ?string
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}";
+        $stmt = $this->sqlite->prepare("SELECT status FROM diagnosticreport_radiologi_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateDiagnosticReportRadiologiLocalState(string $noorder, string $kdJenisPrw, string $status): void
+    {
+        $compositeKey = "{$noorder}_{$kdJenisPrw}";
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO diagnosticreport_radiologi_state (composite_key, status, updated_at) 
             VALUES (:ck, :st, CURRENT_TIMESTAMP)
             ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
         ");

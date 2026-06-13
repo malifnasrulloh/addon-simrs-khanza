@@ -76,6 +76,13 @@ class SatuSehatServiceRequestRadiologiProcessor
             $kdJenisPrw = $p['kd_jenis_prw'];
             $nmPerawatan = $p['nm_perawatan'];
 
+            // Local state check to prevent resubmitting terminal failures
+            $localState = $this->db->getServiceRequestRadiologiLocalState($noorder, $kdJenisPrw);
+            if ($localState === 'active' || $localState === 'updated' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_praktisi']);
 
@@ -98,19 +105,34 @@ class SatuSehatServiceRequestRadiologiProcessor
             if ($result['success'] && isset($result['data']['id'])) {
                 $idServiceRequest = $result['data']['id'];
                 $this->db->saveServiceRequestRadiologi($noorder, $kdJenisPrw, $idServiceRequest);
+                $this->db->updateServiceRequestRadiologiLocalState($noorder, $kdJenisPrw, 'active');
                 $this->log->info("[PHASE 1] {$noorder} [{$kdJenisPrw}]: ✓ Created ServiceRequest {$idServiceRequest}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
                 
                 // Duplicate Handling Fallback using deterministic ACSN
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                $isDuplicate = false;
+                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
+                    $isDuplicate = true;
+                } elseif ($result['code'] === 400 && isset($result['data']['issue'])) {
+                    foreach ($result['data']['issue'] as $issue) {
+                        $issueText = $issue['details']['text'] ?? $issue['diagnostics'] ?? '';
+                        if (stripos($issueText, 'duplicate') !== false || stripos($issueText, 'RuleNumber: 20002') !== false) {
+                            $isDuplicate = true;
+                            break;
+                        }
+                    }
+                }
+
+                if ($isDuplicate) {
                     $acsn = SatuSehatPayloadBuilder::buildAcsn($noorder, $kdJenisPrw);
                     $this->log->warning("[PHASE 1] {$noorder} [{$kdJenisPrw}]: Duplicated ServiceRequest detected. Searching existing records for ACSN: {$acsn}...");
                     $idServiceRequest = $this->resolveDuplicateServiceRequest($acsn);
 
                     if ($idServiceRequest) {
                         $this->db->saveServiceRequestRadiologi($noorder, $kdJenisPrw, $idServiceRequest);
+                        $this->db->updateServiceRequestRadiologiLocalState($noorder, $kdJenisPrw, 'active');
                         $this->log->info("[PHASE 1] {$noorder} [{$kdJenisPrw}]: ✓ Recovered ServiceRequest {$idServiceRequest} from Satu Sehat");
                         $this->successCount++;
                     } else {
@@ -119,6 +141,23 @@ class SatuSehatServiceRequestRadiologiProcessor
                     }
                 } else {
                     $this->log->warning("[PHASE 1] {$noorder} [{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
+                    
+                    // Categorize and cache permanent/terminal failures
+                    $state = 'fail';
+                    $isTransient = ($result['code'] === 429 || ($result['code'] >= 500 && $result['code'] <= 599) || $result['code'] === 0);
+                    if (!$isTransient) {
+                        if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                            $state = 'privacy_error';
+                        } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false || stripos($errorMessage, 'date') !== false) {
+                            $state = 'failed_rule';
+                        } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                            $state = 'invalid_code';
+                        }
+
+                        if ($state !== 'fail') {
+                            $this->db->updateServiceRequestRadiologiLocalState($noorder, $kdJenisPrw, $state);
+                        }
+                    }
                     $this->failCount++;
                 }
             }
@@ -144,6 +183,13 @@ class SatuSehatServiceRequestRadiologiProcessor
             $nmPerawatan = $p['nm_perawatan'];
             $idServiceRequest = $p['id_servicerequest'];
 
+            // Local state check to prevent resubmitting terminal failures
+            $localState = $this->db->getServiceRequestRadiologiLocalState($noorder, $kdJenisPrw);
+            if ($localState === 'updated' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_praktisi']);
 
@@ -165,10 +211,29 @@ class SatuSehatServiceRequestRadiologiProcessor
             $result = $this->api->put("/ServiceRequest/{$idServiceRequest}", $payload);
 
             if ($result['success']) {
+                $this->db->updateServiceRequestRadiologiLocalState($noorder, $kdJenisPrw, 'updated');
                 $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: ✓ Updated ServiceRequest {$idServiceRequest}");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noorder} [{$kdJenisPrw}]: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $this->log->warning("[PHASE 2] {$noorder} [{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
+                
+                // Categorize and cache permanent/terminal failures
+                $state = 'fail';
+                $isTransient = ($result['code'] === 429 || ($result['code'] >= 500 && $result['code'] <= 599) || $result['code'] === 0);
+                if (!$isTransient) {
+                    if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
+                        $state = 'privacy_error';
+                    } elseif (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false || stripos($errorMessage, 'date') !== false) {
+                        $state = 'failed_rule';
+                    } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
+                        $state = 'invalid_code';
+                    }
+
+                    if ($state !== 'fail') {
+                        $this->db->updateServiceRequestRadiologiLocalState($noorder, $kdJenisPrw, $state);
+                    }
+                }
                 $this->failCount++;
             }
         }
