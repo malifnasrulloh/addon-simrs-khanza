@@ -332,6 +332,7 @@ async function loadAnalytics() {
             renderAnalyticsTrends(res.trends);
             renderAnalyticsErrors(res.top_errors);
             renderAnalyticsCoverage(res.coverage);
+            renderBlockingReasons(res.blocking_reasons);
             if (content) content.style.opacity = '1';
         } else {
             throw new Error(res.message || 'Analytics error');
@@ -422,6 +423,34 @@ function renderAnalyticsCoverage(coverage) {
             </div>
             <div style="height: 6px; background-color: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden;">
                 <div style="height: 100%; width: ${stats.percent}%; background-color: ${barColor}; transition: width 0.3s ease;"></div>
+            </div>
+        `;
+        container.appendChild(itemDiv);
+    });
+}
+
+function renderBlockingReasons(reasons) {
+    const container = document.getElementById('blocking-reasons-list');
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (!reasons || Object.keys(reasons).length === 0) {
+        container.innerHTML = '<div style="padding: 1.5rem; text-align: center; color: #4ade80;">🎉 No sync blockers in the last 7 days! All systems clear.</div>';
+        return;
+    }
+
+    Object.entries(reasons).forEach(([reason, count]) => {
+        const itemDiv = document.createElement('div');
+        itemDiv.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
+        itemDiv.style.paddingBottom = '0.75rem';
+        itemDiv.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
+                <span style="font-size: 0.85rem; color: #fbbf24; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80%;" title="${reason}">
+                    ${reason}
+                </span>
+                <span class="badge" style="background-color: rgba(251, 191, 36, 0.15); color: #fbbf24;">
+                    ${count} items
+                </span>
             </div>
         `;
         container.appendChild(itemDiv);

@@ -3027,11 +3027,121 @@ if ($action === 'getAnalyticsStats' && $method === 'GET') {
             if ($count >= 5) break;
         }
 
+        // Detailed blocking reasons breakdown within lookback period
+        $blockingReasons = [];
+
+        // 1. Unpaid Registration (Encounter)
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) FROM reg_periksa rp
+            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            WHERE sse.id_encounter IS NULL
+              AND rp.status_bayar = 'Belum Bayar'
+              AND rp.tgl_registrasi BETWEEN :df AND :dt
+        ");
+        $stmt->execute(['df' => $df, 'dt' => $dt]);
+        $unpaid = (int)$stmt->fetchColumn();
+        if ($unpaid > 0) {
+            $blockingReasons['Unpaid Registration (Encounter)'] = $unpaid;
+        }
+
+        // 2. Unmapped Clinic Location (Encounter)
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) FROM reg_periksa rp
+            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = rp.kd_poli
+            WHERE sse.id_encounter IS NULL
+              AND (smlr.id_lokasi_satusehat IS NULL OR smlr.id_lokasi_satusehat = '')
+              AND rp.tgl_registrasi BETWEEN :df AND :dt
+        ");
+        $stmt->execute(['df' => $df, 'dt' => $dt]);
+        $unmappedLoc = (int)$stmt->fetchColumn();
+        if ($unmappedLoc > 0) {
+            $blockingReasons['Unmapped Clinic Location (Encounter)'] = $unmappedLoc;
+        }
+
+        // 3. Encounter Not Synced Yet (Condition)
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) FROM diagnosa_pasien dp
+            INNER JOIN reg_periksa rp ON dp.no_rawat = rp.no_rawat
+            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = dp.no_rawat AND ssc.kd_penyakit = dp.kd_penyakit AND ssc.status = dp.status
+            WHERE sse.id_encounter IS NULL
+              AND ssc.id_condition IS NULL
+              AND rp.tgl_registrasi BETWEEN :df AND :dt
+        ");
+        $stmt->execute(['df' => $df, 'dt' => $dt]);
+        $nosyncCond = (int)$stmt->fetchColumn();
+        if ($nosyncCond > 0) {
+            $blockingReasons['Encounter Not Synced (Condition)'] = $nosyncCond;
+        }
+
+        // 4. Encounter Not Synced Yet (Procedure)
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) FROM prosedur_pasien pp
+            INNER JOIN reg_periksa rp ON pp.no_rawat = rp.no_rawat
+            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            LEFT JOIN satu_sehat_procedure ssp ON ssp.no_rawat = pp.no_rawat AND ssp.kode = pp.kode
+            WHERE sse.id_encounter IS NULL
+              AND ssp.id_procedure IS NULL
+              AND rp.tgl_registrasi BETWEEN :df AND :dt
+        ");
+        $stmt->execute(['df' => $df, 'dt' => $dt]);
+        $nosyncProc = (int)$stmt->fetchColumn();
+        if ($nosyncProc > 0) {
+            $blockingReasons['Encounter Not Synced (Procedure)'] = $nosyncProc;
+        }
+
+        // 5. Unmapped Medication Code (Prescription)
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) FROM detail_pemberian_obat dpo
+            INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+            LEFT JOIN satu_sehat_medication_request ssmr ON ssmr.no_rawat = dpo.no_rawat AND ssmr.kode_brng = dpo.kode_brng AND ssmr.tgl_perawatan = dpo.tgl_perawatan
+            WHERE ssmr.id_medication_request IS NULL
+              AND (ssmo.obat_code IS NULL OR ssmo.obat_code = '')
+              AND dpo.tgl_perawatan BETWEEN :df AND :dt
+        ");
+        $stmt->execute(['df' => $df, 'dt' => $dt]);
+        $unmappedMed = (int)$stmt->fetchColumn();
+        if ($unmappedMed > 0) {
+            $blockingReasons['Unmapped Medication Code (Prescription)'] = $unmappedMed;
+        }
+
+        // 6. Unmapped Vaccine Code (Immunization)
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) FROM detail_pemberian_obat dpo
+            INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+            LEFT JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng
+            LEFT JOIN satu_sehat_immunization ssi ON ssi.no_rawat = dpo.no_rawat AND ssi.kode_brng = dpo.kode_brng AND ssi.tgl_perawatan = dpo.tgl_perawatan
+            WHERE ssi.id_immunization IS NULL
+              AND (smv.vaksin_kodifikasi IS NULL OR smv.vaksin_kodifikasi = '')
+              AND dpo.tgl_perawatan BETWEEN :df AND :dt
+        ");
+        $stmt->execute(['df' => $df, 'dt' => $dt]);
+        $unmappedVac = (int)$stmt->fetchColumn();
+        if ($unmappedVac > 0) {
+            $blockingReasons['Unmapped Vaccine Code (Immunization)'] = $unmappedVac;
+        }
+
+        // 7. Unmapped Practitioner NIK (Master Data)
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) FROM pegawai peg
+            LEFT JOIN satu_sehat_ihs_practitioner ssip ON ssip.nikpegawai = peg.nik
+            WHERE (ssip.ihspegawai IS NULL OR ssip.ihspegawai = '') AND peg.no_ktp REGEXP '^[0-9]{16}$'
+        ");
+        $stmt->execute();
+        $unmappedDoc = (int)$stmt->fetchColumn();
+        if ($unmappedDoc > 0) {
+            $blockingReasons['Unmapped Practitioner NIK (Master Data)'] = $unmappedDoc;
+        }
+
         jsonResponse([
             'success' => true,
             'trends' => $trends,
             'coverage' => $coverage,
-            'top_errors' => $topErrors
+            'top_errors' => $topErrors,
+            'blocking_reasons' => $blockingReasons
         ]);
 
     } catch (Exception $e) {

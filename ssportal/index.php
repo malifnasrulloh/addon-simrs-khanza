@@ -110,15 +110,19 @@ header('Content-Type: text/html; charset=utf-8');
                         </div>
                     </div>
 
-                    <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 1.5rem; margin-top: 1.5rem;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1.5rem;">
+                        <div class="glass" style="padding: 1.5rem; background: rgba(255,255,255,0.02)">
+                            <h3 style="margin-bottom: 1rem;">Active Synchronization Blockers (Last 7 Days)</h3>
+                            <div id="blocking-reasons-list" style="display: flex; flex-direction: column; gap: 0.85rem; max-height: 250px; overflow-y: auto; padding-right: 0.5rem;"></div>
+                        </div>
                         <div class="glass" style="padding: 1.5rem; background: rgba(255,255,255,0.02)">
                             <h3 style="margin-bottom: 1rem;">Top Common API Sync Errors (Last 3 Days)</h3>
                             <div id="top-errors-list" style="display: flex; flex-direction: column; gap: 1rem;"></div>
                         </div>
-                        <div class="glass" style="padding: 1.5rem; background: rgba(255,255,255,0.02)">
-                            <h3 style="margin-bottom: 1rem;">Resource Coverage Rates (Last 7 Days)</h3>
-                            <div id="coverage-rates-list" style="display: flex; flex-direction: column; gap: 0.85rem; max-height: 250px; overflow-y: auto; padding-right: 0.5rem;"></div>
-                        </div>
+                    </div>
+                    <div class="glass" style="padding: 1.5rem; background: rgba(255,255,255,0.02); margin-top: 1.5rem;">
+                        <h3 style="margin-bottom: 1rem;">Resource Coverage Rates (Last 7 Days)</h3>
+                        <div id="coverage-rates-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1.25rem;"></div>
                     </div>
                 </div>
             </div>
