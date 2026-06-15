@@ -207,13 +207,13 @@ if ($action === 'getUnmappedEntities' && $method === 'GET') {
                     SELECT db.kode_brng as `key`, db.nama_brng as `name`, NULL as extra
                     FROM databarang db
                     LEFT JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = db.kode_brng
-                    WHERE smv.vaksin_kodifikasi IS NULL OR smv.vaksin_kodifikasi = ''
+                    WHERE smv.vaksin_code IS NULL OR smv.vaksin_code = ''
                 ";
                 $countSql = "
                     SELECT COUNT(*) as cnt
                     FROM databarang db
                     LEFT JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = db.kode_brng
-                    WHERE smv.vaksin_kodifikasi IS NULL OR smv.vaksin_kodifikasi = ''
+                    WHERE smv.vaksin_code IS NULL OR smv.vaksin_code = ''
                 ";
                 if ($search) {
                     $sql .= " AND (db.kode_brng LIKE :search OR db.nama_brng LIKE :search)";
@@ -324,10 +324,10 @@ if ($action === 'saveMapping' && $method === 'POST') {
                 $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_mapping_vaksin WHERE kode_brng = ?");
                 $checkStmt->execute([$key]);
                 if ((int)$checkStmt->fetchColumn() > 0) {
-                    $stmt = $pdo->prepare("UPDATE satu_sehat_mapping_vaksin SET vaksin_kodifikasi = ? WHERE kode_brng = ?");
+                    $stmt = $pdo->prepare("UPDATE satu_sehat_mapping_vaksin SET vaksin_code = ?, vaksin_system = 'http://sys-ids.kemkes.go.id/kfa' WHERE kode_brng = ?");
                     $stmt->execute([$value, $key]);
                 } else {
-                    $stmt = $pdo->prepare("INSERT INTO satu_sehat_mapping_vaksin (kode_brng, vaksin_kodifikasi, vaksin_nama) VALUES (?, ?, ?)");
+                    $stmt = $pdo->prepare("INSERT INTO satu_sehat_mapping_vaksin (kode_brng, vaksin_code, vaksin_display, vaksin_system) VALUES (?, ?, ?, 'http://sys-ids.kemkes.go.id/kfa')");
                     $stmt->execute([$key, $value, $brngName]);
                 }
                 break;
@@ -1159,7 +1159,7 @@ if ($action === 'getSyncStats' && $method === 'GET') {
                     INNER JOIN permintaan_lab pl ON pdpl.noorder = pl.noorder
                     INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
                     LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-                    LEFT JOIN satu_sehat_mapping_lab sml ON sml.kd_jenis_prw = pdpl.kd_jenis_prw AND sml.id_template = pdpl.id_template
+                    LEFT JOIN satu_sehat_mapping_lab sml ON sml.id_template = pdpl.id_template
                     WHERE {$timeFilter} AND (sse.id_encounter IS NULL OR sml.code IS NULL OR sml.code = '')
                 ");
                 $stmtBlocked->execute($params);
@@ -1312,7 +1312,7 @@ if ($action === 'getSyncStats' && $method === 'GET') {
                     INNER JOIN permintaan_labmb pl ON pdpl.noorder = pl.noorder
                     INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
                     LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-                    LEFT JOIN satu_sehat_mapping_lab sml ON sml.kd_jenis_prw = pdpl.kd_jenis_prw AND sml.id_template = pdpl.id_template
+                    LEFT JOIN satu_sehat_mapping_lab sml ON sml.id_template = pdpl.id_template
                     WHERE {$timeFilter} AND (sse.id_encounter IS NULL OR sml.code IS NULL OR sml.code = '')
                 ");
                 $stmtBlocked->execute($params);
@@ -2278,16 +2278,16 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                         (CASE 
                             WHEN ssi.id_immunization IS NOT NULL THEN 'synced'
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
-                            WHEN smv.vaksin_kodifikasi IS NULL OR smv.vaksin_kodifikasi = '' THEN 'blocked'
+                            WHEN smv.vaksin_code IS NULL OR smv.vaksin_code = '' THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
                         (CASE 
                             WHEN ssi.id_immunization IS NOT NULL THEN NULL
                             WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
-                            WHEN smv.vaksin_kodifikasi IS NULL OR smv.vaksin_kodifikasi = '' THEN 'Unmapped Vaccine Code'
+                            WHEN smv.vaksin_code IS NULL OR smv.vaksin_code = '' THEN 'Unmapped Vaccine Code'
                             ELSE NULL
                          END) as blocked_reason,
-                         ssi.id_immunization as ihs_id
+                          ssi.id_immunization as ihs_id
                     FROM detail_pemberian_obat dpo
                     INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
@@ -2340,25 +2340,26 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                         dpo.tgl_perawatan as date,
                         db.nama_brng as details,
                         (CASE 
-                            WHEN ssmr.id_medication_request IS NOT NULL THEN 'synced'
+                            WHEN ssmr.id_medicationrequest IS NOT NULL THEN 'synced'
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
                             WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
                         (CASE 
-                            WHEN ssmr.id_medication_request IS NOT NULL THEN NULL
+                            WHEN ssmr.id_medicationrequest IS NOT NULL THEN NULL
                             WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
                             WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'Unmapped Medication Code'
                             ELSE NULL
                          END) as blocked_reason,
-                         ssmr.id_medication_request as ihs_id
+                          ssmr.id_medicationrequest as ihs_id
                     FROM detail_pemberian_obat dpo
                     INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                     INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
                     LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
                     LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-                    LEFT JOIN satu_sehat_medication_request ssmr ON ssmr.no_rawat = dpo.no_rawat AND ssmr.kode_brng = dpo.kode_brng AND ssmr.tgl_perawatan = dpo.tgl_perawatan
+                    LEFT JOIN resep_obat ro ON ro.no_rawat = dpo.no_rawat
+                    LEFT JOIN satu_sehat_medicationrequest ssmr ON ssmr.no_resep = ro.no_resep AND ssmr.kode_brng = dpo.kode_brng
                     WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
                 ";
                 $params['df'] = $dateFrom;
@@ -2381,25 +2382,30 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                         dpo.tgl_perawatan as date,
                         db.nama_brng as details,
                         (CASE 
-                            WHEN ssmd.id_medication_dispense IS NOT NULL THEN 'synced'
+                            WHEN ssmd.id_medicationdispanse IS NOT NULL THEN 'synced'
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
                             WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
                         (CASE 
-                            WHEN ssmd.id_medication_dispense IS NOT NULL THEN NULL
+                            WHEN ssmd.id_medicationdispanse IS NOT NULL THEN NULL
                             WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
                             WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'Unmapped Medication Code'
                             ELSE NULL
                          END) as blocked_reason,
-                         ssmd.id_medication_dispense as ihs_id
+                          ssmd.id_medicationdispanse as ihs_id
                     FROM detail_pemberian_obat dpo
                     INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                     INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
                     LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
                     LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-                    LEFT JOIN satu_sehat_medication_dispense ssmd ON ssmd.no_rawat = dpo.no_rawat AND ssmd.kode_brng = dpo.kode_brng AND ssmd.tgl_perawatan = dpo.tgl_perawatan
+                    LEFT JOIN satu_sehat_medicationdispense ssmd ON ssmd.no_rawat = dpo.no_rawat 
+                        AND ssmd.kode_brng = dpo.kode_brng 
+                        AND ssmd.tgl_perawatan = dpo.tgl_perawatan
+                        AND ssmd.jam = dpo.jam
+                        AND ssmd.no_batch = dpo.no_batch
+                        AND ssmd.no_faktur = dpo.no_faktur
                     WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
                 ";
                 $params['df'] = $dateFrom;
@@ -2422,25 +2428,26 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                         dpo.tgl_perawatan as date,
                         db.nama_brng as details,
                         (CASE 
-                            WHEN ssms.id_medication_statement IS NOT NULL THEN 'synced'
+                            WHEN ssms.id_medicationstatement IS NOT NULL THEN 'synced'
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
                             WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
                         (CASE 
-                            WHEN ssms.id_medication_statement IS NOT NULL THEN NULL
+                            WHEN ssms.id_medicationstatement IS NOT NULL THEN NULL
                             WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
                             WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'Unmapped Medication Code'
                             ELSE NULL
                          END) as blocked_reason,
-                         ssms.id_medication_statement as ihs_id
+                          ssms.id_medicationstatement as ihs_id
                     FROM detail_pemberian_obat dpo
                     INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                     INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
                     LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
                     LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-                    LEFT JOIN satu_sehat_medication_statement ssms ON ssms.no_rawat = dpo.no_rawat AND ssms.kode_brng = dpo.kode_brng AND ssms.tgl_perawatan = dpo.tgl_perawatan
+                    LEFT JOIN resep_obat ro ON ro.no_rawat = dpo.no_rawat
+                    LEFT JOIN satu_sehat_medicationstatement ssms ON ssms.no_resep = ro.no_resep AND ssms.kode_brng = dpo.kode_brng
                     WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
                 ";
                 $params['df'] = $dateFrom;
@@ -2681,7 +2688,7 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                     INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                     LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-                    LEFT JOIN satu_sehat_mapping_lab sml ON sml.kd_jenis_prw = pdpl.kd_jenis_prw AND sml.id_template = pdpl.id_template
+                    LEFT JOIN satu_sehat_mapping_lab sml ON sml.id_template = pdpl.id_template
                     LEFT JOIN satu_sehat_servicerequest_lab ssr ON ssr.noorder = pdpl.noorder AND ssr.kd_jenis_prw = pdpl.kd_jenis_prw AND ssr.id_template = pdpl.id_template
                     WHERE pl.tgl_permintaan BETWEEN :df AND :dt
                 ";
@@ -2836,7 +2843,7 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                     INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                     LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-                    LEFT JOIN satu_sehat_mapping_lab sml ON sml.kd_jenis_prw = pdpl.kd_jenis_prw AND sml.id_template = pdpl.id_template
+                    LEFT JOIN satu_sehat_mapping_lab sml ON sml.id_template = pdpl.id_template
                     LEFT JOIN satu_sehat_servicerequest_lab_mb ssr ON ssr.noorder = pdpl.noorder AND ssr.kd_jenis_prw = pdpl.kd_jenis_prw AND ssr.id_template = pdpl.id_template
                     WHERE pl.tgl_permintaan BETWEEN :df AND :dt
                 ";
@@ -3363,8 +3370,9 @@ if ($action === 'getAnalyticsStats' && $method === 'GET') {
             INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
             LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
-            LEFT JOIN satu_sehat_medication_request ssmr ON ssmr.no_rawat = dpo.no_rawat AND ssmr.kode_brng = dpo.kode_brng AND ssmr.tgl_perawatan = dpo.tgl_perawatan
-            WHERE ssmr.id_medication_request IS NULL
+            LEFT JOIN resep_obat ro ON ro.no_rawat = dpo.no_rawat
+            LEFT JOIN satu_sehat_medicationrequest ssmr ON ssmr.no_resep = ro.no_resep AND ssmr.kode_brng = dpo.kode_brng
+            WHERE ssmr.id_medicationrequest IS NULL
               AND (ssmo.obat_code IS NULL OR ssmo.obat_code = '')
               AND dpo.tgl_perawatan BETWEEN :df AND :dt
         ");
@@ -3381,7 +3389,7 @@ if ($action === 'getAnalyticsStats' && $method === 'GET') {
             LEFT JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng
             LEFT JOIN satu_sehat_immunization ssi ON ssi.no_rawat = dpo.no_rawat AND ssi.kode_brng = dpo.kode_brng AND ssi.tgl_perawatan = dpo.tgl_perawatan
             WHERE ssi.id_immunization IS NULL
-              AND (smv.vaksin_kodifikasi IS NULL OR smv.vaksin_kodifikasi = '')
+              AND (smv.vaksin_code IS NULL OR smv.vaksin_code = '')
               AND dpo.tgl_perawatan BETWEEN :df AND :dt
         ");
         $stmt->execute(['df' => $df, 'dt' => $dt]);
