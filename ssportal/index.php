@@ -194,6 +194,7 @@ header('Content-Type: text/html; charset=utf-8');
                                 <option value="condition">Condition (Diagnosis)</option>
                                 <option value="observationttv">Observation TTV (Vitals)</option>
                                 <option value="procedure">Procedure</option>
+                                <option value="careplan">CarePlan</option>
                                 <option value="allergyintolerance">Allergy Intolerance</option>
                                 <option value="immunization">Immunization</option>
                             </optgroup>

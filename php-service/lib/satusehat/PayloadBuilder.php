@@ -519,6 +519,86 @@ class SatuSehatPayloadBuilder
     }
 
     /**
+     * Build CarePlan payload.
+     *
+     * @param string $orgId        SATUSEHAT_ORG_ID from config
+     * @param array  $p            CarePlan data row
+     * @param string $idPasien     IHS Patient ID
+     * @param string $idDokter     IHS Practitioner ID
+     * @param string $idCarePlan   Existing CarePlan ID (if updating)
+     * @return array
+     */
+    public static function carePlan(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $idCarePlan = ''
+    ): array {
+        $isRalan = ($p['status_lanjut'] === 'Ralan');
+        $createdTime = str_replace(' ', 'T', $p['tgl_perawatan'] . ' ' . $p['jam_rawat']) . '+07:00';
+        $waktuRegistrasi = $p['tgl_registrasi'] . ' ' . $p['jam_reg'];
+
+        // Clean description: replacing newlines with <br>, tab characters with space
+        $description = str_replace(["\r\n", "\r", "\n", "\n\r"], '<br>', $p['rtl']);
+        $description = str_replace("\t", ' ', $description);
+
+        if (($p['kd_poli'] ?? '') === 'IGDK') {
+            $categoryCoding = [
+                'system'  => 'http://terminology.kemkes.go.id',
+                'code'    => 'TK000068',
+                'display' => 'Emergency care plan'
+            ];
+        } else {
+            $categoryCoding = [
+                'system'  => 'http://snomed.info/sct',
+                'code'    => $isRalan ? '736271009' : '736353004',
+                'display' => $isRalan ? 'Outpatient care plan' : 'Inpatient care plan'
+            ];
+        }
+
+        $payload = [
+            'resourceType' => 'CarePlan',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/careplan/' . $orgId,
+                    'value'  => $p['no_rawat']
+                ]
+            ],
+            'title' => 'Instruksi Medik dan Keperawatan Pasien',
+            'status' => 'active',
+            'intent' => 'plan',
+            'category' => [
+                [
+                    'coding' => [
+                        $categoryCoding
+                    ]
+                ]
+            ],
+            'description' => $description,
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Kunjungan ' . $p['nm_pasien'] . ' pada tanggal ' . $waktuRegistrasi . ' dengan nomor kunjungan ' . $p['no_rawat']
+            ],
+            'created' => $createdTime,
+            'author' => [
+                'reference' => 'Practitioner/' . $idDokter,
+                'display'   => $p['nama']
+            ]
+        ];
+
+        if (!empty($idCarePlan)) {
+            $payload['id'] = $idCarePlan;
+        }
+
+        return $payload;
+    }
+
+    /**
      * Build AllergyIntolerance payload.
      *
      * @param array  $a            Patient/Allergy data row

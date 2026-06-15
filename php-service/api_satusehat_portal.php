@@ -826,6 +826,64 @@ if ($action === 'getSyncStats' && $method === 'GET') {
                 ];
                 break;
 
+            case 'careplan':
+                if ($noRawat) {
+                    $stmtTotal = $pdo->prepare("
+                        SELECT 
+                            (SELECT COUNT(*) FROM pemeriksaan_ralan pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.no_rawat = :nr AND pr.rtl <> '') +
+                            (SELECT COUNT(*) FROM pemeriksaan_ranap pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.no_rawat = :nr2 AND pr.rtl <> '')
+                    ");
+                    $stmtTotal->execute(['nr' => $noRawat, 'nr2' => $noRawat]);
+                    $total = (int)$stmtTotal->fetchColumn();
+
+                    $stmtBlocked = $pdo->prepare("
+                        SELECT 
+                            (SELECT COUNT(*) FROM pemeriksaan_ralan pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat WHERE rp.no_rawat = :nr AND pr.rtl <> '' AND sse.id_encounter IS NULL) +
+                            (SELECT COUNT(*) FROM pemeriksaan_ranap pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat WHERE rp.no_rawat = :nr2 AND pr.rtl <> '' AND sse.id_encounter IS NULL)
+                    ");
+                    $stmtBlocked->execute(['nr' => $noRawat, 'nr2' => $noRawat]);
+                    $blocked = (int)$stmtBlocked->fetchColumn();
+
+                    $stmtSynced = $pdo->prepare("
+                        SELECT COUNT(*) FROM satu_sehat_careplan ssc
+                        WHERE ssc.no_rawat = :nr
+                    ");
+                    $stmtSynced->execute(['nr' => $noRawat]);
+                    $synced = (int)$stmtSynced->fetchColumn();
+                } else {
+                    $stmtTotal = $pdo->prepare("
+                        SELECT 
+                            (SELECT COUNT(*) FROM pemeriksaan_ralan pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND pr.rtl <> '') +
+                            (SELECT COUNT(*) FROM pemeriksaan_ranap pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2 AND pr.rtl <> '')
+                    ");
+                    $stmtTotal->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+                    $total = (int)$stmtTotal->fetchColumn();
+
+                    $stmtBlocked = $pdo->prepare("
+                        SELECT 
+                            (SELECT COUNT(*) FROM pemeriksaan_ralan pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND pr.rtl <> '' AND sse.id_encounter IS NULL) +
+                            (SELECT COUNT(*) FROM pemeriksaan_ranap pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2 AND pr.rtl <> '' AND sse.id_encounter IS NULL)
+                    ");
+                    $stmtBlocked->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+                    $blocked = (int)$stmtBlocked->fetchColumn();
+
+                    $stmtSynced = $pdo->prepare("
+                        SELECT COUNT(*) FROM satu_sehat_careplan ssc
+                        INNER JOIN reg_periksa rp ON ssc.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtSynced->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+                    $synced = (int)$stmtSynced->fetchColumn();
+                }
+
+                $stats = [
+                    'total' => $total,
+                    'blocked' => $blocked,
+                    'synced' => $synced,
+                    'pending' => max(0, $total - $blocked - $synced)
+                ];
+                break;
+
             case 'procedure':
                 $stmtTotal = $pdo->prepare("
                     SELECT COUNT(*) FROM prosedur_pasien pp 
@@ -1775,6 +1833,64 @@ if ($action === 'previewFHIRPayload' && $method === 'GET') {
 
             $idPasien = $db->getIhsPatient($p['no_ktp']);
             $payload = SatuSehatPayloadBuilder::procedure($p, $idPasien, $p['id_procedure'] ?? '');
+        } else if ($resource === 'careplan') {
+            // key format: noRawat-YYYYMMDD-HHMMSS-status
+            $parts = explode('-', $key);
+            $noRawat = $parts[0];
+            $tgl = isset($parts[1]) && strlen($parts[1]) === 8 ? substr($parts[1], 0, 4) . '-' . substr($parts[1], 4, 2) . '-' . substr($parts[1], 6, 2) : '';
+            $jam = isset($parts[2]) && strlen($parts[2]) === 6 ? substr($parts[2], 0, 2) . ':' . substr($parts[2], 2, 2) . ':' . substr($parts[2], 4, 2) : '';
+            $statusLanjut = $parts[3] ?? '';
+
+            if ($statusLanjut === 'Ralan') {
+                $sql = "
+                    SELECT 
+                        rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                        p.nm_pasien, p.no_ktp, sse.id_encounter, pr.rtl, 
+                        pg.nama, pg.no_ktp as ktppraktisi, pr.tgl_perawatan, pr.jam_rawat, 
+                        ssc.id_careplan, 'Ralan' as status_lanjut, rp.kd_poli
+                    FROM reg_periksa rp 
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
+                    INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                    INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat 
+                    INNER JOIN pegawai pg ON pr.nip = pg.nik 
+                    LEFT JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pr.no_rawat 
+                        AND ssc.tgl_perawatan = pr.tgl_perawatan 
+                        AND ssc.jam_rawat = pr.jam_rawat 
+                        AND ssc.status = 'Ralan'
+                    WHERE pr.no_rawat = :nr AND pr.tgl_perawatan = :tgl AND pr.jam_rawat = :jam
+                ";
+            } else {
+                $sql = "
+                    SELECT 
+                        rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                        p.nm_pasien, p.no_ktp, sse.id_encounter, pi.rtl, 
+                        pg.nama, pg.no_ktp as ktppraktisi, pi.tgl_perawatan, pi.jam_rawat, 
+                        ssc.id_careplan, 'Ranap' as status_lanjut, rp.kd_poli
+                    FROM reg_periksa rp 
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
+                    INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                    INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat 
+                    INNER JOIN pegawai pg ON pi.nip = pg.nik 
+                    LEFT JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pi.no_rawat 
+                        AND ssc.tgl_perawatan = pi.tgl_perawatan 
+                        AND ssc.jam_rawat = pi.jam_rawat 
+                        AND ssc.status = 'Ranap'
+                    WHERE pi.no_rawat = :nr AND pi.tgl_perawatan = :tgl AND pi.jam_rawat = :jam
+                ";
+            }
+
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute(['nr' => $noRawat, 'tgl' => $tgl, 'jam' => $jam]);
+            $p = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$p) jsonResponse(['success' => false, 'message' => 'CarePlan record not found.'], 404);
+
+            $idPasien = $db->getIhsPatient($p['no_ktp']);
+            if (!$idPasien) jsonResponse(['success' => false, 'message' => 'Missing Patient IHS ID.'], 400);
+
+            $idDokter = $db->getIhsPractitioner($p['ktppraktisi']);
+            if (!$idDokter) jsonResponse(['success' => false, 'message' => 'Missing Practitioner IHS ID.'], 400);
+
+            $payload = SatuSehatPayloadBuilder::carePlan($config->orgId, $p, $idPasien, $idDokter, $p['id_careplan'] ?? '');
         } else {
             jsonResponse(['success' => false, 'message' => "Preview payload for resource '{$resource}' is not supported yet. You can still query this resource using the FHIR Explorer."], 400);
         }
@@ -1850,6 +1966,14 @@ if ($action === 'syncFHIRPayloadOverride' && $method === 'POST') {
                 $kode = $parts[1] ?? '';
                 $status = $payloadObj['status'] ?? 'completed';
                 $db->saveProcedure($noRawat, $kode, $status, $savedId);
+            } else if ($resource === 'careplan') {
+                $parts = explode('-', $key);
+                $noRawat = $parts[0];
+                $tgl = isset($parts[1]) && strlen($parts[1]) === 8 ? substr($parts[1], 0, 4) . '-' . substr($parts[1], 4, 2) . '-' . substr($parts[1], 6, 2) : '';
+                $jam = isset($parts[2]) && strlen($parts[2]) === 6 ? substr($parts[2], 0, 2) . ':' . substr($parts[2], 2, 2) . ':' . substr($parts[2], 4, 2) : '';
+                $statusLanjut = $parts[3] ?? '';
+                $db->saveCarePlan($noRawat, $tgl, $jam, $statusLanjut, $savedId);
+                $db->updateCarePlanLocalState($noRawat, $tgl, $jam, $statusLanjut, $methodType === 'PUT' ? 'updated' : 'active');
             }
 
             jsonResponse([
@@ -1999,6 +2123,7 @@ if ($action === 'triggerBatchSync' && $method === 'POST') {
             'condition' => ['class' => 'SatuSehatConditionProcessor', 'file' => 'ConditionProcessor.php', 'method_type' => 'condition'],
             'observationttv' => ['class' => 'SatuSehatObservationTTVProcessor', 'file' => 'ObservationTTVProcessor.php', 'method_type' => 'observationttv'],
             'procedure' => ['class' => 'SatuSehatProcedureProcessor', 'file' => 'ProcedureProcessor.php', 'method_type' => 'procedure'],
+            'careplan' => ['class' => 'SatuSehatCarePlanProcessor', 'file' => 'CarePlanProcessor.php', 'method_type' => 'careplan'],
             'allergyintolerance' => ['class' => 'SatuSehatAllergyIntoleranceProcessor', 'file' => 'AllergyIntoleranceProcessor.php', 'method_type' => 'allergy'],
             'immunization' => ['class' => 'SatuSehatImmunizationProcessor', 'file' => 'ImmunizationProcessor.php', 'method_type' => 'immunization'],
             'medication' => ['class' => 'SatuSehatMedicationProcessor', 'file' => 'MedicationProcessor.php', 'method_type' => 'medication'],
@@ -2089,6 +2214,9 @@ if ($action === 'triggerBatchSync' && $method === 'POST') {
                 } elseif ($type === 'allergy') {
                     $activeFetchMethod = 'fetchPendingAllergyActive';
                     $updateFetchMethod = 'fetchPendingAllergyUpdate';
+                } elseif ($type === 'careplan') {
+                    $activeFetchMethod = 'fetchPendingCarePlanActive';
+                    $updateFetchMethod = 'fetchPendingCarePlanUpdate';
                 } elseif ($type === 'encounter') {
                     $activeFetchMethod = 'fetchPendingArrived';
                     $updateFetchMethod = 'fetchPendingInProgress';
@@ -4113,6 +4241,7 @@ function executeWorkflowSync($pdo, SatuSehatDatabase $db, SatuSehatClient $clien
         'condition' => ['class' => 'SatuSehatConditionProcessor', 'file' => 'ConditionProcessor.php', 'type' => 'condition'],
         'observationttv' => ['class' => 'SatuSehatObservationTTVProcessor', 'file' => 'ObservationTTVProcessor.php', 'type' => 'observationttv'],
         'procedure' => ['class' => 'SatuSehatProcedureProcessor', 'file' => 'ProcedureProcessor.php', 'type' => 'procedure'],
+        'careplan' => ['class' => 'SatuSehatCarePlanProcessor', 'file' => 'CarePlanProcessor.php', 'type' => 'careplan'],
         'allergyintolerance' => ['class' => 'SatuSehatAllergyIntoleranceProcessor', 'file' => 'AllergyIntoleranceProcessor.php', 'type' => 'allergy'],
         'immunization' => ['class' => 'SatuSehatImmunizationProcessor', 'file' => 'ImmunizationProcessor.php', 'type' => 'immunization'],
         'medicationrequest' => ['class' => 'SatuSehatMedicationRequestProcessor', 'file' => 'MedicationRequestProcessor.php', 'type' => 'medicationrequest'],
@@ -4153,6 +4282,9 @@ function executeWorkflowSync($pdo, SatuSehatDatabase $db, SatuSehatClient $clien
                 } elseif ($type === 'allergy') {
                     $activeFetchMethod = 'fetchPendingAllergyActive';
                     $updateFetchMethod = 'fetchPendingAllergyUpdate';
+                } elseif ($type === 'careplan') {
+                    $activeFetchMethod = 'fetchPendingCarePlanActive';
+                    $updateFetchMethod = 'fetchPendingCarePlanUpdate';
                 } elseif ($type === 'encounter') {
                     $activeFetchMethod = 'fetchPendingArrived';
                     $updateFetchMethod = 'fetchPendingInProgress';

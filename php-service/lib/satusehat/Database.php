@@ -92,6 +92,13 @@ class SatuSehatDatabase
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
 
+        // Table for CarePlan state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS careplan_state (
+            composite_key VARCHAR(100) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
+
         // Table for AllergyIntolerance state tracking
         $this->sqlite->exec("CREATE TABLE IF NOT EXISTS allergyintolerance_state (
             composite_key VARCHAR(100) PRIMARY KEY,
@@ -1140,6 +1147,140 @@ class SatuSehatDatabase
             'st'  => $status,
             'id'  => $idProcedure,
             'id2' => $idProcedure
+        ]);
+    }
+
+    // ─── CAREPLAN STATE TRACKING ─────────────────────────────────────────────────────────
+
+    public function getCarePlanLocalState(string $noRawat, string $tglPerawatan, string $jamRawat, string $status): ?string
+    {
+        $compositeKey = md5($noRawat . '_' . $tglPerawatan . '_' . $jamRawat . '_' . $status);
+        $stmt = $this->sqlite->prepare("SELECT status FROM careplan_state WHERE composite_key = :ck");
+        $stmt->execute(['ck' => $compositeKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateCarePlanLocalState(string $noRawat, string $tglPerawatan, string $jamRawat, string $status, string $localStatus): void
+    {
+        $compositeKey = md5($noRawat . '_' . $tglPerawatan . '_' . $jamRawat . '_' . $status);
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO careplan_state (composite_key, status, updated_at) 
+            VALUES (:ck, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute(['ck' => $compositeKey, 'st' => $localStatus]);
+    }
+
+    // ─── CAREPLAN MYSQL OPERATIONS ───────────────────────────────────────────────────────
+
+    public function fetchPendingCarePlanActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT * FROM (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                    p.nm_pasien, p.no_ktp, sse.id_encounter, pr.rtl, 
+                    pg.nama, pg.no_ktp as ktppraktisi, pr.tgl_perawatan, pr.jam_rawat, 
+                    ssc.id_careplan, 'Ralan' as status_lanjut, rp.kd_poli
+                FROM reg_periksa rp 
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat 
+                INNER JOIN pegawai pg ON pr.nip = pg.nik 
+                LEFT JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pr.no_rawat 
+                    AND ssc.tgl_perawatan = pr.tgl_perawatan 
+                    AND ssc.jam_rawat = pr.jam_rawat 
+                    AND ssc.status = 'Ralan'
+                WHERE pr.rtl <> '' 
+                  AND rp.tgl_registrasi BETWEEN :df AND :dt
+                  AND ssc.id_careplan IS NULL
+
+                UNION ALL
+
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                    p.nm_pasien, p.no_ktp, sse.id_encounter, pi.rtl, 
+                    pg.nama, pg.no_ktp as ktppraktisi, pi.tgl_perawatan, pi.jam_rawat, 
+                    ssc.id_careplan, 'Ranap' as status_lanjut, rp.kd_poli
+                FROM reg_periksa rp 
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat 
+                INNER JOIN pegawai pg ON pi.nip = pg.nik 
+                LEFT JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pi.no_rawat 
+                    AND ssc.tgl_perawatan = pi.tgl_perawatan 
+                    AND ssc.jam_rawat = pi.jam_rawat 
+                    AND ssc.status = 'Ranap'
+                WHERE pi.rtl <> '' 
+                  AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+                  AND ssc.id_careplan IS NULL
+            ) AS combined
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function fetchPendingCarePlanUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT * FROM (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                    p.nm_pasien, p.no_ktp, sse.id_encounter, pr.rtl, 
+                    pg.nama, pg.no_ktp as ktppraktisi, pr.tgl_perawatan, pr.jam_rawat, 
+                    ssc.id_careplan, 'Ralan' as status_lanjut, rp.kd_poli
+                FROM reg_periksa rp 
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat 
+                INNER JOIN pegawai pg ON pr.nip = pg.nik 
+                INNER JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pr.no_rawat 
+                    AND ssc.tgl_perawatan = pr.tgl_perawatan 
+                    AND ssc.jam_rawat = pr.jam_rawat 
+                    AND ssc.status = 'Ralan'
+                WHERE pr.rtl <> '' 
+                  AND rp.tgl_registrasi BETWEEN :df AND :dt
+
+                UNION ALL
+
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                    p.nm_pasien, p.no_ktp, sse.id_encounter, pi.rtl, 
+                    pg.nama, pg.no_ktp as ktppraktisi, pi.tgl_perawatan, pi.jam_rawat, 
+                    ssc.id_careplan, 'Ranap' as status_lanjut, rp.kd_poli
+                FROM reg_periksa rp 
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
+                INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat 
+                INNER JOIN pegawai pg ON pi.nip = pg.nik 
+                INNER JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pi.no_rawat 
+                    AND ssc.tgl_perawatan = pi.tgl_perawatan 
+                    AND ssc.jam_rawat = pi.jam_rawat 
+                    AND ssc.status = 'Ranap'
+                WHERE pi.rtl <> '' 
+                  AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+            ) AS combined
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function saveCarePlan(string $noRawat, string $tglPerawatan, string $jamRawat, string $status, string $idCarePlan): bool
+    {
+        $sql = "INSERT INTO satu_sehat_careplan (no_rawat, tgl_perawatan, jam_rawat, status, id_careplan) 
+                VALUES (:nr, :tgl, :jam, :st, :id) 
+                ON DUPLICATE KEY UPDATE id_careplan = :id2";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'nr'   => $noRawat,
+            'tgl'  => $tglPerawatan,
+            'jam'  => $jamRawat,
+            'st'   => $status,
+            'id'   => $idCarePlan,
+            'id2'  => $idCarePlan
         ]);
     }
 
@@ -3771,6 +3912,56 @@ class SatuSehatDatabase
                     if ($pending < 0) $pending = 0;
 
                     $this->log->info("   ├─ Total Procedures in SIMRS           : {$total}");
+                    $this->log->info("   ├─ Blocked (No Parent Encounter Created): {$noEnc}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
+                case 'careplan':
+                    $sqlTotal = "
+                        SELECT COUNT(*) FROM (
+                            SELECT pr.no_rawat FROM pemeriksaan_ralan pr 
+                            INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat 
+                            WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND pr.rtl <> ''
+                            UNION ALL
+                            SELECT pi.no_rawat FROM pemeriksaan_ranap pi 
+                            INNER JOIN reg_periksa rp ON pi.no_rawat = rp.no_rawat 
+                            WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2 AND pi.rtl <> ''
+                        ) AS combined
+                    ";
+                    $stmtTotal = $this->mysql->prepare($sqlTotal);
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt, 'df2' => $df, 'dt2' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $sqlNoEnc = "
+                        SELECT COUNT(*) FROM (
+                            SELECT pr.no_rawat FROM pemeriksaan_ralan pr 
+                            INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat 
+                            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                            WHERE rp.tgl_registrasi BETWEEN :df AND :dt AND pr.rtl <> '' AND sse.id_encounter IS NULL
+                            UNION ALL
+                            SELECT pi.no_rawat FROM pemeriksaan_ranap pi 
+                            INNER JOIN reg_periksa rp ON pi.no_rawat = rp.no_rawat 
+                            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                            WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2 AND pi.rtl <> '' AND sse.id_encounter IS NULL
+                        ) AS combined
+                    ";
+                    $stmtNoEnc = $this->mysql->prepare($sqlNoEnc);
+                    $stmtNoEnc->execute(['df' => $df, 'dt' => $dt, 'df2' => $df, 'dt2' => $dt]);
+                    $noEnc = (int) $stmtNoEnc->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM satu_sehat_careplan ssc
+                        INNER JOIN reg_periksa rp ON ssc.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $noEnc - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total CarePlan Records in SIMRS      : {$total}");
                     $this->log->info("   ├─ Blocked (No Parent Encounter Created): {$noEnc}");
                     $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
                     $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");

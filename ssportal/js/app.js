@@ -776,7 +776,7 @@ async function loadSyncRecords(targetPage = 1) {
                 else if (r.status === 'failed') statusBadge = `<span class="badge danger" title="${r.message || ''}">Failed</span>`;
                 else statusBadge = '<span class="badge warning">Pending</span>';
 
-                const isPreviewable = ['encounter', 'condition', 'procedure'].includes(selectedResource.toLowerCase());
+                const isPreviewable = ['encounter', 'condition', 'procedure', 'careplan'].includes(selectedResource.toLowerCase());
                 const actionBtn = `
                     <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
                         ${isPreviewable ? `<button class="btn btn-secondary" style="width: auto; height: 32px; padding: 0 0.5rem; font-size: 0.8rem; border-color: rgba(168, 85, 247, 0.4); color: var(--text-muted);" onclick="openPayloadEditor('${selectedResource}', '${r.id}')" title="Edit/Preview FHIR JSON">JSON</button>` : ''}
