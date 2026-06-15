@@ -503,6 +503,115 @@ if ($action === 'getSyncStats' && $method === 'GET') {
         $timeFilter = $noRawat ? "rp.no_rawat = :nr" : "rp.tgl_registrasi BETWEEN :df AND :dt";
         
         switch (strtolower($resource)) {
+            case 'workflow':
+                if (!$noRawat) {
+                    $stats = [
+                        'total' => 11,
+                        'synced' => 0,
+                        'pending' => 11,
+                        'blocked' => 0
+                    ];
+                } else {
+                    // Check patient mapping
+                    $stmt = $pdo->prepare("
+                        SELECT p.no_ktp, ssp.ihspasien 
+                        FROM reg_periksa rp
+                        INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                        LEFT JOIN satu_sehat_ihs_patient ssp ON ssp.nikpasien = p.no_ktp
+                        WHERE rp.no_rawat = :nr
+                    ");
+                    $stmt->execute(['nr' => $noRawat]);
+                    $rowPatient = $stmt->fetch(PDO::FETCH_ASSOC);
+                    $patientSynced = ($rowPatient && !empty($rowPatient['ihspasien']) && $rowPatient['ihspasien'] !== '-') ? 1 : 0;
+                    
+                    // Check encounter
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_encounter WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $encounterSynced = ((int)$stmt->fetchColumn() > 0) ? 1 : 0;
+
+                    // Check EOC
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_episode_of_care WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $eocSynced = ((int)$stmt->fetchColumn() > 0) ? 1 : 0;
+
+                    // Check condition
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM diagnosa_pasien WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $condTotal = (int)$stmt->fetchColumn();
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_condition WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $condSynced = (int)$stmt->fetchColumn();
+                    $condOk = ($condTotal > 0 && $condSynced >= $condTotal) ? 1 : 0;
+
+                    // Check observationttv
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM pemeriksaan_ralan WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $ttvTotal = (int)$stmt->fetchColumn();
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_observationttvsuhu WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $ttvSynced = (int)$stmt->fetchColumn();
+                    $ttvOk = ($ttvTotal > 0 && $ttvSynced > 0) ? 1 : 0;
+
+                    // Check procedure
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM prosedur_pasien WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $procTotal = (int)$stmt->fetchColumn();
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_procedure WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $procSynced = (int)$stmt->fetchColumn();
+                    $procOk = ($procTotal > 0 && $procSynced >= $procTotal) ? 1 : 0;
+
+                    // Check allergy
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM pemeriksaan_ralan WHERE no_rawat = ? AND alergi <> ''");
+                    $stmt->execute([$noRawat]);
+                    $allergyTotal = (int)$stmt->fetchColumn();
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_allergy_intolerance WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $allergySynced = (int)$stmt->fetchColumn();
+                    $allergyOk = ($allergyTotal > 0 && $allergySynced >= $allergyTotal) ? 1 : 0;
+
+                    // Check immunization
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM detail_pemberian_obat dpo INNER JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng WHERE dpo.no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $immTotal = (int)$stmt->fetchColumn();
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_immunization WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $immSynced = (int)$stmt->fetchColumn();
+                    $immOk = ($immTotal > 0 && $immSynced >= $immTotal) ? 1 : 0;
+
+                    // Check medicationrequest
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM resep_dokter rd INNER JOIN resep_obat ro ON rd.no_resep = ro.no_resep WHERE ro.no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $medreqTotal = (int)$stmt->fetchColumn();
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_medicationrequest WHERE no_resep IN (SELECT no_resep FROM resep_obat WHERE no_rawat = ?)");
+                    $stmt->execute([$noRawat]);
+                    $medreqSynced = (int)$stmt->fetchColumn();
+                    $medreqOk = ($medreqTotal > 0 && $medreqSynced >= $medreqTotal) ? 1 : 0;
+
+                    // Check medicationdispense
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM detail_pemberian_obat WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $dispTotal = (int)$stmt->fetchColumn();
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_medicationdispense WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $dispSynced = (int)$stmt->fetchColumn();
+                    $dispOk = ($dispTotal > 0 && $dispSynced >= $dispTotal) ? 1 : 0;
+
+                    // Check medicationstatement
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_medicationstatement WHERE no_resep IN (SELECT no_resep FROM resep_obat WHERE no_rawat = ?)");
+                    $stmt->execute([$noRawat]);
+                    $statSynced = (int)$stmt->fetchColumn();
+                    $statOk = ($medreqTotal > 0 && $statSynced >= $medreqTotal) ? 1 : 0;
+
+                    $syncedSteps = $patientSynced + $encounterSynced + $eocSynced + $condOk + $ttvOk + $procOk + $allergyOk + $immOk + $medreqOk + $dispOk + $statOk;
+                    $stats = [
+                        'total' => 11,
+                        'synced' => $syncedSteps,
+                        'pending' => max(0, 11 - $syncedSteps)
+                    ];
+                }
+                break;
+
             case 'patient':
                 if ($noRawat) {
                     $stmt = $pdo->prepare("
@@ -521,12 +630,25 @@ if ($action === 'getSyncStats' && $method === 'GET') {
                         'details' => $row
                     ];
                 } else {
-                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM pasien WHERE no_ktp REGEXP '^[0-9]{16}$'");
-                    $stmt->execute();
+                    $stmt = $pdo->prepare("
+                        SELECT COUNT(DISTINCT p.no_ktp) 
+                        FROM reg_periksa rp
+                        INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                          AND p.no_ktp REGEXP '^[0-9]{16}$'
+                    ");
+                    $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
                     $total = (int)$stmt->fetchColumn();
 
-                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_ihs_patient WHERE nikpasien REGEXP '^[0-9]{16}$'");
-                    $stmt->execute();
+                    $stmt = $pdo->prepare("
+                        SELECT COUNT(DISTINCT p.no_ktp)
+                        FROM reg_periksa rp
+                        INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                        INNER JOIN satu_sehat_ihs_patient ssp ON ssp.nikpasien = p.no_ktp
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                          AND p.no_ktp REGEXP '^[0-9]{16}$'
+                    ");
+                    $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
                     $mapped = (int)$stmt->fetchColumn();
 
                     $stats = [
@@ -818,13 +940,35 @@ if ($action === 'getSyncStats' && $method === 'GET') {
                 break;
 
             case 'medication':
-                $total = (int)$pdo->query("SELECT COUNT(*) FROM databarang")->fetchColumn();
-                $unmapped = (int)$pdo->query("
-                    SELECT COUNT(*) FROM databarang db
-                    LEFT JOIN satu_sehat_mapping_obat ssmo ON db.kode_brng = ssmo.kode_brng
-                    WHERE ssmo.kode_brng IS NULL
-                ")->fetchColumn();
-                $synced = (int)$pdo->query("SELECT COUNT(*) FROM satu_sehat_medication")->fetchColumn();
+                $stmtTotal = $pdo->prepare("
+                    SELECT COUNT(DISTINCT dpo.kode_brng) 
+                    FROM detail_pemberian_obat dpo
+                    INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                    WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                ");
+                $stmtTotal->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+                $total = (int)$stmtTotal->fetchColumn();
+
+                $stmtUnmapped = $pdo->prepare("
+                    SELECT COUNT(DISTINCT dpo.kode_brng) 
+                    FROM detail_pemberian_obat dpo
+                    INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_mapping_obat ssmo ON dpo.kode_brng = ssmo.kode_brng
+                    WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                      AND (ssmo.obat_code IS NULL OR ssmo.obat_code = '')
+                ");
+                $stmtUnmapped->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+                $unmapped = (int)$stmtUnmapped->fetchColumn();
+
+                $stmtSynced = $pdo->prepare("
+                    SELECT COUNT(DISTINCT dpo.kode_brng) 
+                    FROM detail_pemberian_obat dpo
+                    INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                    INNER JOIN satu_sehat_medication ssm ON dpo.kode_brng = ssm.kode_brng
+                    WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                ");
+                $stmtSynced->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+                $synced = (int)$stmtSynced->fetchColumn();
 
                 $stats = [
                     'total' => $total,
@@ -1927,6 +2071,9 @@ if ($action === 'triggerBatchSync' && $method === 'POST') {
                 'specimen_lab_mb' => ['fetchPendingSpecimenLabMBActive', 'fetchPendingSpecimenLabMBUpdate'],
                 'observation_lab_mb' => ['fetchPendingObservationLabMBActive', 'fetchPendingObservationLabMBUpdate'],
                 'diagnosticreport_lab_mb' => ['fetchPendingDiagnosticReportLabMBActive', 'fetchPendingDiagnosticReportLabMBUpdate'],
+                'medicationrequest' => ['fetchPendingMedicationRequestActive', 'fetchPendingMedicationRequestUpdate'],
+                'medicationdispense' => ['fetchPendingMedicationDispenseActive', 'fetchPendingMedicationDispenseUpdate'],
+                'medicationstatement' => ['fetchPendingMedicationStatementActive', 'fetchPendingMedicationStatementUpdate'],
             ];
 
             if (isset($customFetchMethods[$type])) {
@@ -2021,26 +2168,292 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
         $params = [];
 
         switch (strtolower($resource)) {
+            case 'workflow':
+                if (!$noRawat) {
+                    jsonResponse(['success' => true, 'resource' => 'workflow', 'total_count' => 0, 'page' => 1, 'limit' => 20, 'records' => []]);
+                }
+                
+                // Fetch basic registration data
+                $stmt = $pdo->prepare("
+                    SELECT rp.no_rawat, rp.no_rkm_medis as rm, p.nm_pasien as patient_name, p.no_ktp as nik, rp.tgl_registrasi as date
+                    FROM reg_periksa rp
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    WHERE rp.no_rawat = :nr
+                ");
+                $stmt->execute(['nr' => $noRawat]);
+                $reg = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$reg) {
+                    jsonResponse(['success' => true, 'resource' => 'workflow', 'total_count' => 0, 'page' => 1, 'limit' => 20, 'records' => []]);
+                }
+                
+                // Check steps status
+                $records = [];
+                
+                // 1. Patient
+                $stmt = $pdo->prepare("SELECT ihspasien FROM satu_sehat_ihs_patient WHERE nikpasien = ?");
+                $stmt->execute([$reg['nik']]);
+                $ihsPatient = $stmt->fetchColumn();
+                $patientSynced = ($ihsPatient && $ihsPatient !== '-');
+                $records[] = [
+                    'id' => 'patient',
+                    'no_rawat' => $noRawat,
+                    'rm' => $reg['rm'],
+                    'patient_name' => $reg['patient_name'],
+                    'nik' => $reg['nik'],
+                    'date' => $reg['date'],
+                    'details' => 'Step 1: Patient Identity Lookup',
+                    'status' => $patientSynced ? 'synced' : ($ihsPatient === '-' ? 'blocked' : 'pending'),
+                    'blocked_reason' => ($ihsPatient === '-') ? 'Invalid or Unregistered NIK' : null,
+                    'ihs_id' => $patientSynced ? $ihsPatient : null
+                ];
+
+                // 2. Encounter
+                $stmt = $pdo->prepare("SELECT id_encounter FROM satu_sehat_encounter WHERE no_rawat = ?");
+                $stmt->execute([$noRawat]);
+                $idEncounter = $stmt->fetchColumn();
+                $encounterSynced = !empty($idEncounter);
+                $records[] = [
+                    'id' => 'encounter',
+                    'no_rawat' => $noRawat,
+                    'rm' => $reg['rm'],
+                    'patient_name' => $reg['patient_name'],
+                    'nik' => $reg['nik'],
+                    'date' => $reg['date'],
+                    'details' => 'Step 2: Encounter / Visit Registration',
+                    'status' => $encounterSynced ? 'synced' : (!$patientSynced ? 'blocked' : 'pending'),
+                    'blocked_reason' => (!$patientSynced) ? 'Patient Not Synced Yet' : null,
+                    'ihs_id' => $encounterSynced ? $idEncounter : null
+                ];
+
+                // 3. EpisodeOfCare
+                $stmt = $pdo->prepare("SELECT id_episode_of_care FROM satu_sehat_episode_of_care WHERE no_rawat = ?");
+                $stmt->execute([$noRawat]);
+                $idEoc = $stmt->fetchColumn();
+                $eocSynced = !empty($idEoc);
+                $records[] = [
+                    'id' => 'episodeofcare',
+                    'no_rawat' => $noRawat,
+                    'rm' => $reg['rm'],
+                    'patient_name' => $reg['patient_name'],
+                    'nik' => $reg['nik'],
+                    'date' => $reg['date'],
+                    'details' => 'Step 3: Episode of Care',
+                    'status' => $eocSynced ? 'synced' : (!$encounterSynced ? 'blocked' : 'pending'),
+                    'blocked_reason' => (!$encounterSynced) ? 'Encounter Not Synced Yet' : null,
+                    'ihs_id' => $eocSynced ? $idEoc : null
+                ];
+
+                // 4. Condition
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM diagnosa_pasien WHERE no_rawat = ?");
+                $stmt->execute([$noRawat]);
+                $condTotal = (int)$stmt->fetchColumn();
+                $stmt = $pdo->prepare("SELECT id_condition FROM satu_sehat_condition WHERE no_rawat = ? LIMIT 1");
+                $stmt->execute([$noRawat]);
+                $idCond = $stmt->fetchColumn();
+                $condSynced = !empty($idCond);
+                $records[] = [
+                    'id' => 'condition',
+                    'no_rawat' => $noRawat,
+                    'rm' => $reg['rm'],
+                    'patient_name' => $reg['patient_name'],
+                    'nik' => $reg['nik'],
+                    'date' => $reg['date'],
+                    'details' => "Step 4: Clinical Conditions ({$condTotal} diagnoses)",
+                    'status' => $condSynced ? 'synced' : ($condTotal === 0 ? 'synced' : (!$encounterSynced ? 'blocked' : 'pending')),
+                    'blocked_reason' => ($condTotal === 0) ? 'No Diagnosis Records' : ((!$encounterSynced) ? 'Encounter Not Synced Yet' : null),
+                    'ihs_id' => $condSynced ? $idCond : null
+                ];
+
+                // 5. ObservationTTV
+                $stmt = $pdo->prepare("SELECT id_observation FROM satu_sehat_observationttvsuhu WHERE no_rawat = ? LIMIT 1");
+                $stmt->execute([$noRawat]);
+                $idTtv = $stmt->fetchColumn();
+                $ttvSynced = !empty($idTtv);
+                $records[] = [
+                    'id' => 'observationttv',
+                    'no_rawat' => $noRawat,
+                    'rm' => $reg['rm'],
+                    'patient_name' => $reg['patient_name'],
+                    'nik' => $reg['nik'],
+                    'date' => $reg['date'],
+                    'details' => 'Step 5: Vital Signs (TTV) Observations',
+                    'status' => $ttvSynced ? 'synced' : (!$encounterSynced ? 'blocked' : 'pending'),
+                    'blocked_reason' => (!$encounterSynced) ? 'Encounter Not Synced Yet' : null,
+                    'ihs_id' => $ttvSynced ? $idTtv : null
+                ];
+
+                // 6. Procedure
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM prosedur_pasien WHERE no_rawat = ?");
+                $stmt->execute([$noRawat]);
+                $procTotal = (int)$stmt->fetchColumn();
+                $stmt = $pdo->prepare("SELECT id_procedure FROM satu_sehat_procedure WHERE no_rawat = ? LIMIT 1");
+                $stmt->execute([$noRawat]);
+                $idProc = $stmt->fetchColumn();
+                $procSynced = !empty($idProc);
+                $records[] = [
+                    'id' => 'procedure',
+                    'no_rawat' => $noRawat,
+                    'rm' => $reg['rm'],
+                    'patient_name' => $reg['patient_name'],
+                    'nik' => $reg['nik'],
+                    'date' => $reg['date'],
+                    'details' => "Step 6: Medical Procedures ({$procTotal} procedures)",
+                    'status' => $procSynced ? 'synced' : ($procTotal === 0 ? 'synced' : (!$encounterSynced ? 'blocked' : 'pending')),
+                    'blocked_reason' => ($procTotal === 0) ? 'No Procedure Records' : ((!$encounterSynced) ? 'Encounter Not Synced Yet' : null),
+                    'ihs_id' => $procSynced ? $idProc : null
+                ];
+
+                // 7. AllergyIntolerance
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM pemeriksaan_ralan WHERE no_rawat = ? AND alergi <> ''");
+                $stmt->execute([$noRawat]);
+                $allergyTotal = (int)$stmt->fetchColumn();
+                $stmt = $pdo->prepare("SELECT id_allergy_intolerance FROM satu_sehat_allergy_intolerance WHERE no_rawat = ? LIMIT 1");
+                $stmt->execute([$noRawat]);
+                $idAllergy = $stmt->fetchColumn();
+                $allergySynced = !empty($idAllergy);
+                $records[] = [
+                    'id' => 'allergyintolerance',
+                    'no_rawat' => $noRawat,
+                    'rm' => $reg['rm'],
+                    'patient_name' => $reg['patient_name'],
+                    'nik' => $reg['nik'],
+                    'date' => $reg['date'],
+                    'details' => "Step 7: Allergy Intolerance ({$allergyTotal} records)",
+                    'status' => $allergySynced ? 'synced' : ($allergyTotal === 0 ? 'synced' : (!$encounterSynced ? 'blocked' : 'pending')),
+                    'blocked_reason' => ($allergyTotal === 0) ? 'No Allergy Records' : ((!$encounterSynced) ? 'Encounter Not Synced Yet' : null),
+                    'ihs_id' => $idAllergy ? $idAllergy : null
+                ];
+
+                // 8. Immunization
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM detail_pemberian_obat dpo INNER JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng WHERE dpo.no_rawat = ?");
+                $stmt->execute([$noRawat]);
+                $immTotal = (int)$stmt->fetchColumn();
+                $stmt = $pdo->prepare("SELECT id_immunization FROM satu_sehat_immunization WHERE no_rawat = ? LIMIT 1");
+                $stmt->execute([$noRawat]);
+                $idImm = $stmt->fetchColumn();
+                $immSynced = !empty($idImm);
+                $records[] = [
+                    'id' => 'immunization',
+                    'no_rawat' => $noRawat,
+                    'rm' => $reg['rm'],
+                    'patient_name' => $reg['patient_name'],
+                    'nik' => $reg['nik'],
+                    'date' => $reg['date'],
+                    'details' => "Step 8: Immunization Records ({$immTotal} vaccines)",
+                    'status' => $immSynced ? 'synced' : ($immTotal === 0 ? 'synced' : (!$encounterSynced ? 'blocked' : 'pending')),
+                    'blocked_reason' => ($immTotal === 0) ? 'No Vaccine Administered' : ((!$encounterSynced) ? 'Encounter Not Synced Yet' : null),
+                    'ihs_id' => $idImm ? $idImm : null
+                ];
+
+                // 9. MedicationRequest
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM resep_dokter rd INNER JOIN resep_obat ro ON rd.no_resep = ro.no_resep WHERE ro.no_rawat = ?");
+                $stmt->execute([$noRawat]);
+                $medreqTotal = (int)$stmt->fetchColumn();
+                $stmt = $pdo->prepare("SELECT id_medicationrequest FROM satu_sehat_medicationrequest WHERE no_resep IN (SELECT no_resep FROM resep_obat WHERE no_rawat = ?) LIMIT 1");
+                $stmt->execute([$noRawat]);
+                $idMedReq = $stmt->fetchColumn();
+                $medreqSynced = !empty($idMedReq);
+                $records[] = [
+                    'id' => 'medicationrequest',
+                    'no_rawat' => $noRawat,
+                    'rm' => $reg['rm'],
+                    'patient_name' => $reg['patient_name'],
+                    'nik' => $reg['nik'],
+                    'date' => $reg['date'],
+                    'details' => "Step 9: Medication Request (Prescription, {$medreqTotal} items)",
+                    'status' => $medreqSynced ? 'synced' : ($medreqTotal === 0 ? 'synced' : (!$encounterSynced ? 'blocked' : 'pending')),
+                    'blocked_reason' => ($medreqTotal === 0) ? 'No Prescriptions' : ((!$encounterSynced) ? 'Encounter Not Synced Yet' : null),
+                    'ihs_id' => $idMedReq ? $idMedReq : null
+                ];
+
+                // 10. MedicationDispense
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM detail_pemberian_obat WHERE no_rawat = ?");
+                $stmt->execute([$noRawat]);
+                $dispTotal = (int)$stmt->fetchColumn();
+                $stmt = $pdo->prepare("SELECT id_medicationdispanse FROM satu_sehat_medicationdispense WHERE no_rawat = ? LIMIT 1");
+                $stmt->execute([$noRawat]);
+                $idDisp = $stmt->fetchColumn();
+                $dispSynced = !empty($idDisp);
+                $records[] = [
+                    'id' => 'medicationdispense',
+                    'no_rawat' => $noRawat,
+                    'rm' => $reg['rm'],
+                    'patient_name' => $reg['patient_name'],
+                    'nik' => $reg['nik'],
+                    'date' => $reg['date'],
+                    'details' => "Step 10: Medication Dispense (Pharmacy, {$dispTotal} items)",
+                    'status' => $dispSynced ? 'synced' : ($dispTotal === 0 ? 'synced' : (!$encounterSynced ? 'blocked' : 'pending')),
+                    'blocked_reason' => ($dispTotal === 0) ? 'No Dispensed Items' : ((!$encounterSynced) ? 'Encounter Not Synced Yet' : null),
+                    'ihs_id' => $idDisp ? $idDisp : null
+                ];
+
+                // 11. MedicationStatement
+                $stmt = $pdo->prepare("SELECT id_medicationstatement FROM satu_sehat_medicationstatement WHERE no_resep IN (SELECT no_resep FROM resep_obat WHERE no_rawat = ?) LIMIT 1");
+                $stmt->execute([$noRawat]);
+                $idStat = $stmt->fetchColumn();
+                $statSynced = !empty($idStat);
+                $records[] = [
+                    'id' => 'medicationstatement',
+                    'no_rawat' => $noRawat,
+                    'rm' => $reg['rm'],
+                    'patient_name' => $reg['patient_name'],
+                    'nik' => $reg['nik'],
+                    'date' => $reg['date'],
+                    'details' => "Step 11: Medication Statement (Usage Confirmation)",
+                    'status' => $statSynced ? 'synced' : ($medreqTotal === 0 ? 'synced' : (!$encounterSynced ? 'blocked' : 'pending')),
+                    'blocked_reason' => ($medreqTotal === 0) ? 'No Prescriptions' : ((!$encounterSynced) ? 'Encounter Not Synced Yet' : null),
+                    'ihs_id' => $idStat ? $idStat : null
+                ];
+
+                // Apply status filter if not 'all'
+                if ($statusFilter && $statusFilter !== 'all') {
+                    $records = array_values(array_filter($records, function($r) use ($statusFilter) {
+                        return $r['status'] === $statusFilter;
+                    }));
+                }
+
+                jsonResponse([
+                    'success' => true,
+                    'resource' => 'workflow',
+                    'total_count' => count($records),
+                    'page' => 1,
+                    'limit' => 20,
+                    'records' => $records
+                ]);
+
             case 'patient':
                 $sql = "
                     SELECT 
                         p.no_ktp as id,
-                        NULL as no_rawat,
+                        MAX(rp.no_rawat) as no_rawat,
                         p.no_rkm_medis as rm,
                         p.nm_pasien as patient_name,
                         p.no_ktp as nik,
                         p.tgl_lahir as date,
                         p.alamat as details,
-                        IF(ssp.ihspasien IS NOT NULL, 'synced', 'pending') as status,
+                        (CASE 
+                            WHEN ssp.ihspasien IS NOT NULL AND ssp.ihspasien <> '-' AND ssp.ihspasien <> '' THEN 'synced'
+                            WHEN ssp.ihspasien = '-' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN ssp.ihspasien = '-' THEN 'Invalid or Unregistered NIK'
+                            ELSE NULL
+                         END) as blocked_reason,
                         ssp.ihspasien as ihs_id
-                    FROM pasien p
+                    FROM reg_periksa rp
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                     LEFT JOIN satu_sehat_ihs_patient ssp ON ssp.nikpasien = p.no_ktp
-                    WHERE p.no_ktp REGEXP '^[0-9]{16}$'
+                    WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                      AND p.no_ktp REGEXP '^[0-9]{16}$'
                 ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
                 if ($search) {
                     $sql .= " AND (p.nm_pasien LIKE :search OR p.no_ktp LIKE :search OR p.no_rkm_medis LIKE :search)";
                     $params['search'] = "%{$search}%";
                 }
+                $sql .= " GROUP BY p.no_ktp";
                 break;
 
             case 'encounter':
@@ -2315,57 +2728,110 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                         ssmo.obat_code as nik,
                         NULL as date,
                         ssmo.form_display as details,
-                        IF(ssm.id_medication IS NOT NULL AND ssm.id_medication <> '', 'synced', 'pending') as status,
+                        (CASE 
+                            WHEN ssm.id_medication IS NOT NULL AND ssm.id_medication <> '' AND ssm.id_medication <> '-' THEN 'synced'
+                            WHEN ssm.id_medication = '-' THEN 'blocked'
+                            ELSE 'pending'
+                         END) as status,
+                        (CASE 
+                            WHEN ssm.id_medication = '-' THEN 'Invalid or Unregistered Code'
+                            ELSE NULL
+                         END) as blocked_reason,
                         ssm.id_medication as ihs_id
                     FROM satu_sehat_mapping_obat ssmo
                     INNER JOIN databarang db ON ssmo.kode_brng = db.kode_brng
                     LEFT JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
-                    WHERE 1 = 1
+                    INNER JOIN detail_pemberian_obat dpo ON dpo.kode_brng = ssmo.kode_brng
+                    INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
+                    WHERE rp.tgl_registrasi BETWEEN :df AND :dt
                 ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
                 if ($search) {
                     $sql .= " AND (ssmo.obat_display LIKE :search OR ssmo.kode_brng LIKE :search OR ssmo.obat_code LIKE :search)";
                     $params['search'] = "%{$search}%";
                 }
+                $sql .= " GROUP BY ssmo.kode_brng";
                 break;
 
             case 'medicationrequest':
             case 'medication_request':
                 $sql = "
-                    SELECT 
-                        CONCAT(dpo.no_rawat, '-', dpo.kode_brng, '-', dpo.tgl_perawatan) as id,
-                        dpo.no_rawat,
-                        rp.no_rkm_medis as rm,
-                        p.nm_pasien as patient_name,
-                        p.no_ktp as nik,
-                        dpo.tgl_perawatan as date,
-                        db.nama_brng as details,
-                        (CASE 
-                            WHEN ssmr.id_medicationrequest IS NOT NULL THEN 'synced'
-                            WHEN sse.id_encounter IS NULL THEN 'blocked'
-                            WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'blocked'
-                            ELSE 'pending'
-                         END) as status,
-                        (CASE 
-                            WHEN ssmr.id_medicationrequest IS NOT NULL THEN NULL
-                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
-                            WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'Unmapped Medication Code'
-                            ELSE NULL
-                         END) as blocked_reason,
-                          ssmr.id_medicationrequest as ihs_id
-                    FROM detail_pemberian_obat dpo
-                    INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
-                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
-                    INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
-                    LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
-                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-                    LEFT JOIN resep_obat ro ON ro.no_rawat = dpo.no_rawat
-                    LEFT JOIN satu_sehat_medicationrequest ssmr ON ssmr.no_resep = ro.no_resep AND ssmr.kode_brng = dpo.kode_brng
-                    WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
+                    SELECT * FROM (
+                        (
+                            SELECT 
+                                CONCAT(ro.no_resep, '-', rd.kode_brng, '-0') as id,
+                                ro.no_rawat,
+                                rp.no_rkm_medis as rm,
+                                p.nm_pasien as patient_name,
+                                p.no_ktp as nik,
+                                ro.tgl_peresepan as date,
+                                db.nama_brng as details,
+                                (CASE 
+                                    WHEN ssmr.id_medicationrequest IS NOT NULL AND ssmr.id_medicationrequest <> '' AND ssmr.id_medicationrequest <> '-' THEN 'synced'
+                                    WHEN sse.id_encounter IS NULL THEN 'blocked'
+                                    WHEN ssm.id_medication IS NULL OR ssm.id_medication = '' THEN 'blocked'
+                                    ELSE 'pending'
+                                 END) as status,
+                                (CASE 
+                                    WHEN ssmr.id_medicationrequest IS NOT NULL AND ssmr.id_medicationrequest <> '' AND ssmr.id_medicationrequest <> '-' THEN NULL
+                                    WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                                    WHEN ssm.id_medication IS NULL OR ssm.id_medication = '' THEN 'Medication Not Synced Yet'
+                                    ELSE NULL
+                                 END) as blocked_reason,
+                                 ssmr.id_medicationrequest as ihs_id
+                            FROM resep_dokter rd
+                            INNER JOIN resep_obat ro ON rd.no_resep = ro.no_resep
+                            INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat
+                            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                            INNER JOIN databarang db ON rd.kode_brng = db.kode_brng
+                            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                            LEFT JOIN satu_sehat_medication ssm ON ssm.kode_brng = rd.kode_brng
+                            LEFT JOIN satu_sehat_medicationrequest ssmr ON ssmr.no_resep = rd.no_resep AND ssmr.kode_brng = rd.kode_brng AND ssmr.no_racik = ''
+                            WHERE rp.tgl_registrasi BETWEEN :df1 AND :dt1
+                        )
+                        UNION ALL
+                        (
+                            SELECT 
+                                CONCAT(ro.no_resep, '-', rdrd.kode_brng, '-', rdrd.no_racik) as id,
+                                ro.no_rawat,
+                                rp.no_rkm_medis as rm,
+                                p.nm_pasien as patient_name,
+                                p.no_ktp as nik,
+                                ro.tgl_peresepan as date,
+                                db.nama_brng as details,
+                                (CASE 
+                                    WHEN ssmr.id_medicationrequest IS NOT NULL AND ssmr.id_medicationrequest <> '' AND ssmr.id_medicationrequest <> '-' THEN 'synced'
+                                    WHEN sse.id_encounter IS NULL THEN 'blocked'
+                                    WHEN ssm.id_medication IS NULL OR ssm.id_medication = '' THEN 'blocked'
+                                    ELSE 'pending'
+                                 END) as status,
+                                (CASE 
+                                    WHEN ssmr.id_medicationrequest IS NOT NULL AND ssmr.id_medicationrequest <> '' AND ssmr.id_medicationrequest <> '-' THEN NULL
+                                    WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                                    WHEN ssm.id_medication IS NULL OR ssm.id_medication = '' THEN 'Medication Not Synced Yet'
+                                    ELSE NULL
+                                 END) as blocked_reason,
+                                 ssmr.id_medicationrequest as ihs_id
+                            FROM resep_dokter_racikan_detail rdrd
+                            INNER JOIN resep_dokter_racikan rdr ON rdrd.no_resep = rdr.no_resep AND rdrd.no_racik = rdr.no_racik
+                            INNER JOIN resep_obat ro ON rdrd.no_resep = ro.no_resep
+                            INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat
+                            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                            INNER JOIN databarang db ON rdrd.kode_brng = db.kode_brng
+                            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                            LEFT JOIN satu_sehat_medication ssm ON ssm.kode_brng = rdrd.kode_brng
+                            LEFT JOIN satu_sehat_medicationrequest ssmr ON ssmr.no_resep = rdrd.no_resep AND ssmr.kode_brng = rdrd.kode_brng AND ssmr.no_racik = rdrd.no_racik
+                            WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2
+                        )
+                    ) AS union_result WHERE 1 = 1
                 ";
-                $params['df'] = $dateFrom;
-                $params['dt'] = $dateTo;
+                $params['df1'] = $dateFrom;
+                $params['dt1'] = $dateTo;
+                $params['df2'] = $dateFrom;
+                $params['dt2'] = $dateTo;
                 if ($search) {
-                    $sql .= " AND (p.nm_pasien LIKE :search OR dpo.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR db.nama_brng LIKE :search)";
+                    $sql .= " AND (patient_name LIKE :search OR no_rawat LIKE :search OR rm LIKE :search OR details LIKE :search)";
                     $params['search'] = "%{$search}%";
                 }
                 break;
@@ -2374,7 +2840,7 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
             case 'medication_dispense':
                 $sql = "
                     SELECT 
-                        CONCAT(dpo.no_rawat, '-', dpo.kode_brng, '-', dpo.tgl_perawatan) as id,
+                        CONCAT(dpo.no_rawat, '-', dpo.kode_brng, '-', dpo.tgl_perawatan, '-', dpo.jam, '-', dpo.no_batch, '-', dpo.no_faktur) as id,
                         dpo.no_rawat,
                         rp.no_rkm_medis as rm,
                         p.nm_pasien as patient_name,
@@ -2382,31 +2848,35 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                         dpo.tgl_perawatan as date,
                         db.nama_brng as details,
                         (CASE 
-                            WHEN ssmd.id_medicationdispanse IS NOT NULL THEN 'synced'
+                            WHEN ssmd.id_medicationdispanse IS NOT NULL AND ssmd.id_medicationdispanse <> '' AND ssmd.id_medicationdispanse <> '-' THEN 'synced'
                             WHEN sse.id_encounter IS NULL THEN 'blocked'
-                            WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'blocked'
+                            WHEN ssm.id_medication IS NULL OR ssm.id_medication = '' THEN 'blocked'
+                            WHEN ssml.id_lokasi_satusehat IS NULL OR ssml.id_lokasi_satusehat = '' THEN 'blocked'
                             ELSE 'pending'
                          END) as status,
                         (CASE 
-                            WHEN ssmd.id_medicationdispanse IS NOT NULL THEN NULL
+                            WHEN ssmd.id_medicationdispanse IS NOT NULL AND ssmd.id_medicationdispanse <> '' AND ssmd.id_medicationdispanse <> '-' THEN NULL
                             WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
-                            WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'Unmapped Medication Code'
+                            WHEN ssm.id_medication IS NULL OR ssm.id_medication = '' THEN 'Medication Not Synced Yet'
+                            WHEN ssml.id_lokasi_satusehat IS NULL OR ssml.id_lokasi_satusehat = '' THEN 'Unmapped Depo Bangsal Location'
                             ELSE NULL
                          END) as blocked_reason,
-                          ssmd.id_medicationdispanse as ihs_id
+                         ssmd.id_medicationdispanse as ihs_id
                     FROM detail_pemberian_obat dpo
                     INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                     INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
-                    LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+                    INNER JOIN bangsal b ON b.kd_bangsal = dpo.kd_bangsal
+                    LEFT JOIN satu_sehat_mapping_lokasi_depo_farmasi ssml ON ssml.kd_bangsal = b.kd_bangsal
                     LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_medication ssm ON ssm.kode_brng = dpo.kode_brng
                     LEFT JOIN satu_sehat_medicationdispense ssmd ON ssmd.no_rawat = dpo.no_rawat 
                         AND ssmd.kode_brng = dpo.kode_brng 
                         AND ssmd.tgl_perawatan = dpo.tgl_perawatan
                         AND ssmd.jam = dpo.jam
                         AND ssmd.no_batch = dpo.no_batch
                         AND ssmd.no_faktur = dpo.no_faktur
-                    WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
+                    WHERE rp.tgl_registrasi BETWEEN :df AND :dt
                 ";
                 $params['df'] = $dateFrom;
                 $params['dt'] = $dateTo;
@@ -2419,41 +2889,80 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
             case 'medicationstatement':
             case 'medication_statement':
                 $sql = "
-                    SELECT 
-                        CONCAT(dpo.no_rawat, '-', dpo.kode_brng, '-', dpo.tgl_perawatan) as id,
-                        dpo.no_rawat,
-                        rp.no_rkm_medis as rm,
-                        p.nm_pasien as patient_name,
-                        p.no_ktp as nik,
-                        dpo.tgl_perawatan as date,
-                        db.nama_brng as details,
-                        (CASE 
-                            WHEN ssms.id_medicationstatement IS NOT NULL THEN 'synced'
-                            WHEN sse.id_encounter IS NULL THEN 'blocked'
-                            WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'blocked'
-                            ELSE 'pending'
-                         END) as status,
-                        (CASE 
-                            WHEN ssms.id_medicationstatement IS NOT NULL THEN NULL
-                            WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
-                            WHEN ssmo.obat_code IS NULL OR ssmo.obat_code = '' THEN 'Unmapped Medication Code'
-                            ELSE NULL
-                         END) as blocked_reason,
-                          ssms.id_medicationstatement as ihs_id
-                    FROM detail_pemberian_obat dpo
-                    INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat
-                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
-                    INNER JOIN databarang db ON dpo.kode_brng = db.kode_brng
-                    LEFT JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
-                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-                    LEFT JOIN resep_obat ro ON ro.no_rawat = dpo.no_rawat
-                    LEFT JOIN satu_sehat_medicationstatement ssms ON ssms.no_resep = ro.no_resep AND ssms.kode_brng = dpo.kode_brng
-                    WHERE dpo.tgl_perawatan BETWEEN :df AND :dt
+                    SELECT * FROM (
+                        (
+                            SELECT 
+                                CONCAT(ro.no_resep, '-', rd.kode_brng) as id,
+                                ro.no_rawat,
+                                rp.no_rkm_medis as rm,
+                                p.nm_pasien as patient_name,
+                                p.no_ktp as nik,
+                                ro.tgl_penyerahan as date,
+                                db.nama_brng as details,
+                                (CASE 
+                                    WHEN ssms.id_medicationstatement IS NOT NULL AND ssms.id_medicationstatement <> '' AND ssms.id_medicationstatement <> '-' THEN 'synced'
+                                    WHEN sse.id_encounter IS NULL THEN 'blocked'
+                                    WHEN ssm.id_medication IS NULL OR ssm.id_medication = '' THEN 'blocked'
+                                    ELSE 'pending'
+                                 END) as status,
+                                (CASE 
+                                    WHEN ssms.id_medicationstatement IS NOT NULL AND ssms.id_medicationstatement <> '' AND ssms.id_medicationstatement <> '-' THEN NULL
+                                    WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                                    WHEN ssm.id_medication IS NULL OR ssm.id_medication = '' THEN 'Medication Not Synced Yet'
+                                    ELSE NULL
+                                 END) as blocked_reason,
+                                 ssms.id_medicationstatement as ihs_id
+                            FROM reg_periksa rp
+                            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                            INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                            INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                            INNER JOIN databarang db ON rd.kode_brng = db.kode_brng
+                            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                            LEFT JOIN satu_sehat_medication ssm ON ssm.kode_brng = rd.kode_brng
+                            LEFT JOIN satu_sehat_medicationstatement ssms ON ssms.no_resep = rd.no_resep AND ssms.kode_brng = rd.kode_brng
+                            WHERE rp.status_lanjut = 'Ralan' AND ro.tgl_penyerahan <> '0000-00-00' AND rp.tgl_registrasi BETWEEN :df1 AND :dt1
+                        )
+                        UNION ALL
+                        (
+                            SELECT 
+                                CONCAT(ro.no_resep, '-', rd.kode_brng) as id,
+                                ro.no_rawat,
+                                rp.no_rkm_medis as rm,
+                                p.nm_pasien as patient_name,
+                                p.no_ktp as nik,
+                                ro.tgl_penyerahan as date,
+                                db.nama_brng as details,
+                                (CASE 
+                                    WHEN ssms.id_medicationstatement IS NOT NULL AND ssms.id_medicationstatement <> '' AND ssms.id_medicationstatement <> '-' THEN 'synced'
+                                    WHEN sse.id_encounter IS NULL THEN 'blocked'
+                                    WHEN ssm.id_medication IS NULL OR ssm.id_medication = '' THEN 'blocked'
+                                    ELSE 'pending'
+                                 END) as status,
+                                (CASE 
+                                    WHEN ssms.id_medicationstatement IS NOT NULL AND ssms.id_medicationstatement <> '' AND ssms.id_medicationstatement <> '-' THEN NULL
+                                    WHEN sse.id_encounter IS NULL THEN 'Encounter Not Synced Yet'
+                                    WHEN ssm.id_medication IS NULL OR ssm.id_medication = '' THEN 'Medication Not Synced Yet'
+                                    ELSE NULL
+                                 END) as blocked_reason,
+                                 ssms.id_medicationstatement as ihs_id
+                            FROM reg_periksa rp
+                            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                            INNER JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
+                            INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                            INNER JOIN databarang db ON rd.kode_brng = db.kode_brng
+                            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                            LEFT JOIN satu_sehat_medication ssm ON ssm.kode_brng = rd.kode_brng
+                            LEFT JOIN satu_sehat_medicationstatement ssms ON ssms.no_resep = rd.no_resep AND ssms.kode_brng = rd.kode_brng
+                            WHERE rp.status_lanjut = 'Ranap' AND ro.tgl_penyerahan <> '0000-00-00' AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+                        )
+                    ) AS union_result WHERE 1 = 1
                 ";
-                $params['df'] = $dateFrom;
-                $params['dt'] = $dateTo;
+                $params['df1'] = $dateFrom;
+                $params['dt1'] = $dateTo;
+                $params['df2'] = $dateFrom;
+                $params['dt2'] = $dateTo;
                 if ($search) {
-                    $sql .= " AND (p.nm_pasien LIKE :search OR dpo.no_rawat LIKE :search OR rp.no_rkm_medis LIKE :search OR db.nama_brng LIKE :search)";
+                    $sql .= " AND (patient_name LIKE :search OR no_rawat LIKE :search OR rm LIKE :search OR details LIKE :search)";
                     $params['search'] = "%{$search}%";
                 }
                 break;
@@ -3648,6 +4157,15 @@ function executeWorkflowSync($pdo, SatuSehatDatabase $db, SatuSehatClient $clien
                     $activeFetchMethod = 'fetchPendingArrived';
                     $updateFetchMethod = 'fetchPendingInProgress';
                     $finishFetchMethod = 'fetchPendingFinished';
+                } elseif ($type === 'medicationrequest') {
+                    $activeFetchMethod = 'fetchPendingMedicationRequestActive';
+                    $updateFetchMethod = 'fetchPendingMedicationRequestUpdate';
+                } elseif ($type === 'medicationdispense') {
+                    $activeFetchMethod = 'fetchPendingMedicationDispenseActive';
+                    $updateFetchMethod = 'fetchPendingMedicationDispenseUpdate';
+                } elseif ($type === 'medicationstatement') {
+                    $activeFetchMethod = 'fetchPendingMedicationStatementActive';
+                    $updateFetchMethod = 'fetchPendingMedicationStatementUpdate';
                 }
 
                 if ($type === 'encounter') {

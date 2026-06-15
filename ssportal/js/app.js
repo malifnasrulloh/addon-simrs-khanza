@@ -763,12 +763,12 @@ async function loadSyncRecords(targetPage = 1) {
 
                 const pDetails = `
                     <div><strong>${r.patient_name || 'N/A'}</strong></div>
-                    <div style="font-size: 0.8rem; color: var(--text-muted)">RM: ${r.no_rkm_medis || 'N/A'} | NIK: ${r.nik || 'N/A'}</div>
+                    <div style="font-size: 0.8rem; color: var(--text-muted)">RM: ${r.no_rkm_medis || r.rm || 'N/A'} | NIK: ${r.nik || 'N/A'}</div>
                 `;
 
                 const sDetails = `
-                    <div>${r.tgl_registrasi || r.tanggal || 'N/A'} ${r.jam_registrasi || ''}</div>
-                    <div style="font-size: 0.8rem; color: var(--text-muted)">${r.nm_sps || r.nm_poli || 'N/A'}</div>
+                    <div>${r.tgl_registrasi || r.tanggal || r.date || 'N/A'} ${r.jam_registrasi || ''}</div>
+                    <div style="font-size: 0.8rem; color: var(--text-muted)">${r.nm_sps || r.nm_poli || r.details || 'N/A'}</div>
                 `;
 
                 let statusBadge = '';
