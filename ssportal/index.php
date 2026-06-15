@@ -197,6 +197,7 @@ header('Content-Type: text/html; charset=utf-8');
                                 <option value="careplan">CarePlan</option>
                                 <option value="allergyintolerance">Allergy Intolerance</option>
                                 <option value="immunization">Immunization</option>
+                                <option value="composition">Composition (Discharge Summary)</option>
                             </optgroup>
                             <optgroup label="💊 Medication Services" style="background: #110e1a; color: #ffb3c1;">
                                 <option value="medication">Medication (Drug Catalog)</option>

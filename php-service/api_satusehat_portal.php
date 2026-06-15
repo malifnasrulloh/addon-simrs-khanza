@@ -506,9 +506,9 @@ if ($action === 'getSyncStats' && $method === 'GET') {
             case 'workflow':
                 if (!$noRawat) {
                     $stats = [
-                        'total' => 11,
+                        'total' => 12,
                         'synced' => 0,
-                        'pending' => 11,
+                        'pending' => 12,
                         'blocked' => 0
                     ];
                 } else {
@@ -603,11 +603,16 @@ if ($action === 'getSyncStats' && $method === 'GET') {
                     $statSynced = (int)$stmt->fetchColumn();
                     $statOk = ($medreqTotal > 0 && $statSynced >= $medreqTotal) ? 1 : 0;
 
-                    $syncedSteps = $patientSynced + $encounterSynced + $eocSynced + $condOk + $ttvOk + $procOk + $allergyOk + $immOk + $medreqOk + $dispOk + $statOk;
+                    // Check composition
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM satu_sehat_composition WHERE no_rawat = ?");
+                    $stmt->execute([$noRawat]);
+                    $compositionSynced = ((int)$stmt->fetchColumn() > 0) ? 1 : 0;
+
+                    $syncedSteps = $patientSynced + $encounterSynced + $eocSynced + $condOk + $ttvOk + $procOk + $allergyOk + $immOk + $medreqOk + $dispOk + $statOk + $compositionSynced;
                     $stats = [
-                        'total' => 11,
+                        'total' => 12,
                         'synced' => $syncedSteps,
-                        'pending' => max(0, 11 - $syncedSteps)
+                        'pending' => max(0, 12 - $syncedSteps)
                     ];
                 }
                 break;
@@ -2143,6 +2148,7 @@ if ($action === 'triggerBatchSync' && $method === 'POST') {
             'specimen_lab_mb' => ['class' => 'SatuSehatSpecimenLabMBProcessor', 'file' => 'SpecimenLabMBProcessor.php', 'method_type' => 'specimen_lab_mb'],
             'observation_lab_mb' => ['class' => 'SatuSehatObservationLabMBProcessor', 'file' => 'ObservationLabMBProcessor.php', 'method_type' => 'observation_lab_mb'],
             'diagnosticreport_lab_mb' => ['class' => 'SatuSehatDiagnosticReportLabMBProcessor', 'file' => 'DiagnosticReportLabMBProcessor.php', 'method_type' => 'diagnosticreport_lab_mb'],
+            'composition' => ['class' => 'SatuSehatCompositionProcessor', 'file' => 'CompositionProcessor.php', 'method_type' => 'composition'],
         ];
 
         $resKey = strtolower($resource);
@@ -3605,6 +3611,38 @@ if ($action === 'getPendingRecords' && $method === 'GET') {
                     $params['search'] = "%{$search}%";
                 }
                 break;
+            case 'composition':
+                $sql = "
+                    SELECT 
+                        rp.no_rawat as id,
+                        rp.no_rawat,
+                        rp.no_rkm_medis as rm,
+                        p.nm_pasien as patient_name,
+                        p.no_ktp as nik,
+                        rp.tgl_registrasi as date,
+                        'Resume Medis - Discharge Summary' as details,
+                        (CASE 
+                            WHEN ssc.id_composition IS NOT NULL AND ssc.id_composition <> '' AND ssc.id_composition <> '-' THEN 'synced'
+                            ELSE 'pending'
+                         END) as status,
+                        NULL as blocked_reason,
+                        ssc.id_composition as ihs_id
+                    FROM reg_periksa rp
+                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                    INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
+                    LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
+                    LEFT JOIN satu_sehat_composition ssc ON ssc.no_rawat = rp.no_rawat
+                    WHERE (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
+                      AND rp.tgl_registrasi BETWEEN :df AND :dt
+                ";
+                $params['df'] = $dateFrom;
+                $params['dt'] = $dateTo;
+                if ($search) {
+                    $sql .= " AND (rp.no_rawat LIKE :search OR p.nm_pasien LIKE :search OR rp.no_rkm_medis LIKE :search)";
+                    $params['search'] = "%{$search}%";
+                }
+                break;
 
             default:
                 jsonResponse(['success' => false, 'message' => 'Invalid resource type'], 400);
@@ -3873,6 +3911,10 @@ if ($action === 'getAnalyticsStats' && $method === 'GET') {
             'diagnosticreport_lab_mb' => [
                 'total_sql' => "SELECT COUNT(*) FROM detail_periksa_lab dpl INNER JOIN reg_periksa rp ON dpl.no_rawat = rp.no_rawat INNER JOIN permintaan_lab pl ON dpl.no_rawat = pl.no_rawat WHERE pl.status = 'mikrobiologi' AND rp.tgl_registrasi BETWEEN :df AND :dt",
                 'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_diagnosticreport_lab_mb ssdr INNER JOIN permintaan_lab pl ON ssdr.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+            ],
+            'composition' => [
+                'total_sql' => "SELECT COUNT(*) FROM reg_periksa rp INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat WHERE (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL) AND rp.tgl_registrasi BETWEEN :df AND :dt",
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_composition ssc INNER JOIN reg_periksa rp ON ssc.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ]
         ];
 

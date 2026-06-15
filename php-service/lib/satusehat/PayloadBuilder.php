@@ -145,6 +145,106 @@ class SatuSehatPayloadBuilder
             $payload['id'] = $idEncounter;
         }
 
+        // Add hospitalization discharge disposition mapping if status is finished
+        if ($status === 'finished') {
+            $dischargeDisposition = null;
+            if ($isRalan) {
+                // Outpatient
+                $stts = $p['stts'] ?? '';
+                if ($stts === 'Dirujuk') {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'other-hcf',
+                        'display' => 'Other healthcare facility'
+                    ];
+                } elseif ($stts === 'Meninggal') {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'oth',
+                        'display' => 'Other'
+                    ];
+                } elseif ($stts === 'Pulang Paksa') {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'aadvice',
+                        'display' => 'Left against advice'
+                    ];
+                } else {
+                    // Fallback to home/Home
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'home',
+                        'display' => 'Home'
+                    ];
+                }
+            } else {
+                // Inpatient (Ranap)
+                $sttsPulang = $p['stts_pulang'] ?? '';
+                $lama = intval($p['lama'] ?? 0);
+                if (in_array($sttsPulang, ['Sehat', 'Sembuh', 'Membaik', 'Atas Persetujuan Dokter'])) {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'home',
+                        'display' => 'Home'
+                    ];
+                } elseif (in_array($sttsPulang, ['Atas Permintaan Sendiri', 'APS', 'Isoman'])) {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'aadvice',
+                        'display' => 'Left against advice'
+                    ];
+                } elseif ($sttsPulang === 'Pulang Paksa') {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'aadvice',
+                        'display' => 'Left against advice'
+                    ];
+                } elseif ($sttsPulang === 'Rujuk') {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'other-hcf',
+                        'display' => 'Other healthcare facility'
+                    ];
+                } elseif (in_array($sttsPulang, ['+', 'Meninggal'])) {
+                    // Check length of stay
+                    if ($lama <= 2) {
+                        $dischargeDisposition = [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/discharge-disposition',
+                            'code' => 'exp-lt48h',
+                            'display' => 'Meninggal < 48 jam'
+                        ];
+                    } else {
+                        $dischargeDisposition = [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/discharge-disposition',
+                            'code' => 'exp-gt48h',
+                            'display' => 'Meninggal > 48 jam'
+                        ];
+                    }
+                } else {
+                    // Fallback to home/Home
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'home',
+                        'display' => 'Home'
+                    ];
+                }
+            }
+
+            if ($dischargeDisposition !== null) {
+                $payload['hospitalization'] = [
+                    'dischargeDisposition' => [
+                        'coding' => [
+                            [
+                                'system' => $dischargeDisposition['system'],
+                                'code' => $dischargeDisposition['code'],
+                                'display' => $dischargeDisposition['display']
+                            ]
+                        ]
+                    ]
+                ];
+            }
+        }
+
         // Add Diagnoses if status is finished
         if ($status === 'finished' && !empty($diagnoses)) {
             $diagnosisPayload = [];
@@ -2161,6 +2261,240 @@ class SatuSehatPayloadBuilder
 
         if (!empty($idDiagnosticReport) && $idDiagnosticReport !== '-') {
             $payload['id'] = $idDiagnosticReport;
+        }
+
+        return $payload;
+    }
+
+    public static function composition(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $idEncounter,
+        array $refs,
+        string $idComposition = ''
+    ): array {
+        $finishedWaktu = $p['waktu_pulang'] ?? date('Y-m-d\TH:i:s+07:00');
+
+        $sections = [];
+
+        // 1. Anamnesis Section (LOINC TK000003)
+        $anamnesisEntries = [];
+        if (!empty($refs['AllergyIntolerance'])) {
+            foreach ($refs['AllergyIntolerance'] as $id) {
+                $anamnesisEntries[] = ['reference' => 'AllergyIntolerance/' . $id];
+            }
+        }
+        if (!empty($anamnesisEntries)) {
+            $sections[] = [
+                'title' => 'Anamnesis',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/composition-section',
+                            'code' => 'TK000003',
+                            'display' => 'Anamnesis'
+                        ]
+                    ]
+                ],
+                'entry' => $anamnesisEntries
+            ];
+        }
+
+        // 2. Pemeriksaan Fisik Section (LOINC TK000007)
+        if (!empty($refs['Observation'])) {
+            $obsEntries = [];
+            foreach ($refs['Observation'] as $id) {
+                $obsEntries[] = ['reference' => 'Observation/' . $id];
+            }
+            $sections[] = [
+                'title' => 'Pemeriksaan Fisik',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/composition-section',
+                            'code' => 'TK000007',
+                            'display' => 'Pemeriksaan Fisik'
+                        ]
+                    ]
+                ],
+                'entry' => $obsEntries
+            ];
+        }
+
+        // 3. Diagnosis Section (LOINC TK000004)
+        if (!empty($refs['Condition'])) {
+            $condEntries = [];
+            foreach ($refs['Condition'] as $id) {
+                $condEntries[] = ['reference' => 'Condition/' . $id];
+            }
+            $sections[] = [
+                'title' => 'Diagnosis',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/composition-section',
+                            'code' => 'TK000004',
+                            'display' => 'Diagnosis'
+                        ]
+                    ]
+                ],
+                'entry' => $condEntries
+            ];
+        }
+
+        // 4. Tindakan/Prosedur Medis Section (LOINC TK000005)
+        if (!empty($refs['Procedure'])) {
+            $procEntries = [];
+            foreach ($refs['Procedure'] as $id) {
+                $procEntries[] = ['reference' => 'Procedure/' . $id];
+            }
+            $sections[] = [
+                'title' => 'Tindakan/Prosedur Medis',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/composition-section',
+                            'code' => 'TK000005',
+                            'display' => 'Tindakan/Prosedur Medis'
+                        ]
+                    ]
+                ],
+                'entry' => $procEntries
+            ];
+        }
+
+        // 5. Farmasi Section (LOINC TK000013)
+        $pharmacyEntries = [];
+        if (!empty($refs['MedicationRequest'])) {
+            foreach ($refs['MedicationRequest'] as $id) {
+                $pharmacyEntries[] = ['reference' => 'MedicationRequest/' . $id];
+            }
+        }
+        if (!empty($refs['MedicationDispense'])) {
+            foreach ($refs['MedicationDispense'] as $id) {
+                $pharmacyEntries[] = ['reference' => 'MedicationDispense/' . $id];
+            }
+        }
+        if (!empty($pharmacyEntries)) {
+            $sections[] = [
+                'title' => 'Farmasi',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/composition-section',
+                            'code' => 'TK000013',
+                            'display' => 'Farmasi'
+                        ]
+                    ]
+                ],
+                'entry' => $pharmacyEntries
+            ];
+        }
+
+        // 6. Perencanaan Perawatan Section (LOINC 18776-5)
+        $planEntries = [];
+        if (!empty($refs['ClinicalImpression'])) {
+            foreach ($refs['ClinicalImpression'] as $id) {
+                $planEntries[] = ['reference' => 'ClinicalImpression/' . $id];
+            }
+        }
+        if (!empty($refs['CarePlan'])) {
+            foreach ($refs['CarePlan'] as $id) {
+                $planEntries[] = ['reference' => 'CarePlan/' . $id];
+            }
+        }
+        if (!empty($planEntries)) {
+            $sections[] = [
+                'title' => 'Perencanaan Perawatan',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://loinc.org',
+                            'code' => '18776-5',
+                            'display' => 'Plan of care note'
+                        ]
+                    ]
+                ],
+                'entry' => $planEntries
+            ];
+        }
+
+        // 7. Pemeriksaan Penunjang Section (LOINC TK000009)
+        $supportEntries = [];
+        if (!empty($refs['DiagnosticReport'])) {
+            foreach ($refs['DiagnosticReport'] as $id) {
+                $supportEntries[] = ['reference' => 'DiagnosticReport/' . $id];
+            }
+        }
+        if (!empty($refs['Specimen'])) {
+            foreach ($refs['Specimen'] as $id) {
+                $supportEntries[] = ['reference' => 'Specimen/' . $id];
+            }
+        }
+        if (!empty($supportEntries)) {
+            $sections[] = [
+                'title' => 'Pemeriksaan Penunjang',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/composition-section',
+                            'code' => 'TK000009',
+                            'display' => 'Pemeriksaan Penunjang'
+                        ]
+                    ]
+                ],
+                'entry' => $supportEntries
+            ];
+        }
+
+        $payload = [
+            'resourceType' => 'Composition',
+            'status' => 'final',
+            'type' => [
+                'coding' => [
+                    [
+                        'system' => 'http://loinc.org',
+                        'code' => '88645-7',
+                        'display' => 'Outpatient hospital Discharge summary'
+                    ]
+                ]
+            ],
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/definition-category',
+                            'code' => 'resume-medis',
+                            'display' => 'Resume Medis'
+                        ]
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display' => $p['nm_pasien']
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $idEncounter
+            ],
+            'date' => $finishedWaktu,
+            'author' => [
+                [
+                    'reference' => 'Practitioner/' . $idDokter,
+                    'display' => $p['nama']
+                ]
+            ],
+            'title' => 'Resume Medis - ' . $p['nm_pasien'],
+            'custodian' => [
+                'reference' => 'Organization/' . $orgId
+            ],
+            'section' => $sections
+        ];
+
+        if (!empty($idComposition)) {
+            $payload['id'] = $idComposition;
         }
 
         return $payload;

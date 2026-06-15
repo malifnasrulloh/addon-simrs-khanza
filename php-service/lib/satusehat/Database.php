@@ -252,6 +252,20 @@ class SatuSehatDatabase
             status VARCHAR(20),
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // Table for Composition state tracking
+        $this->sqlite->exec("CREATE TABLE IF NOT EXISTS composition_state (
+            no_rawat VARCHAR(50) PRIMARY KEY,
+            status VARCHAR(20),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
+
+        // Ensure MySQL table for Composition exists
+        $this->mysql->exec("CREATE TABLE IF NOT EXISTS satu_sehat_composition (
+            no_rawat VARCHAR(20) NOT NULL PRIMARY KEY,
+            id_composition VARCHAR(100) NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )");
     }
 
     public function close(): void
@@ -359,7 +373,8 @@ class SatuSehatDatabase
                     WHEN rp.status_lanjut = 'Ralan' THEN CONCAT(nj.tanggal, 'T', nj.jam, '+07:00') 
                     WHEN rp.status_lanjut = 'Ranap' THEN CONCAT(ni.tanggal, 'T', ni.jam, '+07:00') 
                 END as waktu_pulang,
-                pr.tgl_perawatan, pr.jam_rawat
+                pr.tgl_perawatan, pr.jam_rawat,
+                ki.stts_pulang, ki.lama
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
@@ -369,6 +384,16 @@ class SatuSehatDatabase
             LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
             LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
+            LEFT JOIN (
+                SELECT ki1.no_rawat, ki1.stts_pulang, ki1.lama
+                FROM kamar_inap ki1
+                INNER JOIN (
+                    SELECT no_rawat, MAX(tgl_keluar) as max_tgl_keluar
+                    FROM kamar_inap
+                    WHERE stts_pulang NOT IN ('-', 'Pindah Kamar') AND tgl_keluar <> '0000-00-00'
+                    GROUP BY no_rawat
+                ) ki2 ON ki1.no_rawat = ki2.no_rawat AND ki1.tgl_keluar = ki2.max_tgl_keluar
+            ) ki ON ki.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
         ";
@@ -3803,6 +3828,34 @@ class SatuSehatDatabase
                     $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
                     break;
 
+                case 'composition':
+                    $stmtTotal = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM reg_periksa rp
+                        INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                        LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
+                        LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                          AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
+                    ");
+                    $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
+                    $total = (int) $stmtTotal->fetchColumn();
+
+                    $stmtSynced = $this->mysql->prepare("
+                        SELECT COUNT(*) FROM satu_sehat_composition ssc
+                        INNER JOIN reg_periksa rp ON ssc.no_rawat = rp.no_rawat
+                        WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+                    ");
+                    $stmtSynced->execute(['df' => $df, 'dt' => $dt]);
+                    $synced = (int) $stmtSynced->fetchColumn();
+
+                    $pending = $total - $synced;
+                    if ($pending < 0) $pending = 0;
+
+                    $this->log->info("   ├─ Total Finished Encounters in SIMRS  : {$total}");
+                    $this->log->info("   ├─ Already Synced to Satu Sehat        : {$synced}");
+                    $this->log->info("   └─ Pending / Ready to Sync             : {$pending}");
+                    break;
+
                 case 'episode_of_care':
                     $stmtTotal = $this->mysql->prepare("SELECT COUNT(*) FROM diagnosa_pasien dp INNER JOIN reg_periksa rp ON dp.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt");
                     $stmtTotal->execute(['df' => $df, 'dt' => $dt]);
@@ -5332,5 +5385,340 @@ class SatuSehatDatabase
         } catch (\PDOException $e) {
             $this->log->error("[DATABASE] Failed to update MySQL ImagingStudy state: " . $e->getMessage());
         }
+    }
+
+    // ─── COMPOSITION DATABASE METHODS ──────────────────────────────────────────
+
+    public function fetchPendingCompositionActive(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT 
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter, 
+                rp.kd_poli, rp.stts, rp.status_lanjut,
+                sse.id_encounter,
+                CASE 
+                    WHEN rp.status_lanjut = 'Ralan' THEN CONCAT(nj.tanggal, 'T', nj.jam, '+07:00') 
+                    WHEN rp.status_lanjut = 'Ranap' THEN CONCAT(ni.tanggal, 'T', ni.jam, '+07:00') 
+                END as waktu_pulang
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
+            LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
+            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+              AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
+              AND rp.no_rawat NOT IN (SELECT no_rawat FROM satu_sehat_composition)
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function fetchPendingCompositionUpdate(string $dateFrom, string $dateTo): array
+    {
+        $sql = "
+            SELECT 
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
+                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter, 
+                rp.kd_poli, rp.stts, rp.status_lanjut,
+                sse.id_encounter,
+                CASE 
+                    WHEN rp.status_lanjut = 'Ralan' THEN CONCAT(nj.tanggal, 'T', nj.jam, '+07:00') 
+                    WHEN rp.status_lanjut = 'Ranap' THEN CONCAT(ni.tanggal, 'T', ni.jam, '+07:00') 
+                END as waktu_pulang,
+                ssc.id_composition
+            FROM reg_periksa rp
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            INNER JOIN satu_sehat_composition ssc ON ssc.no_rawat = rp.no_rawat
+            LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
+            LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
+            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+              AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
+        ";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
+    public function getCompositionLocalState(string $noRawat): ?string
+    {
+        $stmt = $this->sqlite->prepare("SELECT status FROM composition_state WHERE no_rawat = :nr");
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ? $row['status'] : null;
+    }
+
+    public function updateCompositionLocalState(string $noRawat, string $state): bool
+    {
+        $stmt = $this->sqlite->prepare("
+            INSERT INTO composition_state (no_rawat, status, updated_at) 
+            VALUES (:nr, :st, CURRENT_TIMESTAMP)
+            ON CONFLICT(no_rawat) DO UPDATE SET status = :st2, updated_at = CURRENT_TIMESTAMP
+        ");
+        return $stmt->execute(['nr' => $noRawat, 'st' => $state, 'st2' => $state]);
+    }
+
+    public function saveComposition(string $noRawat, string $idComposition): bool
+    {
+        $sql = "INSERT INTO satu_sehat_composition (no_rawat, id_composition) 
+                VALUES (:nr, :id) 
+                ON DUPLICATE KEY UPDATE id_composition = :id2";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'nr'  => $noRawat,
+            'id'  => $idComposition,
+            'id2' => $idComposition
+        ]);
+    }
+
+    public function fetchSyncedResourceReferences(string $noRawat): array
+    {
+        $refs = [
+            'Encounter' => null,
+            'ClinicalImpression' => [],
+            'Condition' => [],
+            'Observation' => [],
+            'Procedure' => [],
+            'CarePlan' => [],
+            'AllergyIntolerance' => [],
+            'MedicationRequest' => [],
+            'MedicationDispense' => [],
+            'DiagnosticReport' => [],
+            'Specimen' => []
+        ];
+
+        // 1. Encounter
+        $stmt = $this->mysql->prepare("SELECT id_encounter FROM satu_sehat_encounter WHERE no_rawat = :nr LIMIT 1");
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch();
+        if ($row && !empty($row['id_encounter']) && $row['id_encounter'] !== '-') {
+            $refs['Encounter'] = $row['id_encounter'];
+        }
+
+        // 2. ClinicalImpression
+        $stmt = $this->mysql->prepare("SELECT id_clinicalimpression FROM satu_sehat_clinicalimpression WHERE no_rawat = :nr");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_clinicalimpression']) && $r['id_clinicalimpression'] !== '-') {
+                $refs['ClinicalImpression'][] = $r['id_clinicalimpression'];
+            }
+        }
+
+        // 3. Condition
+        $stmt = $this->mysql->prepare("SELECT id_condition FROM satu_sehat_condition WHERE no_rawat = :nr");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_condition']) && $r['id_condition'] !== '-') {
+                $refs['Condition'][] = $r['id_condition'];
+            }
+        }
+
+        // 4. Procedure
+        $stmt = $this->mysql->prepare("SELECT id_procedure FROM satu_sehat_procedure WHERE no_rawat = :nr");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_procedure']) && $r['id_procedure'] !== '-') {
+                $refs['Procedure'][] = $r['id_procedure'];
+            }
+        }
+
+        // 5. CarePlan
+        $stmt = $this->mysql->prepare("SELECT id_careplan FROM satu_sehat_careplan WHERE no_rawat = :nr");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_careplan']) && $r['id_careplan'] !== '-') {
+                $refs['CarePlan'][] = $r['id_careplan'];
+            }
+        }
+
+        // 6. AllergyIntolerance
+        $stmt = $this->mysql->prepare("SELECT id_allergy_intolerance FROM satu_sehat_allergy_intolerance WHERE no_rawat = :nr");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_allergy_intolerance']) && $r['id_allergy_intolerance'] !== '-') {
+                $refs['AllergyIntolerance'][] = $r['id_allergy_intolerance'];
+            }
+        }
+
+        // 7. MedicationRequest
+        $stmt = $this->mysql->prepare("
+            SELECT ssmr.id_medicationrequest 
+            FROM satu_sehat_medicationrequest ssmr
+            INNER JOIN resep_obat ro ON ro.no_resep = ssmr.no_resep
+            WHERE ro.no_rawat = :nr
+        ");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_medicationrequest']) && $r['id_medicationrequest'] !== '-') {
+                $refs['MedicationRequest'][] = $r['id_medicationrequest'];
+            }
+        }
+
+        // 8. MedicationDispense
+        $stmt = $this->mysql->prepare("SELECT id_medicationdispanse FROM satu_sehat_medicationdispense WHERE no_rawat = :nr");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_medicationdispanse']) && $r['id_medicationdispanse'] !== '-') {
+                $refs['MedicationDispense'][] = $r['id_medicationdispanse'];
+            }
+        }
+
+        // 9. Observations (TTV)
+        $ttvTables = [
+            'satu_sehat_observationttvsuhu',
+            'satu_sehat_observationttvrespirasi',
+            'satu_sehat_observationttvnadi',
+            'satu_sehat_observationttvspo2',
+            'satu_sehat_observationttvtb',
+            'satu_sehat_observationttvbb',
+            'satu_sehat_observationttvlp',
+            'satu_sehat_observationttvtensi',
+            'satu_sehat_observationttvgcs',
+            'satu_sehat_observationttvkesadaran'
+        ];
+        foreach ($ttvTables as $table) {
+            $stmt = $this->mysql->prepare("SELECT id_observation FROM {$table} WHERE no_rawat = :nr");
+            $stmt->execute(['nr' => $noRawat]);
+            foreach ($stmt->fetchAll() as $r) {
+                if (!empty($r['id_observation']) && $r['id_observation'] !== '-') {
+                    $refs['Observation'][] = $r['id_observation'];
+                }
+            }
+        }
+
+        // 10. Observation Lab/Radiology
+        // Lab PK
+        $stmt = $this->mysql->prepare("
+            SELECT sso.id_observation 
+            FROM satu_sehat_observation_lab sso
+            INNER JOIN permintaan_lab pl ON pl.noorder = sso.noorder
+            WHERE pl.no_rawat = :nr
+        ");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_observation']) && $r['id_observation'] !== '-') {
+                $refs['Observation'][] = $r['id_observation'];
+            }
+        }
+
+        // Lab MB
+        $stmt = $this->mysql->prepare("
+            SELECT sso.id_observation 
+            FROM satu_sehat_observation_lab_mb sso
+            INNER JOIN permintaan_lab pl ON pl.noorder = sso.noorder
+            WHERE pl.no_rawat = :nr
+        ");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_observation']) && $r['id_observation'] !== '-') {
+                $refs['Observation'][] = $r['id_observation'];
+            }
+        }
+
+        // Radiologi
+        $stmt = $this->mysql->prepare("
+            SELECT sso.id_observation 
+            FROM satu_sehat_observation_radiologi sso
+            INNER JOIN permintaan_radiologi pr ON pr.noorder = sso.noorder
+            WHERE pr.no_rawat = :nr
+        ");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_observation']) && $r['id_observation'] !== '-') {
+                $refs['Observation'][] = $r['id_observation'];
+            }
+        }
+
+        // 11. DiagnosticReport
+        // Lab PK
+        $stmt = $this->mysql->prepare("
+            SELECT sdr.id_diagnosticreport 
+            FROM satu_sehat_diagnosticreport_lab sdr
+            INNER JOIN permintaan_lab pl ON pl.noorder = sdr.noorder
+            WHERE pl.no_rawat = :nr
+        ");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_diagnosticreport']) && $r['id_diagnosticreport'] !== '-') {
+                $refs['DiagnosticReport'][] = $r['id_diagnosticreport'];
+            }
+        }
+
+        // Lab MB
+        $stmt = $this->mysql->prepare("
+            SELECT sdr.id_diagnosticreport 
+            FROM satu_sehat_diagnosticreport_lab_mb sdr
+            INNER JOIN permintaan_lab pl ON pl.noorder = sdr.noorder
+            WHERE pl.no_rawat = :nr
+        ");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_diagnosticreport']) && $r['id_diagnosticreport'] !== '-') {
+                $refs['DiagnosticReport'][] = $r['id_diagnosticreport'];
+            }
+        }
+
+        // Radiologi
+        $stmt = $this->mysql->prepare("
+            SELECT sdr.id_diagnosticreport 
+            FROM satu_sehat_diagnosticreport_radiologi sdr
+            INNER JOIN permintaan_radiologi pr ON pr.noorder = sdr.noorder
+            WHERE pr.no_rawat = :nr
+        ");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_diagnosticreport']) && $r['id_diagnosticreport'] !== '-') {
+                $refs['DiagnosticReport'][] = $r['id_diagnosticreport'];
+            }
+        }
+
+        // 12. Specimen
+        // Lab PK
+        $stmt = $this->mysql->prepare("
+            SELECT ssp.id_specimen 
+            FROM satu_sehat_specimen_lab ssp
+            INNER JOIN permintaan_lab pl ON pl.noorder = ssp.noorder
+            WHERE pl.no_rawat = :nr
+        ");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_specimen']) && $r['id_specimen'] !== '-') {
+                $refs['Specimen'][] = $r['id_specimen'];
+            }
+        }
+
+        // Lab MB
+        $stmt = $this->mysql->prepare("
+            SELECT ssp.id_specimen 
+            FROM satu_sehat_specimen_lab_mb ssp
+            INNER JOIN permintaan_lab pl ON pl.noorder = ssp.noorder
+            WHERE pl.no_rawat = :nr
+        ");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_specimen']) && $r['id_specimen'] !== '-') {
+                $refs['Specimen'][] = $r['id_specimen'];
+            }
+        }
+
+        // Radiologi
+        $stmt = $this->mysql->prepare("
+            SELECT ssp.id_specimen 
+            FROM satu_sehat_specimen_radiologi ssp
+            INNER JOIN permintaan_radiologi pr ON pr.noorder = ssp.noorder
+            WHERE pr.no_rawat = :nr
+        ");
+        $stmt->execute(['nr' => $noRawat]);
+        foreach ($stmt->fetchAll() as $r) {
+            if (!empty($r['id_specimen']) && $r['id_specimen'] !== '-') {
+                $refs['Specimen'][] = $r['id_specimen'];
+            }
+        }
+
+        return $refs;
     }
 }
