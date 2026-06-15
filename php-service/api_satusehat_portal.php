@@ -3155,14 +3155,14 @@ if ($action === 'getAnalyticsStats' && $method === 'GET') {
             ],
             'observationttv' => [
                 'total_sql' => "SELECT COUNT(*) FROM pemeriksaan_ralan pem INNER JOIN reg_periksa rp ON pem.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_observation_ttv sso INNER JOIN reg_periksa rp ON sso.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_observationttvsuhu sso INNER JOIN reg_periksa rp ON sso.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'procedure' => [
                 'total_sql' => "SELECT COUNT(*) FROM prosedur_pasien pp INNER JOIN reg_periksa rp ON pp.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
                 'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_procedure ssp INNER JOIN reg_periksa rp ON ssp.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'allergyintolerance' => [
-                'total_sql' => "SELECT COUNT(*) FROM alergi_pasien ap INNER JOIN reg_periksa rp ON ap.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
+                'total_sql' => "SELECT COUNT(*) FROM pemeriksaan_ralan pr INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE pr.alergi <> '' AND rp.tgl_registrasi BETWEEN :df AND :dt",
                 'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_allergy_intolerance ssai INNER JOIN reg_periksa rp ON ssai.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'immunization' => [
@@ -3171,11 +3171,11 @@ if ($action === 'getAnalyticsStats' && $method === 'GET') {
             ],
             'medication' => [
                 'total_sql' => "SELECT COUNT(DISTINCT dpo.kode_brng) FROM detail_pemberian_obat dpo INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(DISTINCT ssm.kode_brng) FROM satu_sehat_medication ssm INNER JOIN reg_periksa rp ON ssm.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(DISTINCT dpo.kode_brng) FROM detail_pemberian_obat dpo INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = dpo.kode_brng WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'medicationrequest' => [
                 'total_sql' => "SELECT COUNT(*) FROM resep_obat ro INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_medicationrequest ssmr INNER JOIN reg_periksa rp ON ssmr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_medicationrequest ssmr INNER JOIN resep_obat ro ON ssmr.no_resep = ro.no_resep INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'medicationdispense' => [
                 'total_sql' => "SELECT COUNT(*) FROM detail_pemberian_obat dpo INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
@@ -3183,7 +3183,7 @@ if ($action === 'getAnalyticsStats' && $method === 'GET') {
             ],
             'medicationstatement' => [
                 'total_sql' => "SELECT COUNT(*) FROM detail_pemberian_obat dpo INNER JOIN reg_periksa rp ON dpo.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_medicationstatement ssms INNER JOIN reg_periksa rp ON ssms.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_medicationstatement ssms INNER JOIN resep_obat ro ON ssms.no_resep = ro.no_resep INNER JOIN reg_periksa rp ON ro.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'clinicalimpression' => [
                 'total_sql' => "SELECT COUNT(*) FROM pemeriksaan_ralan pem INNER JOIN reg_periksa rp ON pem.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
@@ -3191,51 +3191,51 @@ if ($action === 'getAnalyticsStats' && $method === 'GET') {
             ],
             'servicerequest_rad' => [
                 'total_sql' => "SELECT COUNT(*) FROM permintaan_pemeriksaan_radiologi ppr INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_servicerequest_radiologi ssr INNER JOIN reg_periksa rp ON ssr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_servicerequest_radiologi ssr INNER JOIN permintaan_radiologi pr ON ssr.noorder = pr.noorder INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'specimen_rad' => [
                 'total_sql' => "SELECT COUNT(*) FROM permintaan_pemeriksaan_radiologi ppr INNER JOIN permintaan_radiologi pr ON ppr.noorder = pr.noorder INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_specimen_radiologi sssp INNER JOIN reg_periksa rp ON sssp.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_specimen_radiologi sssp INNER JOIN permintaan_radiologi pr ON sssp.noorder = pr.noorder INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'observation_rad' => [
                 'total_sql' => "SELECT COUNT(*) FROM periksa_radiologi prad INNER JOIN reg_periksa rp ON prad.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_observation_radiologi sso INNER JOIN reg_periksa rp ON sso.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_observation_radiologi sso INNER JOIN permintaan_radiologi pr ON sso.noorder = pr.noorder INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'diagnosticreport_rad' => [
                 'total_sql' => "SELECT COUNT(*) FROM periksa_radiologi prad INNER JOIN reg_periksa rp ON prad.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_diagnosticreport_radiologi ssdr INNER JOIN reg_periksa rp ON ssdr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_diagnosticreport_radiologi ssdr INNER JOIN permintaan_radiologi pr ON ssdr.noorder = pr.noorder INNER JOIN reg_periksa rp ON pr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'servicerequest_lab_pk' => [
                 'total_sql' => "SELECT COUNT(*) FROM permintaan_pemeriksaan_lab ppl INNER JOIN permintaan_lab pl ON ppl.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_servicerequest_lab ssl INNER JOIN reg_periksa rp ON ssl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_servicerequest_lab ssrq INNER JOIN permintaan_lab pl ON ssrq.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'specimen_lab_pk' => [
                 'total_sql' => "SELECT COUNT(*) FROM permintaan_pemeriksaan_lab ppl INNER JOIN permintaan_lab pl ON ppl.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_specimen_lab sss INNER JOIN reg_periksa rp ON sss.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_specimen_lab sss INNER JOIN permintaan_lab pl ON sss.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'observation_lab_pk' => [
                 'total_sql' => "SELECT COUNT(*) FROM detail_periksa_lab dpl INNER JOIN reg_periksa rp ON dpl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_observation_lab sso INNER JOIN reg_periksa rp ON sso.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_observation_lab sso INNER JOIN permintaan_lab pl ON sso.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'diagnosticreport_lab_pk' => [
                 'total_sql' => "SELECT COUNT(*) FROM detail_periksa_lab dpl INNER JOIN reg_periksa rp ON dpl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_diagnosticreport_lab ssdr INNER JOIN reg_periksa rp ON ssdr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_diagnosticreport_lab ssdr INNER JOIN permintaan_lab pl ON ssdr.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'servicerequest_lab_mb' => [
                 'total_sql' => "SELECT COUNT(*) FROM permintaan_pemeriksaan_lab ppl INNER JOIN permintaan_lab pl ON ppl.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE pl.status = 'mikrobiologi' AND rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_servicerequest_lab_mb ssl INNER JOIN reg_periksa rp ON ssl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_servicerequest_lab_mb ssrq INNER JOIN permintaan_lab pl ON ssrq.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'specimen_lab_mb' => [
                 'total_sql' => "SELECT COUNT(*) FROM permintaan_pemeriksaan_lab ppl INNER JOIN permintaan_lab pl ON ppl.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE pl.status = 'mikrobiologi' AND rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_specimen_lab_mb sss INNER JOIN reg_periksa rp ON sss.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_specimen_lab_mb sss INNER JOIN permintaan_lab pl ON sss.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'observation_lab_mb' => [
                 'total_sql' => "SELECT COUNT(*) FROM detail_periksa_lab dpl INNER JOIN reg_periksa rp ON dpl.no_rawat = rp.no_rawat INNER JOIN permintaan_lab pl ON dpl.no_rawat = pl.no_rawat WHERE pl.status = 'mikrobiologi' AND rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_observation_lab_mb sso INNER JOIN reg_periksa rp ON sso.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_observation_lab_mb sso INNER JOIN permintaan_lab pl ON sso.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ],
             'diagnosticreport_lab_mb' => [
                 'total_sql' => "SELECT COUNT(*) FROM detail_periksa_lab dpl INNER JOIN reg_periksa rp ON dpl.no_rawat = rp.no_rawat INNER JOIN permintaan_lab pl ON dpl.no_rawat = pl.no_rawat WHERE pl.status = 'mikrobiologi' AND rp.tgl_registrasi BETWEEN :df AND :dt",
-                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_diagnosticreport_lab_mb ssdr INNER JOIN reg_periksa rp ON ssdr.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
+                'synced_sql' => "SELECT COUNT(*) FROM satu_sehat_diagnosticreport_lab_mb ssdr INNER JOIN permintaan_lab pl ON ssdr.noorder = pl.noorder INNER JOIN reg_periksa rp ON pl.no_rawat = rp.no_rawat WHERE rp.tgl_registrasi BETWEEN :df AND :dt"
             ]
         ];
 
