@@ -115,8 +115,8 @@ class SatuSehatCompositionProcessor
             $this->log->info("[PHASE 1] {$noRawat}: POST /Composition");
             $response = $this->api->post('/Composition', $payload);
 
-            if ($response && isset($response['id'])) {
-                $idComposition = $response['id'];
+            if ($response && ($response['success'] ?? false) && isset($response['data']['id'])) {
+                $idComposition = $response['data']['id'];
                 $this->db->saveComposition($noRawat, $idComposition);
                 $this->db->updateCompositionLocalState($noRawat, 'active');
                 $this->log->success("[PHASE 1] {$noRawat}: Sync success. ID: {$idComposition}");
@@ -188,7 +188,7 @@ class SatuSehatCompositionProcessor
             $this->log->info("[PHASE 2] {$noRawat}: PUT /Composition/{$idComposition}");
             $response = $this->api->put('/Composition/' . $idComposition, $payload);
 
-            if ($response && isset($response['id'])) {
+            if ($response && ($response['success'] ?? false) && isset($response['data']['id'])) {
                 $this->db->updateCompositionLocalState($noRawat, 'updated');
                 $this->log->success("[PHASE 2] {$noRawat}: Update success. ID: {$idComposition}");
                 $this->successCount++;

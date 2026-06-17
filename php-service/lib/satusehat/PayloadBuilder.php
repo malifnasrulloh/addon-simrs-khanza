@@ -2292,7 +2292,7 @@ class SatuSehatPayloadBuilder
                 'code' => [
                     'coding' => [
                         [
-                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/composition-section',
+                            'system' => 'http://terminology.kemkes.go.id',
                             'code' => 'TK000003',
                             'display' => 'Anamnesis'
                         ]
@@ -2313,7 +2313,7 @@ class SatuSehatPayloadBuilder
                 'code' => [
                     'coding' => [
                         [
-                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/composition-section',
+                            'system' => 'http://terminology.kemkes.go.id',
                             'code' => 'TK000007',
                             'display' => 'Pemeriksaan Fisik'
                         ]
@@ -2334,7 +2334,7 @@ class SatuSehatPayloadBuilder
                 'code' => [
                     'coding' => [
                         [
-                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/composition-section',
+                            'system' => 'http://terminology.kemkes.go.id',
                             'code' => 'TK000004',
                             'display' => 'Diagnosis'
                         ]
@@ -2355,7 +2355,7 @@ class SatuSehatPayloadBuilder
                 'code' => [
                     'coding' => [
                         [
-                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/composition-section',
+                            'system' => 'http://terminology.kemkes.go.id',
                             'code' => 'TK000005',
                             'display' => 'Tindakan/Prosedur Medis'
                         ]
@@ -2383,7 +2383,7 @@ class SatuSehatPayloadBuilder
                 'code' => [
                     'coding' => [
                         [
-                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/composition-section',
+                            'system' => 'http://terminology.kemkes.go.id',
                             'code' => 'TK000013',
                             'display' => 'Farmasi'
                         ]
@@ -2439,7 +2439,7 @@ class SatuSehatPayloadBuilder
                 'code' => [
                     'coding' => [
                         [
-                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/composition-section',
+                            'system' => 'http://terminology.kemkes.go.id',
                             'code' => 'TK000009',
                             'display' => 'Pemeriksaan Penunjang'
                         ]
