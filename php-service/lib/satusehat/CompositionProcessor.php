@@ -104,7 +104,7 @@ class SatuSehatCompositionProcessor
             }
 
             $payload = SatuSehatPayloadBuilder::composition(
-                $this->config->organizationId,
+                $this->config->orgId,
                 $r,
                 $idPasien,
                 $idDokter,
@@ -176,7 +176,7 @@ class SatuSehatCompositionProcessor
             }
 
             $payload = SatuSehatPayloadBuilder::composition(
-                $this->config->organizationId,
+                $this->config->orgId,
                 $r,
                 $idPasien,
                 $idDokter,

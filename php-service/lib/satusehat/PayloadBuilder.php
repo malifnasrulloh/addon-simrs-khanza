@@ -2449,6 +2449,23 @@ class SatuSehatPayloadBuilder
             ];
         }
 
+        $isRalan = (($p['status_lanjut'] ?? '') === 'Ralan');
+        $kdPoli = $p['kd_poli'] ?? '';
+
+        if ($kdPoli === 'IGDK') {
+            $typeCode = '97663-9';
+            $typeDisplay = 'Emergency medicine Emergency department Discharge summary';
+            $title = 'Resume Medis Gawat Darurat';
+        } elseif ($isRalan) {
+            $typeCode = '88645-7';
+            $typeDisplay = 'Outpatient hospital Discharge summary';
+            $title = 'Resume Medis Rawat Jalan';
+        } else {
+            $typeCode = '18842-5';
+            $typeDisplay = 'Discharge Summary';
+            $title = 'Resume Medis Rawat Inap';
+        }
+
         $payload = [
             'resourceType' => 'Composition',
             'status' => 'final',
@@ -2456,8 +2473,8 @@ class SatuSehatPayloadBuilder
                 'coding' => [
                     [
                         'system' => 'http://loinc.org',
-                        'code' => '88645-7',
-                        'display' => 'Outpatient hospital Discharge summary'
+                        'code' => $typeCode,
+                        'display' => $typeDisplay
                     ]
                 ]
             ],
@@ -2465,9 +2482,9 @@ class SatuSehatPayloadBuilder
                 [
                     'coding' => [
                         [
-                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/definition-category',
-                            'code' => 'resume-medis',
-                            'display' => 'Resume Medis'
+                            'system' => 'http://loinc.org',
+                            'code' => 'LP173421-1',
+                            'display' => 'Report'
                         ]
                     ]
                 ]
@@ -2486,7 +2503,7 @@ class SatuSehatPayloadBuilder
                     'display' => $p['nama']
                 ]
             ],
-            'title' => 'Resume Medis - ' . $p['nm_pasien'],
+            'title' => $title,
             'custodian' => [
                 'reference' => 'Organization/' . $orgId
             ],

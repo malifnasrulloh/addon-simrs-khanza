@@ -435,7 +435,6 @@ class SatuSehatDatabase
 
     public function getIhsPatient(string $nik): ?string
     {
-        $nik = trim($nik);
         if (!$this->isValidNik($nik)) {
             $this->log->debug("[DB] Invalid Patient NIK format: '{$nik}' (skipping IHS lookup)");
             return null;
@@ -470,7 +469,8 @@ class SatuSehatDatabase
 
         // Fallback to API lookup
         $this->log->info("[API] Patient NIK {$nik} not found or cached as failed. Searching via Satu Sehat...");
-        $result = $this->client->get("/Patient?identifier=https://fhir.kemkes.go.id/id/nik|{$nik}");
+        $clean_nik = trim($nik);
+        $result = $this->client->get("/Patient?identifier=https://fhir.kemkes.go.id/id/nik|{$clean_nik}");
         
         if ($result['success']) {
             if (isset($result['data']['entry'][0]['resource']['id'])) {
