@@ -18,6 +18,11 @@ class SatuSehatClient
     private int    $delayMs;
     private Logger $log;
     private string $tokenCacheFile;
+    /**
+     * Source timezone used when a payload string has no explicit offset.
+     * Configurable via SatuSehatConfig::$timezone (defaults to Asia/Jakarta).
+     */
+    private \DateTimeZone $sourceTimezone;
 
     private const CONNECT_TIMEOUT = 10;
     private const REQUEST_TIMEOUT = 30;
@@ -32,7 +37,8 @@ class SatuSehatClient
         $this->delayMs      = $config->delayMs;
         $this->log          = $log;
 
-        $this->tokenCacheFile = $config->logDir . '/satusehat_token.json';
+        $this->tokenCacheFile  = $config->logDir . '/satusehat_token.json';
+        $this->sourceTimezone  = new \DateTimeZone($config->timezone ?: 'Asia/Jakarta');
     }
 
     /**
@@ -294,7 +300,17 @@ class SatuSehatClient
     }
 
     /**
-     * Recursively traverse the request payload to find date-time fields and format them as UTC.
+     * Recursively traverse the request payload and normalize date-time strings to UTC.
+     *
+     * Accepted inputs (any Indonesian or other timezone, e.g. Asia/Jakarta,
+     * Asia/Makassar, Asia/Jayapura):
+     *   - "2026-06-03 20:10:07"          (no offset → assumed source timezone)
+     *   - "2026-06-03T20:10:07"          (no offset → assumed source timezone)
+     *   - "2026-06-03T20:10:07+07:00"    (with offset)
+     *   - "2026-06-03T20:10:07+0700"     (basic-offset form)
+     *
+     * Already-UTC values ("...Z" or "...+00:00") are returned untouched.
+     * Strings that don't look like date-times are left alone.
      */
     private function convertPayloadDatesToUtc(array $payload): array
     {
@@ -302,14 +318,54 @@ class SatuSehatClient
             if (is_array($value)) {
                 $payload[$key] = $this->convertPayloadDatesToUtc($value);
             } elseif (is_string($value)) {
-                // Matches standard date-time formats with or without timezone offset (+07:00 / +0700)
-                // e.g. "2026-06-03 20:10:07", "2026-06-03T20:10:07+07:00", etc.
-                // Excludes already formatted UTC offsets (+00:00, Z) using negative lookahead
-                if (preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?!\+00:00|\+0000|Z)(?:\+07:00|\+0700)?$/', $value)) {
-                    $payload[$key] = SatuSehatPayloadBuilder::convertLocalToUtc($value);
+                $converted = $this->normalizeDateTimeToUtc($value);
+                if ($converted !== null) {
+                    $payload[$key] = $converted;
                 }
             }
         }
         return $payload;
+    }
+
+    /**
+     * Convert one date-time string to UTC ISO 8601, or return null if the
+     * string does not look like a date-time.
+     */
+    private function normalizeDateTimeToUtc(string $value): ?string
+    {
+        // Must contain at least YYYY-MM-DD plus HH:MM:SS or HH:MM to be a candidate.
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?/', $value)) {
+            return null;
+        }
+
+        // Normalize space separator to 'T' so DateTimeImmutable parses consistently.
+        $candidate = str_replace(' ', 'T', $value);
+
+        try {
+            // If the string carries an explicit offset (e.g. +07:00, +0700, Z),
+            // DateTimeImmutable::ATOM falls back to that offset.
+            $dt = new \DateTimeImmutable($candidate);
+        } catch (\Exception $e) {
+            return null;
+        }
+
+        // If no offset was specified, $candidate was parsed using the default
+        // timezone (whatever PHP's date.timezone is). Re-anchor to the configured
+        // source timezone so a server in UTC doesn't mis-interpret a local time.
+        if (preg_match('/[Zz]$|[+\-]\d{2}:?\d{2}$/', $value) === 0) {
+            try {
+                $dt = new \DateTimeImmutable($candidate, $this->sourceTimezone);
+            } catch (\Exception $e) {
+                return null;
+            }
+        }
+
+        // Already UTC? Return as-is in canonical form.
+        $offsetSeconds = $dt->getOffset();
+        if ($offsetSeconds === 0) {
+            return $dt->format('Y-m-d\TH:i:s\Z');
+        }
+
+        return $dt->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d\TH:i:s\Z');
     }
 }

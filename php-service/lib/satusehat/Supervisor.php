@@ -2,7 +2,9 @@
 
 /**
  * SatuSehatSupervisor - Orchestrates and monitors background workers for parallel execution.
- * Enforces Time-To-Live (TTL) timeouts to prevent hung worker child processes.
+ * Tracks exit status of forked workers. Optional Time-To-Live (TTL) can be set
+ * via the constructor to send SIGKILL to workers that exceed the budget; by
+ * default TTL is disabled so workers run to natural completion.
  *
  * @author malifnasrulloh (converted from Java by Antigravity)
  */
@@ -12,18 +14,25 @@ declare(strict_types=1);
 class SatuSehatSupervisor
 {
     private Logger $log;
+    /**
+     * Per-worker TTL in seconds. 0 (or negative) disables the kill entirely:
+     * workers are monitored for exit status only and are allowed to run to
+     * natural completion. Set >0 only if you need a hard ceiling.
+     */
     private int $timeoutSeconds;
 
     /**
      * Constructor.
-     * 
-     * @param Logger $log Logger instance
-     * @param int $timeoutSeconds Max execution time (TTL) allowed for each worker (default: 300s = 5 mins)
+     *
+     * @param Logger $log             Logger instance
+     * @param int    $timeoutSeconds  Per-worker TTL in seconds.
+     *                                0 (default) disables TTL: workers run to
+     *                                natural completion, no SIGKILL is ever sent.
      */
-    public function __construct(Logger $log, int $timeoutSeconds = 300)
+    public function __construct(Logger $log, int $timeoutSeconds = 0)
     {
         $this->log = $log;
-        $this->timeoutSeconds = 9223372036854775807;
+        $this->timeoutSeconds = $timeoutSeconds;
     }
 
     /**
@@ -38,7 +47,10 @@ class SatuSehatSupervisor
             return true;
         }
 
-        $this->log->info("[SUPERVISOR] Starting active monitoring for " . count($workers) . " background workers (TTL: {$this->timeoutSeconds}s)...");
+        $ttlMsg = $this->timeoutSeconds > 0
+            ? "{$this->timeoutSeconds}s"
+            : 'disabled (run to natural completion)';
+        $this->log->info("[SUPERVISOR] Starting active monitoring for " . count($workers) . " background workers (TTL: {$ttlMsg})...");
 
         // Map containing PID => start timestamp
         $activeWorkers = [];
@@ -70,18 +82,21 @@ class SatuSehatSupervisor
                         $allSuccess = false;
                     }
                 } else {
-                    // Process is still running, check if it has exceeded TTL
-                    $runningTime = time() - $startTime;
-                    if ($runningTime > $this->timeoutSeconds) {
-                        $this->log->warning("[SUPERVISOR] Worker [PID {$pid}] has been running for {$runningTime}s, exceeding TTL limit of {$this->timeoutSeconds}s! Sending SIGKILL...");
-                        
-                        // Terminate the hung process forcefully
-                        posix_kill($pid, SIGKILL);
-                        pcntl_waitpid($pid, $status); // clean up zombie process reference
-                        
-                        unset($activeWorkers[$pid]);
-                        $this->log->error("[SUPERVISOR] Worker [PID {$pid}] terminated due to timeout.");
-                        $allSuccess = false;
+                    // Process is still running. TTL is opt-in: only kill if a
+                    // positive timeout was configured.
+                    if ($this->timeoutSeconds > 0) {
+                        $runningTime = time() - $startTime;
+                        if ($runningTime > $this->timeoutSeconds) {
+                            $this->log->warning("[SUPERVISOR] Worker [PID {$pid}] has been running for {$runningTime}s, exceeding TTL limit of {$this->timeoutSeconds}s! Sending SIGKILL...");
+
+                            // Terminate the hung process forcefully
+                            posix_kill($pid, SIGKILL);
+                            pcntl_waitpid($pid, $status); // clean up zombie process reference
+
+                            unset($activeWorkers[$pid]);
+                            $this->log->error("[SUPERVISOR] Worker [PID {$pid}] terminated due to timeout.");
+                            $allSuccess = false;
+                        }
                     }
                 }
             }
