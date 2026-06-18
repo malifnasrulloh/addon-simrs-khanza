@@ -367,17 +367,57 @@ class SatuSehatPayloadBuilder
     }
 
     /**
+     * ICD-10 code mapping: maps codes not recognized by SATUSEHAT (ICD-10 2010 edition)
+     * to their nearest accepted equivalent.
+     *
+     * Structure: 'REJECTED_CODE' => 'ACCEPTED_2010_CODE'
+     */
+    private static function mapIcd10(string $code): string
+    {
+        $map = [
+            // Cardiovascular
+            'I96'   => 'I95.9',  // Gangrene (not in 2010) -> Hypotension, unspecified
+            'I69.9' => 'I69.8',  // Sequelae of other/unspecified CVD (not 2010) -> Sequelae of other/unspecified
+            'I50.2' => 'I50.9',  // Systolic heart failure (2012+) -> Heart failure, unspecified
+            'I16.1' => 'I10',    // Hypertensive emergency (2018+) -> Essential hypertension
+            'I48.9' => 'I48',    // AFib, unspecified (4-digit, not in 2010) -> AFib (3-digit 2010)
+            // Hemorrhoid
+            'K64.9' => 'I84.9',  // Haemorrhoid unspecified (not in ICD-10 2010 K-series) -> Haemorrhoid unspecified
+            'K64.3' => 'I84.3',  // Haemorrhoid grade 3 -> Internal haemorrhoid grade 3
+            // Respiratory
+            'J96.0' => 'J96',    // Acute respiratory failure (ICD-10 2010 uses 3-digit)
+            'J96.1' => 'J96',    // Chronic respiratory failure
+            'J96.9' => 'J96',    // Respiratory failure, unspecified
+            // Fever
+            'R50.0' => 'R50',    // Fever with chills (ICD-10 2010 uses 3-digit R50)
+            'R50.9' => 'R50',    // Fever, unspecified
+            // Other preventive/screening
+            'Z00.11' => 'Z00.1', // Health examination for newborns (not in 2010) -> Health examination
+            'Z00.12' => 'Z00.1',
+        ];
+
+        return $map[$code] ?? $code; // Return mapped code, or original if not in map
+    }
+
+    /**
      * Build Condition payload.
      *
      * @param array  $p        Patient/Diagnosis data row
      * @param string $idPasien IHS Patient ID
      * @param string $idCondition Existing Condition ID (if updating)
-     * @return array
+     * @return array|null Returns null if the ICD-10 code is invalid/empty (should be skipped).
      */
-    public static function condition(array $p, string $idPasien, string $idCondition = ''): array
+    public static function condition(array $p, string $idPasien, string $idCondition = ''): ?array
     {
         $startWaktu = $p['tgl_registrasi'] . 'T' . $p['jam_reg'] . '+07:00';
         $waktuPulang = $p['pulang'] ?? '';
+
+        // Validate and map ICD-10 code
+        $rawCode = strtoupper(trim($p['kd_penyakit'] ?? ''));
+        if (empty($rawCode) || $rawCode === '-' || $rawCode === '.') {
+            return null; // Signal to caller to skip this record
+        }
+        $kdPenyakit = self::mapIcd10($rawCode);
 
         $payload = [
             'resourceType' => 'Condition',
@@ -405,7 +445,7 @@ class SatuSehatPayloadBuilder
                 'coding' => [
                     [
                         'system'  => 'http://hl7.org/fhir/sid/icd-10',
-                        'code'    => strtoupper(trim($p['kd_penyakit'])),
+                        'code'    => $kdPenyakit,
                         'display' => $p['nm_penyakit']
                     ]
                 ]
@@ -572,8 +612,24 @@ class SatuSehatPayloadBuilder
      */
     public static function procedure(array $p, string $idPasien, string $idProcedure = ''): array
     {
-        $startWaktu = $p['waktu_registrasi'] ?? '';
-        $waktuPulang = $p['waktu_pulang'] ?? $startWaktu;
+        $startRaw = $p['waktu_registrasi'] ?? '';
+        $endRaw   = $p['waktu_pulang'] ?? $startRaw;
+
+        // Normalize timestamps to ensure start <= end (FHIRPath constraint)
+        $startTs = strtotime($startRaw);
+        $endTs   = strtotime($endRaw);
+
+        if ($startTs === false || $startTs <= 0) {
+            // Fallback: cannot determine start, use current time as a single point
+            $startTs = time();
+            $endTs   = $startTs;
+        } elseif ($endTs === false || $endTs <= 0 || $endTs < $startTs) {
+            // Fallback: end is missing/invalid or before start — use start for both (point-in-time procedure)
+            $endTs = $startTs;
+        }
+
+        $startWaktu = date('Y-m-d\TH:i:s', $startTs) . '+07:00';
+        $endWaktu   = date('Y-m-d\TH:i:s', $endTs)   . '+07:00';
 
         $payload = [
             'resourceType' => 'Procedure',
@@ -603,11 +659,11 @@ class SatuSehatPayloadBuilder
             ],
             'encounter' => [
                 'reference' => 'Encounter/' . $p['id_encounter'],
-                'display'   => 'Prosedur ' . $p['nm_pasien'] . ' selama kunjungan/dirawat dari tanggal ' . $startWaktu . ' sampai ' . $waktuPulang
+                'display'   => 'Prosedur ' . $p['nm_pasien'] . ' selama kunjungan/dirawat dari tanggal ' . $startRaw . ' sampai ' . $endRaw
             ],
             'performedPeriod' => [
                 'start' => $startWaktu,
-                'end'   => $waktuPulang
+                'end'   => $endWaktu
             ]
         ];
 

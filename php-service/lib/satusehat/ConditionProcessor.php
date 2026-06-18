@@ -97,6 +97,14 @@ class SatuSehatConditionProcessor
                 $idPasien
             );
 
+            // null means the ICD-10 code is empty or invalid — skip before sending to API
+            if ($payload === null) {
+                $this->log->warning("[PHASE 1] {$noRawat}: ✗ Skipped -> Empty or invalid ICD-10 code '{$kdPenyakit}' (pre-validation)");
+                $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code');
+                $this->skipCount++;
+                continue;
+            }
+
             $this->log->info("[PHASE 1] {$noRawat}: POST /Condition (ICD: {$kdPenyakit})");
             $result = $this->api->post('/Condition', $payload);
 
@@ -177,6 +185,14 @@ class SatuSehatConditionProcessor
                 $idPasien,
                 $p['id_condition']
             );
+
+            // null means the ICD-10 code is empty or invalid — skip before sending to API
+            if ($payload === null) {
+                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Skipped -> Empty or invalid ICD-10 code '{$kdPenyakit}' (pre-validation)");
+                $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code');
+                $this->skipCount++;
+                continue;
+            }
 
             $this->log->info("[PHASE 2] {$noRawat}: PUT /Condition/{$p['id_condition']} (ICD: {$kdPenyakit})");
             $result = $this->api->put("/Condition/{$p['id_condition']}", $payload);

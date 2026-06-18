@@ -119,11 +119,29 @@ class SatuSehatCompositionProcessor
                 $idComposition = $response['data']['id'];
                 $this->db->saveComposition($noRawat, $idComposition);
                 $this->db->updateCompositionLocalState($noRawat, 'active');
-                $this->log->success("[PHASE 1] {$noRawat}: Sync success. ID: {$idComposition}");
+                $this->log->info("[PHASE 1] {$noRawat}: ✓ Created Composition {$idComposition}");
                 $this->successCount++;
             } else {
-                $this->log->error("[PHASE 1] {$noRawat}: Sync failed. Error details: " . json_encode($response));
-                $this->failCount++;
+                $issueText = $response['data']['issue'][0]['details']['text'] ?? $response['message'] ?? '';
+
+                // Duplicate handling: Composition was already posted (e.g. from a previous crash before local save)
+                if (stripos($issueText, 'duplicate') !== false || stripos($issueText, '20002') !== false) {
+                    $this->log->warning("[PHASE 1] {$noRawat}: Duplicate Composition detected. Recovering from Satu Sehat...");
+                    $idComposition = $this->resolveDuplicateComposition($idEncounter);
+
+                    if ($idComposition) {
+                        $this->db->saveComposition($noRawat, $idComposition);
+                        $this->db->updateCompositionLocalState($noRawat, 'active');
+                        $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered Composition {$idComposition} from Satu Sehat");
+                        $this->successCount++;
+                    } else {
+                        $this->log->error("[PHASE 1] {$noRawat}: ✗ Failed to recover duplicate Composition.");
+                        $this->failCount++;
+                    }
+                } else {
+                    $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $issueText);
+                    $this->failCount++;
+                }
             }
         }
     }
@@ -190,12 +208,35 @@ class SatuSehatCompositionProcessor
 
             if ($response && ($response['success'] ?? false) && isset($response['data']['id'])) {
                 $this->db->updateCompositionLocalState($noRawat, 'updated');
-                $this->log->success("[PHASE 2] {$noRawat}: Update success. ID: {$idComposition}");
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Composition {$idComposition}");
                 $this->successCount++;
             } else {
-                $this->log->error("[PHASE 2] {$noRawat}: Update failed. Error details: " . json_encode($response));
+                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Update failed -> " . json_encode($response['data']['issue'][0]['details']['text'] ?? $response['message'] ?? ''));
                 $this->failCount++;
             }
         }
+    }
+
+    /**
+     * Resolves a duplicate Composition by searching the Satu Sehat API by encounter reference.
+     * This handles cases where the Composition was created on SATUSEHAT but the local save failed.
+     */
+    private function resolveDuplicateComposition(string $idEncounter): ?string
+    {
+        $endpoint = "/Composition?encounter={$idEncounter}";
+        $result = $this->api->get($endpoint);
+
+        if (!($result['success'] ?? false) || empty($result['data']['entry'])) {
+            return null;
+        }
+
+        foreach ($result['data']['entry'] as $entry) {
+            $res = $entry['resource'] ?? [];
+            if (isset($res['id'])) {
+                return $res['id'];
+            }
+        }
+
+        return null;
     }
 }
