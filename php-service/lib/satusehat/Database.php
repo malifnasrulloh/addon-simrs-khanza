@@ -598,6 +598,7 @@ class SatuSehatDatabase
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
             INNER JOIN diagnosa_pasien dp ON dp.no_rawat = rp.no_rawat
             INNER JOIN penyakit py ON py.kd_penyakit = dp.kd_penyakit
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
             LEFT JOIN kamar_inap ki ON ki.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt

@@ -197,7 +197,7 @@ class SatuSehatEpisodeOfCareProcessor
 
             $localState = $this->db->getEocLocalState($noRawat);
 
-            if ($localState === 'finished' || $localState === 'privacy_error' || $localState === 'failed_rule' || $localState === 'invalid_code') {
+            if ($localState === 'finished' || $localState === 'privacy_error' || $localState === 'failed_rule' || $localState === 'invalid_code' || $localState === 'merge_failed') {
                 $this->skipCount++;
                 continue;
             }
@@ -219,20 +219,79 @@ class SatuSehatEpisodeOfCareProcessor
                 continue;
             }
 
-            // Transition using PATCH instead of PUT for cleaner status updates
-            $finishedWaktu = $p['waktu_pulang'] ?? null;
-            $operations = [
-                ['op' => 'replace', 'path' => '/status', 'value' => 'finished'],
-            ];
-            if ($finishedWaktu) {
-                $operations[] = ['op' => 'replace', 'path' => '/period/end', 'value' => $finishedWaktu];
+            $eocId = $p['id_episode_of_care'];
+
+            // ── GET the existing EpisodeOfCare from SATUSEHAT ──────────────
+            $this->log->info("[PHASE 2] {$noRawat}: GET /EpisodeOfCare/{$eocId}");
+            $getResult = $this->api->get("/EpisodeOfCare/{$eocId}");
+
+            if (!$getResult['success'] || empty($getResult['data']['id'])) {
+                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed to GET EpisodeOfCare/{$eocId}. Skipped.");
+                $this->failCount++;
+                continue;
             }
 
-            $this->log->info("[PHASE 2] {$noRawat}: PATCH /EpisodeOfCare/{$p['id_episode_of_care']} (finished)");
-            $result = $this->api->patch("/EpisodeOfCare/{$p['id_episode_of_care']}", $operations);
+            $resource = $getResult['data'];
+
+            // Already finished on server? Just update local state
+            if (($resource['status'] ?? '') === 'finished') {
+                $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $eocId);
+                $this->db->updateEocLocalState($noRawat, 'finished');
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Already finished on SATUSEHAT → synced locally");
+                $this->successCount++;
+                continue;
+            }
+
+            // ── Compute period.end ─────────────────────────────────────────
+            $finishedWaktu = $p['waktu_pulang'] ?? null;
+            $periodStart = $resource['period']['start'] ?? null;
+
+            if (!$finishedWaktu && $periodStart) {
+                // Fallback: period.start + 1 day (UTC)
+                try {
+                    $startDt = new \DateTime($periodStart);
+                    $endDt = (clone $startDt)->modify('+1 day');
+                    $finishedWaktu = $endDt->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d\TH:i:s\Z');
+                    $this->log->info("[PHASE 2] {$noRawat}: No discharge time → fallback to start+1day ({$finishedWaktu})");
+                } catch (\Throwable $e) {
+                    $finishedWaktu = (new \DateTime('now', new \DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z');
+                    $this->log->warning("[PHASE 2] {$noRawat}: Cannot parse period.start → fallback to NOW ({$finishedWaktu})");
+                }
+            } elseif (!$finishedWaktu) {
+                $finishedWaktu = (new \DateTime('now', new \DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z');
+                $this->log->warning("[PHASE 2] {$noRawat}: No discharge time and no period.start → fallback to NOW ({$finishedWaktu})");
+            }
+
+            // ── Mutate the resource ────────────────────────────────────────
+            $resource['status'] = 'finished';
+            $resource['period']['end'] = $finishedWaktu;
+
+            // Add statusHistory entry for the finished transition
+            if (!isset($resource['statusHistory'])) {
+                $resource['statusHistory'] = [];
+            }
+            // Close the active period in the last statusHistory entry
+            $lastIdx = count($resource['statusHistory']) - 1;
+            if ($lastIdx >= 0 && ($resource['statusHistory'][$lastIdx]['status'] ?? '') === 'active') {
+                $resource['statusHistory'][$lastIdx]['period']['end'] = $finishedWaktu;
+            }
+            $resource['statusHistory'][] = [
+                'status' => 'finished',
+                'period' => [
+                    'start' => $finishedWaktu,
+                    'end'   => $finishedWaktu
+                ]
+            ];
+
+            // Remove server-managed fields that can't be sent in PUT
+            unset($resource['meta']);
+
+            // ── PUT the modified resource back ─────────────────────────────
+            $this->log->info("[PHASE 2] {$noRawat}: PUT /EpisodeOfCare/{$eocId} (finished)");
+            $result = $this->api->put("/EpisodeOfCare/{$eocId}", $resource);
 
             if ($result['success']) {
-                $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $p['id_episode_of_care']);
+                $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $eocId);
                 $this->db->updateEocLocalState($noRawat, 'finished');
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to finished");
                 $this->successCount++;
@@ -248,6 +307,10 @@ class SatuSehatEpisodeOfCareProcessor
                 } elseif (stripos($errorMessage, 'Rule Number: 10110') !== false || stripos($errorMessage, 'found another EpisodeOfCare') !== false) {
                     $this->db->updateEocLocalState($noRawat, 'failed_rule');
                     $this->log->warning("[PHASE 2] {$noRawat}: Skip future retries due to active EpisodeOfCare rule conflict.");
+                    $this->skipCount++;
+                } elseif (stripos($errorMessage, 'merge_failed') !== false || stripos($errorMessage, 'FHIRPath constraint') !== false) {
+                    $this->db->updateEocLocalState($noRawat, 'merge_failed');
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ merge_failed → marked to skip future retries.");
                     $this->skipCount++;
                 } else {
                     $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . $errorMessage);
