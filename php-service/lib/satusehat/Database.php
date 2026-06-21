@@ -56,6 +56,7 @@ class SatuSehatDatabase
         $this->sqlite = new PDO("sqlite:{$sqlitePath}");
         $this->sqlite->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $this->sqlite->exec("PRAGMA journal_mode=WAL;");
+        $this->sqlite->exec("PRAGMA busy_timeout = 60000;");
         
         // Ensure table exists
         $this->sqlite->exec("CREATE TABLE IF NOT EXISTS encounter_state (

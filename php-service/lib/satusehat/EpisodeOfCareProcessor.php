@@ -140,7 +140,7 @@ class SatuSehatEpisodeOfCareProcessor
                     ?? $result['message'];
                 
                 // Duplicate Handling Fallback
-                if (stripos($errorMessage, 'found duplicated') !== false || stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                if (stripos($errorMessage, 'found duplicated') !== false || stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("[PHASE 1] {$noRawat}: Duplicated EpisodeOfCare detected (Rule 10110/20002). Resolving...");
                     $recoveryResult = $this->resolveDuplicateEpisode($idPasien, $type->code, $noRawat, $p['stts'] ?? '', $payload);
 

@@ -119,7 +119,7 @@ class SatuSehatObservationLabPkProcessor
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
                 
                 // Duplicate Handling Fallback using identifier
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: Duplicated Observation detected. Searching existing records...");
                     $idObservation = $this->resolveDuplicateObservation($noorder, $idTemplate);
 

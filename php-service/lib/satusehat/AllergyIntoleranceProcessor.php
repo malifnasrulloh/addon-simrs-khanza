@@ -132,7 +132,7 @@ class SatuSehatAllergyIntoleranceProcessor
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
                 
                 // Duplicate Handling Fallback
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("[PHASE 1] {$noRawat}: Duplicated Allergy detected. Searching existing records...");
                     $idAllergy = $this->resolveDuplicateAllergy($idPasien, $a['id_encounter'], $allergyData['coding_code']);
 

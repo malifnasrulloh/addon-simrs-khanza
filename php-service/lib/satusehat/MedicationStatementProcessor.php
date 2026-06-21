@@ -110,7 +110,7 @@ class SatuSehatMedicationStatementProcessor
             } else {
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
 
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("[PHASE 1] Resep: {$noResep}: Duplicated MedicationStatement detected. Searching existing records...");
                     $idStatement = $this->resolveDuplicateMedicationStatement($noResep, $kodeBrng, $noRacik, $isRacikan);
 

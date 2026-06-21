@@ -126,7 +126,7 @@ class SatuSehatObservationTTVProcessor
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
                 
                 // Duplicate handling for Observation
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("    ! Duplicated. Attempting to recover...");
                     $idObservation = $this->resolveDuplicateObservation($idPasien, $p['id_encounter'], $def['code']);
 

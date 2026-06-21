@@ -132,7 +132,7 @@ class SatuSehatCarePlanProcessor
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
 
                 // Fallback check on conflict or potential duplicate error
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("[PHASE 1] {$noRawat}: Conflict or duplicate detected. Searching remote records...");
                     $idCarePlan = $this->resolveDuplicateCarePlan($idPasien, $idEncounter, $categoryCode);
 

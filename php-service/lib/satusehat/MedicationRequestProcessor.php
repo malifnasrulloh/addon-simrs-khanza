@@ -125,7 +125,7 @@ class SatuSehatMedicationRequestProcessor
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
                 
                 // Duplicate Handling Fallback
-                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409 || $result['code'] === 400) {
+                if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("[PHASE 1] {$label}: Duplicated MedicationRequest detected. Searching existing records...");
                     $idMedicationRequest = $this->resolveDuplicateMedicationRequest($noResep, $noRacik, $isRacikan);
 

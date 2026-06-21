@@ -46,18 +46,58 @@ class SatuSehatClient
      */
     public function getToken(): ?string
     {
-        // 1. Check file cache
+        // 1. First check: read-only check without lock for high performance
         if (file_exists($this->tokenCacheFile)) {
-            $raw = file_get_contents($this->tokenCacheFile);
-            $cache = json_decode($raw, true);
-            if ($cache && isset($cache['token']) && isset($cache['expires_at'])) {
-                // Buffer of 60 seconds to avoid edge-case expiry
-                if (time() < ($cache['expires_at'] - 60)) {
-                    return $cache['token'];
+            $raw = @file_get_contents($this->tokenCacheFile);
+            if ($raw) {
+                $cache = json_decode($raw, true);
+                if ($cache && isset($cache['token']) && isset($cache['expires_at'])) {
+                    // Buffer of 60 seconds to avoid edge-case expiry
+                    if (time() < ($cache['expires_at'] - 60)) {
+                        return $cache['token'];
+                    }
                 }
             }
         }
 
+        // 2. Lock file to prevent concurrent token requests
+        $lockFile = $this->tokenCacheFile . '.lock';
+        $lockFp = @fopen($lockFile, 'c');
+        if (!$lockFp) {
+            // Fallback to non-locking behavior if lock file cannot be opened
+            return $this->requestNewToken();
+        }
+
+        // Block until lock is acquired
+        flock($lockFp, LOCK_EX);
+
+        try {
+            // 3. Double-check cache inside the lock
+            if (file_exists($this->tokenCacheFile)) {
+                $raw = @file_get_contents($this->tokenCacheFile);
+                if ($raw) {
+                    $cache = json_decode($raw, true);
+                    if ($cache && isset($cache['token']) && isset($cache['expires_at'])) {
+                        if (time() < ($cache['expires_at'] - 60)) {
+                            return $cache['token'];
+                        }
+                    }
+                }
+            }
+
+            // 4. Request new token under the lock
+            return $this->requestNewToken();
+        } finally {
+            flock($lockFp, LOCK_UN);
+            fclose($lockFp);
+        }
+    }
+
+    /**
+     * Request a new OAuth token from Satu Sehat server.
+     */
+    private function requestNewToken(): ?string
+    {
         $this->log->info("[AUTH] Token expired or not found. Requesting new token...");
         $url = $this->authUrl . '/accesstoken?grant_type=client_credentials';
         $payload = http_build_query([

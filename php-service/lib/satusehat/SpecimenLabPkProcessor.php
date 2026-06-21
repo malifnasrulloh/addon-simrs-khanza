@@ -84,6 +84,14 @@ class SatuSehatSpecimenLabPkProcessor
                 continue;
             }
 
+            $sampelCode = isset($p['sampel_code']) ? trim($p['sampel_code']) : '';
+            if (empty($sampelCode)) {
+                $this->log->warning("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: Specimen sampel_code is empty (unmapped). Skipped permanently.");
+                $this->db->updateSpecimenLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'invalid_code');
+                $this->skipCount++;
+                continue;
+            }
+
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
 
             if (!$idPasien) {
@@ -190,6 +198,14 @@ class SatuSehatSpecimenLabPkProcessor
             // Local state check to prevent resubmitting terminal failures or already updated records
             $localState = $this->db->getSpecimenLabPKLocalState($noorder, $kdJenisPrw, $idTemplate);
             if ($localState === 'updated' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                $this->skipCount++;
+                continue;
+            }
+
+            $sampelCode = isset($p['sampel_code']) ? trim($p['sampel_code']) : '';
+            if (empty($sampelCode)) {
+                $this->log->warning("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: Specimen sampel_code is empty (unmapped). Skipped permanently.");
+                $this->db->updateSpecimenLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'invalid_code');
                 $this->skipCount++;
                 continue;
             }

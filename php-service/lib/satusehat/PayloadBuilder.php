@@ -981,7 +981,7 @@ class SatuSehatPayloadBuilder
             'code' => [
                 'coding' => [
                     [
-                        'system'  => trim($p['obat_system']),
+                        'system'  => str_replace(' ', '', trim($p['obat_system'])),
                         'code'    => trim($p['obat_code']),
                         'display' => trim($p['obat_display'])
                     ]
@@ -991,7 +991,7 @@ class SatuSehatPayloadBuilder
             'form' => [
                 'coding' => [
                     [
-                        'system'  => trim($p['form_system']),
+                        'system'  => str_replace(' ', '', trim($p['form_system'])),
                         'code'    => trim($p['form_code']),
                         'display' => trim($p['form_display'])
                     ]
