@@ -2616,16 +2616,29 @@ class SatuSehatPayloadBuilder
             ];
             
             if (!in_array($lowerCode, $standardUnits, true)) {
-                $code = '1';
+                // For discrete units under unitsofmeasure.org (like tablet, capsule, pcs),
+                // we omit the system and code fields completely. This is fully valid in FHIR
+                // and avoids the "Invalid coding system" / "Code not found" validation errors.
+                $system = '';
+                $code = '';
             }
         }
 
-        return [
-            'value'  => $value !== null ? (float)$value : null,
-            'unit'   => $unit !== '' ? $unit : null,
-            'system' => $system !== '' ? $system : null,
-            'code'   => $code !== '' ? $code : null
-        ];
+        $res = [];
+        if ($value !== null && $value !== '') {
+            $res['value'] = (float)$value;
+        }
+        if ($unit !== '') {
+            $res['unit'] = $unit;
+        }
+        if ($system !== '') {
+            $res['system'] = $system;
+        }
+        if ($code !== '') {
+            $res['code'] = $code;
+        }
+
+        return $res;
     }
 }
 
