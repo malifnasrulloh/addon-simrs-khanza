@@ -1436,16 +1436,6 @@ class SatuSehatPayloadBuilder
                                 'display' => isset($p['route_display']) ? trim($p['route_display']) : null
                             ]
                         ]
-                    ],
-                    'doseAndRate' => [
-                        [
-                            'doseQuantity' => self::sanitizeUcum([
-                                'value'  => $signa1,
-                                'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
-                                'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
-                                'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
-                            ])
-                        ]
                     ]
                 ]
             ],
