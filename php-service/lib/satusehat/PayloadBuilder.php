@@ -905,12 +905,12 @@ class SatuSehatPayloadBuilder
                     ]
                 ]
             ],
-            'doseQuantity' => [
+            'doseQuantity' => self::sanitizeUcum([
                 'value' => (float)$imm['jml'],
                 'unit' => $imm['dose_quantity_unit'],
                 'system' => $imm['dose_quantity_system'],
                 'code' => $imm['dose_quantity_code']
-            ],
+            ]),
             'performer' => [
                 [
                     'function' => [
@@ -1135,23 +1135,23 @@ class SatuSehatPayloadBuilder
                     ],
                     'doseAndRate' => [
                         [
-                            'doseQuantity' => [
+                            'doseQuantity' => self::sanitizeUcum([
                                 'value'  => $signa1,
                                 'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
                                 'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
                                 'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
-                            ]
+                            ])
                         ]
                     ]
                 ]
             ],
             'dispenseRequest' => [
-                'quantity' => [
-                    'value'  => (float)$p['jml'],
+                'quantity' => self::sanitizeUcum([
+                    'value'  => $p['jml'],
                     'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
                     'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
                     'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
-                ]
+                ])
             ]
         ];
 
@@ -1207,8 +1207,33 @@ class SatuSehatPayloadBuilder
         }
 
         // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
-        $whenPrepared = str_replace(' ', 'T', $p['tgl_peresepan'] . ' ' . $p['jam_peresepan']) . '+07:00';
-        $whenHandedOver = str_replace(' ', 'T', $p['tgl_perawatan'] . ' ' . $p['jam']) . '+07:00';
+        $tglPrep = $p['tgl_peresepan'] ?? '';
+        $jamPrep = $p['jam_peresepan'] ?? '00:00:00';
+        $yearPrep = (int)substr($tglPrep, 0, 4);
+        if ($yearPrep < 2014) {
+            if (!empty($p['tgl_registrasi'])) {
+                $tglPrep = $p['tgl_registrasi'];
+                $jamPrep = !empty($p['jam_reg']) && $p['jam_reg'] !== '00:00:00' ? $p['jam_reg'] : '00:00:00';
+            } else {
+                $tglPrep = date('Y-m-d');
+                $jamPrep = date('H:i:s');
+            }
+        }
+        $whenPrepared = str_replace(' ', 'T', $tglPrep . ' ' . $jamPrep) . '+07:00';
+
+        $tglHanded = $p['tgl_perawatan'] ?? '';
+        $jamHanded = $p['jam'] ?? '00:00:00';
+        $yearHanded = (int)substr($tglHanded, 0, 4);
+        if ($yearHanded < 2014) {
+            $tglHanded = $tglPrep;
+            $jamHanded = $jamPrep;
+        }
+        $whenHandedOver = str_replace(' ', 'T', $tglHanded . ' ' . $jamHanded) . '+07:00';
+
+        // Enforce constraint: whenHandedOver >= whenPrepared
+        if (strtotime($whenHandedOver) < strtotime($whenPrepared)) {
+            $whenHandedOver = $whenPrepared;
+        }
 
         // Identifiers: match Java's custom system conventions
         $sys1 = $idMedicationDispense ? 'medicationdispense' : 'prescription';
@@ -1261,11 +1286,12 @@ class SatuSehatPayloadBuilder
                 'reference' => 'Location/' . $p['id_lokasi_satusehat'],
                 'display'   => $p['nm_bangsal']
             ],
-            'quantity' => [
-                'value'  => (float)$p['jml'],
+            'quantity' => self::sanitizeUcum([
+                'value'  => $p['jml'],
+                'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
                 'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
                 'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
-            ],
+            ]),
             'whenPrepared'   => $whenPrepared,
             'whenHandedOver' => $whenHandedOver,
             'dosageInstruction' => [
@@ -1290,12 +1316,12 @@ class SatuSehatPayloadBuilder
                     ],
                     'doseAndRate' => [
                         [
-                            'doseQuantity' => [
+                            'doseQuantity' => self::sanitizeUcum([
                                 'value'  => $signa1,
                                 'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
                                 'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
                                 'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
-                            ]
+                            ])
                         ]
                     ]
                 ]
@@ -1413,12 +1439,12 @@ class SatuSehatPayloadBuilder
                     ],
                     'doseAndRate' => [
                         [
-                            'doseQuantity' => [
+                            'doseQuantity' => self::sanitizeUcum([
                                 'value'  => $signa1,
                                 'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
                                 'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
                                 'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
-                            ]
+                            ])
                         ]
                     ]
                 ]
@@ -2582,6 +2608,34 @@ class SatuSehatPayloadBuilder
         } catch (\Throwable $e) {
             return str_replace(' ', 'T', $localDateTime) . '+00:00';
         }
+    }
+
+    public static function sanitizeUcum(array $qty): array
+    {
+        $value = isset($qty['value']) ? $qty['value'] : null;
+        $unit = isset($qty['unit']) ? trim((string)$qty['unit']) : '';
+        $system = isset($qty['system']) ? trim((string)$qty['system']) : '';
+        $code = isset($qty['code']) ? trim((string)$qty['code']) : '';
+
+        if (strpos($system, 'unitsofmeasure.org') !== false) {
+            $system = 'http://unitsofmeasure.org';
+            $lowerCode = strtolower($code);
+            $standardUnits = [
+                'mg', 'g', 'kg', 'ug', 'ml', 'l', 'mmol', 'meq', '%', 'percent', 
+                'iu', '[iu]', 'ug/ml', 'mg/ml', 'g/l', 'mcg'
+            ];
+            
+            if (!in_array($lowerCode, $standardUnits, true)) {
+                $code = '1';
+            }
+        }
+
+        return [
+            'value'  => $value !== null ? (float)$value : null,
+            'unit'   => $unit !== '' ? $unit : null,
+            'system' => $system !== '' ? $system : null,
+            'code'   => $code !== '' ? $code : null
+        ];
     }
 }
 

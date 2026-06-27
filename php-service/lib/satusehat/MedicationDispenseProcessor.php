@@ -106,8 +106,16 @@ class SatuSehatMedicationDispenseProcessor
             // Authorizing prescription lookup (MedicationRequest)
             $idMedicationRequest = $this->db->getMedicationRequestId($noResep, $kodeBrng);
             if (empty($idMedicationRequest)) {
-                $this->log->debug("[PHASE 1] Authorizing MedicationRequest not found for Resep: {$noResep}, Kode Barang: {$kodeBrng}. Sending without authorizingPrescription reference.");
-                $idMedicationRequest = null;
+                $reqState = $this->db->getMedicationRequestLocalState($noResep, $kodeBrng, '');
+                if (in_array($reqState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                    $this->log->warning("[PHASE 1] [SKIPPED] Authorizing MedicationRequest has terminal failure state '{$reqState}'. Marking MedicationDispense as failed_rule.");
+                    $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'failed_rule');
+                    $this->skipCount++;
+                    continue;
+                }
+                $this->log->warning("[PHASE 1] [SKIPPED] Authorizing MedicationRequest not found or not yet synced for Resep: {$noResep}, Kode Barang: {$kodeBrng}. MedicationDispense must wait.");
+                $this->skipCount++;
+                continue;
             }
 
             $payload = SatuSehatPayloadBuilder::medicationDispense(
@@ -215,7 +223,16 @@ class SatuSehatMedicationDispenseProcessor
             // Authorizing prescription lookup (MedicationRequest)
             $idMedicationRequest = $this->db->getMedicationRequestId($noResep, $kodeBrng);
             if (empty($idMedicationRequest)) {
-                $idMedicationRequest = null;
+                $reqState = $this->db->getMedicationRequestLocalState($noResep, $kodeBrng, '');
+                if (in_array($reqState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+                    $this->log->warning("[PHASE 2] [SKIPPED] Authorizing MedicationRequest has terminal failure state '{$reqState}'. Marking MedicationDispense as failed_rule.");
+                    $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'failed_rule');
+                    $this->skipCount++;
+                    continue;
+                }
+                $this->log->warning("[PHASE 2] [SKIPPED] Authorizing MedicationRequest not found or not yet synced for Resep: {$noResep}, Kode Barang: {$kodeBrng}. MedicationDispense must wait.");
+                $this->skipCount++;
+                continue;
             }
 
             $payload = SatuSehatPayloadBuilder::medicationDispense(
