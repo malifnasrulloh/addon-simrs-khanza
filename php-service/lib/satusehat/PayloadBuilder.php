@@ -2626,7 +2626,13 @@ class SatuSehatPayloadBuilder
             ];
             
             if (!in_array($lowerCode, $standardUnits, true)) {
-                $code = '1';
+                if ($code !== '') {
+                    if (substr($code, 0, 1) !== '{' || substr($code, -1) !== '}') {
+                        $code = '{' . $code . '}';
+                    }
+                } else {
+                    $code = '{1}';
+                }
             }
         }
 
