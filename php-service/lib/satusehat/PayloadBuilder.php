@@ -1235,20 +1235,17 @@ class SatuSehatPayloadBuilder
             $whenHandedOver = $whenPrepared;
         }
 
-        // Identifiers: match Java's custom system conventions
-        $sys1 = $idMedicationDispense ? 'medicationdispense' : 'prescription';
-        $sys2Type = $idMedicationDispense ? 'medicationdispense-item' : 'prescription-item';
-
+        // Identifiers: must be from the allowed systems in SATUSEHAT for MedicationDispense
         $payload = [
             'resourceType' => 'MedicationDispense',
             'identifier' => [
                 [
-                    'system' => 'http://sys-ids.kemkes.go.id/' . $sys1 . '/' . $orgId,
+                    'system' => 'http://sys-ids.kemkes.go.id/prescription/' . $orgId,
                     'use'    => 'official',
                     'value'  => $p['no_resep']
                 ],
                 [
-                    'system' => 'http://sys-ids.kemkes.go.id/' . $sys2Type . '/' . $orgId,
+                    'system' => 'http://sys-ids.kemkes.go.id/prescription-item/' . $orgId,
                     'use'    => 'official',
                     'value'  => $p['kode_brng']
                 ]
