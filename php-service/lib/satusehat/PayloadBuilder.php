@@ -2604,23 +2604,6 @@ class SatuSehatPayloadBuilder
         $system = isset($qty['system']) ? trim((string)$qty['system']) : '';
         $code = isset($qty['code']) ? trim((string)$qty['code']) : '';
 
-        if (strpos($system, 'unitsofmeasure.org') !== false) {
-            $system = 'http://unitsofmeasure.org';
-            $lowerCode = strtolower($code);
-            $standardUnits = [
-                'mg', 'g', 'kg', 'ug', 'ml', 'l', 'mmol', 'meq', '%', 'percent', 
-                'iu', '[iu]', 'ug/ml', 'mg/ml', 'g/l', 'mcg'
-            ];
-            
-            if (!in_array($lowerCode, $standardUnits, true)) {
-                // For discrete units under unitsofmeasure.org (like tablet, capsule, pcs),
-                // we omit the system and code fields completely. This is fully valid in FHIR
-                // and avoids the "Invalid coding system" / "Code not found" validation errors.
-                $system = '';
-                $code = '';
-            }
-        }
-
         $res = [];
         if ($value !== null && $value !== '') {
             $res['value'] = (float)$value;
