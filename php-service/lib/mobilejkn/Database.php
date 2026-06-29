@@ -419,6 +419,132 @@ SQL;
         return $stmt->fetch() !== false;
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Batch Eager-Loading (Fix #5, #7 — eliminate N+1 queries)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Eager-load racikan status for a batch of prescriptions.
+     * Prevents per-patient SELECT inside the task chain loop.
+     *
+     * @param string[] $noReseps
+     * @return array<string, bool> Set of no_resep => true for racikan prescriptions
+     */
+    public function fetchBatchIsRacikan(array $noReseps): array
+    {
+        if (empty($noReseps)) return [];
+        $placeholders = implode(',', array_fill(0, count($noReseps), '?'));
+        $sql = "SELECT no_resep FROM resep_dokter_racikan WHERE no_resep IN ($placeholders) GROUP BY no_resep";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(array_values($noReseps));
+        $set = [];
+        while ($row = $stmt->fetch()) {
+            $set[$row['no_resep']] = true;
+        }
+        return $set;
+    }
+
+    /**
+     * Eager-load ALL jadwal into an in-memory hash map keyed by "hari|dokter|poli".
+     * Prevents per-patient SELECT inside the task chain loop.
+     *
+     * @return array<string, array> Map of "hari_kerja|kd_dokter|kd_poli" => jadwal row
+     */
+    public function fetchAllJadwal(): array
+    {
+        $sql = "SELECT hari_kerja, kd_dokter, kd_poli, jam_mulai, jam_selesai, kuota FROM jadwal";
+        $stmt = $this->pdo->query($sql);
+        $map = [];
+        while ($row = $stmt->fetch()) {
+            $key = "{$row['hari_kerja']}|{$row['kd_dokter']}|{$row['kd_poli']}";
+            $map[$key] = $row;
+        }
+        return $map;
+    }
+
+    /**
+     * Lookup jadwal from pre-loaded hash map.
+     */
+    public function lookupJadwal(array $jadwalDict, string $hari, string $kdDokter, string $kdPoli): ?array
+    {
+        return $jadwalDict["{$hari}|{$kdDokter}|{$kdPoli}"] ?? null;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Fix #1: Real Task 3 timestamps from mutasi_berkas (ANTROL-ROBOT.JAVA)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Eager-load real Task 3 timestamps from mutasi_berkas.dikirim.
+     * ANTROL-ROBOT.JAVA uses real delivery timestamps when available,
+     * only falling back to inference when missing.
+     *
+     * @param string[] $noRawats
+     * @return array<string, string> Map of no_rawat => dikirim datetime (Y-m-d H:i:s)
+     */
+    public function fetchBatchMutasiBerkas(array $noRawats): array
+    {
+        if (empty($noRawats)) return [];
+        $placeholders = implode(',', array_fill(0, count($noRawats), '?'));
+        $sql = "SELECT no_rawat, dikirim FROM mutasi_berkas
+                WHERE no_rawat IN ($placeholders)
+                  AND dikirim IS NOT NULL
+                  AND dikirim != ''
+                  AND dikirim NOT LIKE '0000%'";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(array_values($noRawats));
+        $map = [];
+        while ($row = $stmt->fetch()) {
+            $map[$row['no_rawat']] = substr($row['dikirim'], 0, 19);
+        }
+        return $map;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Fix #4: Block 5 — Unsent SEP Recovery (from ANTROL-ROBOT.JAVA)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Fetch BPJS patients who have a SEP but zero taskid records.
+     * This is the safety net for patients completely missed by Blocks 1-4.
+     * Matches ANTROL-ROBOT.JAVA lines 1233-1238.
+     */
+    public function fetchUnsentSepPatients(string $dateFrom, string $dateTo): array
+    {
+        $sql = <<<'SQL'
+SELECT
+    rp.no_reg, rp.no_rawat, rp.tgl_registrasi, rp.jam_reg,
+    rp.kd_dokter, d.nm_dokter,
+    rp.kd_poli, pol.nm_poli,
+    rp.stts_daftar, rp.no_rkm_medis, rp.kd_pj, rp.stts,
+    p.no_ktp, p.no_peserta, p.no_tlp
+FROM reg_periksa rp
+INNER JOIN dokter d ON rp.kd_dokter = d.kd_dokter
+INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
+INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+  AND rp.kd_pj = 'BPJ'
+  AND rp.status_lanjut = 'Ralan'
+  AND rp.kd_poli != 'IGDK'
+  AND rp.no_rawat IN (
+      SELECT c.no_rawat FROM bridging_sep c
+      WHERE c.tglsep BETWEEN :df2 AND :dt2
+  )
+  AND rp.no_rawat NOT IN (
+      SELECT no_rawat FROM referensi_mobilejkn_bpjs_taskid
+      WHERE DATE(waktu) BETWEEN :df3 AND :dt3
+  )
+ORDER BY CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg)
+SQL;
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute([
+            'df'  => $dateFrom, 'dt'  => $dateTo,
+            'df2' => $dateFrom, 'dt2' => $dateTo,
+            'df3' => $dateFrom, 'dt3' => $dateTo,
+        ]);
+        return $stmt->fetchAll();
+    }
+
     /**
      * Fetch the full JKN booking record by no_rawat to support dynamic on-demand booking addition.
      */

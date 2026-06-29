@@ -98,6 +98,48 @@ $logLevel = $isVerbose ? 'DEBUG' : $config->logLevel;
 $log = new Logger($config->logDir, 'mobilejkn', $logLevel, $isVerbose, php_sapi_name() !== 'cli');
 $log->cleanOldLogs($config->logRetentionDays);
 
+// ─── File Locking (Fix #3 — prevent concurrent cron runs) ──────────────────
+// Matches ANTROL-ROBOT.JAVA's lock pattern: prevents duplicate processes
+$lockFile = sys_get_temp_dir() . '/mobilejkn_sync.lock';
+$lockFp = @fopen($lockFile, 'c');
+if ($lockFp === false) {
+    $log->error("[LOCK] Cannot create lock file: {$lockFile}");
+    exit(1);
+}
+
+if (!flock($lockFp, LOCK_EX | LOCK_NB)) {
+    // Another instance is running — check if it's stale
+    $existingPid = @file_get_contents($lockFile);
+    if ($existingPid !== false) {
+        $existingPid = trim($existingPid);
+        if (!empty($existingPid)) {
+            // Check if PID is still alive (POSIX systems only)
+            if (function_exists('posix_kill') && posix_kill((int) $existingPid, 0)) {
+                $log->warning("[LOCK] Another instance (PID {$existingPid}) is still running. Exiting.");
+                fclose($lockFp);
+                exit(0);
+            }
+            $log->warning("[LOCK] Stale lock found (PID {$existingPid} is dead). Taking over.");
+        }
+    }
+    // Try again with blocking lock
+    flock($lockFp, LOCK_EX);
+}
+
+// Write current PID to lock file for stale-lock detection
+ftruncate($lockFp, 0);
+fwrite($lockFp, (string) getmypid());
+fflush($lockFp);
+
+// Ensure lock is released on any exit path
+register_shutdown_function(function () use ($lockFp, $lockFile) {
+    if (is_resource($lockFp)) {
+        @flock($lockFp, LOCK_UN);
+        @fclose($lockFp);
+    }
+    @unlink($lockFile);
+});
+
 // ─── Banner ────────────────────────────────────────────────────────────────
 $log->info("══════════════════════════════════════════════════════════════");
 $log->info("  SIMRS Khanza - Mobile JKN Queue Sync Service");
@@ -158,4 +200,21 @@ $log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
 $log->info("══════════════════════════════════════════════════════════════");
 
 $db->close();
+
+// ─── Health Metrics (Fix #10 — write last_run.json for external monitoring) ─
+$healthFile = $config->logDir . '/last_run.json';
+$health = [
+    'last_run'         => date('c'),
+    'duration_sec'     => $elapsed,
+    'success'          => $stats['success'],
+    'fail'             => $stats['fail'],
+    'skip'             => $stats['skip'],
+    'exit_code'        => $stats['fail'] > 0 ? 2 : 0,
+    'php_version'      => PHP_VERSION,
+    'service_version'  => SERVICE_VERSION,
+    'mode'             => $isDryRun ? 'dry-run' : 'production',
+];
+@file_put_contents($healthFile, json_encode($health, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+$log->debug("[HEALTH] Metrics written to {$healthFile}");
+
 exit($stats['fail'] > 0 ? 2 : 0);
