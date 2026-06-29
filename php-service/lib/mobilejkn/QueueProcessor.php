@@ -265,11 +265,17 @@ class QueueProcessor
             // Load task state from pre-fetched dictionary
             $state = $taskStates[$noRawat] ?? ['3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
 
+            // Check for missing master data from LEFT JOIN (BUG-D: zero patient loss)
+            if (empty($p['nm_dokter']) || empty($p['nm_poli'])) {
+                $this->log->warning("[BLOCK 3] {$noRawat}: missing master data (nm_dokter='{$p['nm_dokter']}', nm_poli='{$p['nm_poli']}') — patient fetched but needs manual review");
+            }
+
             // Resolve jadwal from pre-loaded dictionary (Fix #7)
             $hari   = $this->db->hariForDate($p['tgl_registrasi']);
             $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli']);
             if (!$jadwal) {
-                $this->log->debug("[BLOCK 3] {$noRawat}: no jadwal found for {$hari} — skipping");
+                // Log which patient is being skipped and WHY (BUG-D: clear reason for skip)
+                $this->log->warning("[BLOCK 3] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
                 continue;
             }
 
@@ -332,11 +338,17 @@ class QueueProcessor
             $isJkn       = ($kdPj === 'BPJ');
             $this->log->info("[BLOCK 4] ── Patient " . ($idx + 1) . "/{$total}: {$noRawat} (kd_pj={$kdPj}) ──");
 
+            // Check for missing master data from LEFT JOIN (BUG-D: zero patient loss)
+            if (empty($p['nm_dokter']) || empty($p['nm_poli']) || empty($p['no_ktp']) || empty($p['no_peserta'])) {
+                $this->log->warning("[BLOCK 4] {$noRawat}: missing master data (nm_dokter='{$p['nm_dokter']}', nm_poli='{$p['nm_poli']}', no_ktp='{$p['no_ktp']}', no_peserta='{$p['no_peserta']}') — patient fetched but needs manual review");
+            }
+
             // Resolve jadwal from pre-loaded dictionary (Fix #7)
             $hari   = $this->db->hariForDate($p['tgl_registrasi']);
             $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli']);
             if (!$jadwal) {
-                $this->log->debug("[BLOCK 4] {$noRawat}: no jadwal for {$hari} — skipping");
+                // Log which patient is being skipped and WHY (BUG-D: clear reason for skip)
+                $this->log->warning("[BLOCK 4] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
                 continue;
             }
 
@@ -947,11 +959,17 @@ class QueueProcessor
             $kodebooking = $noRawat; // Java uses no_rawat as kodebooking for unsent SEP
             $this->log->info("[BLOCK 5] ── Patient " . ($idx + 1) . "/{$total}: {$noRawat} ──");
 
+            // Check for missing master data from LEFT JOIN (BUG-D: zero patient loss)
+            if (empty($p['nm_dokter']) || empty($p['nm_poli']) || empty($p['no_ktp']) || empty($p['no_peserta'])) {
+                $this->log->warning("[BLOCK 5] {$noRawat}: missing master data (nm_dokter='{$p['nm_dokter']}', nm_poli='{$p['nm_poli']}', no_ktp='{$p['no_ktp']}', no_peserta='{$p['no_peserta']}') — patient fetched but needs manual review");
+            }
+
             // Resolve jadwal from pre-loaded dictionary (Fix #7)
             $hari   = $this->db->hariForDate($p['tgl_registrasi']);
             $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli']);
             if (!$jadwal) {
-                $this->log->debug("[BLOCK 5] {$noRawat}: no jadwal found for {$hari} — skipping");
+                // Log which patient is being skipped and WHY (BUG-D: clear reason for skip)
+                $this->log->warning("[BLOCK 5] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
                 continue;
             }
 

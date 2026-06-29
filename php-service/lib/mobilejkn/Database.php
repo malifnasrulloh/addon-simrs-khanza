@@ -112,17 +112,22 @@ SQL;
      * Fetch checked-in JKN patients for task chain processing.
      * Returns patients with their current task state from referensi_mobilejkn_bpjs_taskid.
      * The task chain logic (3→4→5→farmasi→6→7) is handled in QueueProcessor.
+     *
+     * LEFT JOIN on dokter/poliklinik ensures patients with missing master records
+     * are still fetched (BUG-D: zero patient loss).
      */
     public function fetchJknPatientsForTasks(string $dateFrom, string $dateTo): array
     {
         $sql = <<<'SQL'
 SELECT
     r.nobooking, r.no_rawat,
-    rp.tgl_registrasi, rp.jam_reg, rp.kd_dokter, rp.kd_poli, rp.stts
+    rp.tgl_registrasi, rp.jam_reg, rp.kd_dokter, rp.kd_poli, rp.stts,
+    COALESCE(d.nm_dokter, '') as nm_dokter,
+    COALESCE(pol.nm_poli, '') as nm_poli
 FROM referensi_mobilejkn_bpjs r
 INNER JOIN reg_periksa rp ON rp.no_rawat = r.no_rawat
-INNER JOIN dokter d ON rp.kd_dokter = d.kd_dokter
-INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
+LEFT JOIN dokter d ON rp.kd_dokter = d.kd_dokter
+LEFT JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
 WHERE r.statuskirim = 'Sudah'
   AND r.tanggalperiksa BETWEEN :df AND :dt
 ORDER BY r.tanggalperiksa
@@ -141,7 +146,12 @@ SQL;
 
     /**
      * Fetch ALL patients registered but missing from referensi_mobilejkn_bpjs.
-     * Matches Java robot query exactly — no payer filter.
+     *
+     * LEFT JOIN on dokter/poliklinik/pasien ensures patients with missing master
+     * records are still fetched (BUG-D: zero patient loss). COALESCE provides
+     * safe defaults for nullable columns.
+     *
+     * Excludes cancelled patients (taskid=99) to prevent re-processing (BUG-A).
      * The kd_pj check (BPJ vs non-BPJ) happens per-patient in QueueProcessor.
      */
     public function fetchMissingOnsitePatients(string $dateFrom, string $dateTo): array
@@ -149,23 +159,27 @@ SQL;
         $sql = <<<'SQL'
 SELECT
     rp.no_reg, rp.no_rawat, rp.tgl_registrasi, rp.jam_reg,
-    rp.kd_dokter, d.nm_dokter,
-    rp.kd_poli, pol.nm_poli,
+    rp.kd_dokter, COALESCE(d.nm_dokter, '') as nm_dokter,
+    rp.kd_poli, COALESCE(pol.nm_poli, '') as nm_poli,
     rp.stts_daftar, rp.no_rkm_medis, rp.kd_pj, rp.stts,
-    p.no_ktp, p.no_peserta, p.no_tlp
+    COALESCE(p.no_ktp, '-') as no_ktp, COALESCE(p.no_peserta, '') as no_peserta, COALESCE(p.no_tlp, '-') as no_tlp
 FROM reg_periksa rp
-INNER JOIN dokter d ON rp.kd_dokter = d.kd_dokter
-INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
-INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+LEFT JOIN dokter d ON rp.kd_dokter = d.kd_dokter
+LEFT JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
+LEFT JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
 WHERE rp.tgl_registrasi BETWEEN :df AND :dt
   AND rp.no_rawat NOT IN (
       SELECT rmb.no_rawat FROM referensi_mobilejkn_bpjs rmb
       WHERE rmb.tanggalperiksa BETWEEN :df2 AND :dt2
   )
+  AND rp.no_rawat NOT IN (
+      SELECT t.no_rawat FROM referensi_mobilejkn_bpjs_taskid t
+      WHERE t.taskid = '99'
+  )
 ORDER BY CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg)
 SQL;
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['df'=>$dateFrom,'dt'=>$dateTo,'df2'=>$dateFrom,'dt2'=>$dateTo]);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
         return $stmt->fetchAll();
     }
 
@@ -507,32 +521,36 @@ SQL;
     /**
      * Fetch BPJS patients who have a SEP but zero taskid records.
      * This is the safety net for patients completely missed by Blocks 1-4.
-     * Matches ANTROL-ROBOT.JAVA lines 1233-1238.
+     *
+     * Matches ANTROL-ROBOT.JAVA lines 1233-1238 exactly:
+     *  - NOT IN taskid is INSIDE the bridging_sep subquery (no date filter)
+     *  - stts='Sudah' filter ensures only completed visits are processed (BUG-B)
+     *  - LEFT JOIN ensures patients with missing master records are fetched (BUG-D)
      */
     public function fetchUnsentSepPatients(string $dateFrom, string $dateTo): array
     {
         $sql = <<<'SQL'
 SELECT
     rp.no_reg, rp.no_rawat, rp.tgl_registrasi, rp.jam_reg,
-    rp.kd_dokter, d.nm_dokter,
-    rp.kd_poli, pol.nm_poli,
+    rp.kd_dokter, COALESCE(d.nm_dokter, '') as nm_dokter,
+    rp.kd_poli, COALESCE(pol.nm_poli, '') as nm_poli,
     rp.stts_daftar, rp.no_rkm_medis, rp.kd_pj, rp.stts,
-    p.no_ktp, p.no_peserta, p.no_tlp
+    COALESCE(p.no_ktp, '-') as no_ktp, COALESCE(p.no_peserta, '') as no_peserta, COALESCE(p.no_tlp, '-') as no_tlp
 FROM reg_periksa rp
-INNER JOIN dokter d ON rp.kd_dokter = d.kd_dokter
-INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
-INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+LEFT JOIN dokter d ON rp.kd_dokter = d.kd_dokter
+LEFT JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
+LEFT JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
 WHERE rp.tgl_registrasi BETWEEN :df AND :dt
   AND rp.kd_pj = 'BPJ'
+  AND rp.stts = 'Sudah'
   AND rp.status_lanjut = 'Ralan'
   AND rp.kd_poli != 'IGDK'
   AND rp.no_rawat IN (
       SELECT c.no_rawat FROM bridging_sep c
       WHERE c.tglsep BETWEEN :df2 AND :dt2
-  )
-  AND rp.no_rawat NOT IN (
-      SELECT no_rawat FROM referensi_mobilejkn_bpjs_taskid
-      WHERE DATE(waktu) BETWEEN :df3 AND :dt3
+        AND c.no_rawat NOT IN (
+            SELECT no_rawat FROM referensi_mobilejkn_bpjs_taskid
+        )
   )
 ORDER BY CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg)
 SQL;
@@ -540,7 +558,6 @@ SQL;
         $stmt->execute([
             'df'  => $dateFrom, 'dt'  => $dateTo,
             'df2' => $dateFrom, 'dt2' => $dateTo,
-            'df3' => $dateFrom, 'dt3' => $dateTo,
         ]);
         return $stmt->fetchAll();
     }
