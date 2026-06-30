@@ -40,9 +40,9 @@ class SatuSehatPayloadBuilder
             $classDisplay = $isRalan ? 'ambulatory' : 'inpatient encounter';
         }
         
-        $startWaktu = $p['tgl_registrasi'] . 'T' . $p['jam_reg'] . '+07:00';
-        $inProgressWaktu = $p['waktu_perawatan'] ?? $startWaktu; // fallback to reg time if missing
-        $finishedWaktu = $p['waktu_pulang'] ?? null;
+        $startWaktu = self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
+        $inProgressWaktu = self::sanitizeDateTime($p['waktu_perawatan'] ?? null, null, $p);
+        $finishedWaktu = !empty($p['waktu_pulang']) ? self::sanitizeDateTime($p['waktu_pulang'], null, $p) : null;
 
         // Build history array
         $statusHistory = [];
@@ -295,8 +295,8 @@ class SatuSehatPayloadBuilder
         EpisodeOfCareType $type,
         string $idEpisode = ''
     ): array {
-        $startWaktu = $p['tgl_registrasi'] . 'T' . $p['jam_reg'] . '+07:00';
-        $finishedWaktu = $p['waktu_pulang'] ?? null;
+        $startWaktu = self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
+        $finishedWaktu = !empty($p['waktu_pulang']) ? self::sanitizeDateTime($p['waktu_pulang'], null, $p) : null;
 
         $statusHistory = [
             [
@@ -409,7 +409,7 @@ class SatuSehatPayloadBuilder
      */
     public static function condition(array $p, string $idPasien, string $idCondition = ''): ?array
     {
-        $startWaktu = $p['tgl_registrasi'] . 'T' . $p['jam_reg'] . '+07:00';
+        $startWaktu = self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
         $waktuPulang = $p['pulang'] ?? '';
 
         // Validate and map ICD-10 code
@@ -472,7 +472,7 @@ class SatuSehatPayloadBuilder
      */
     public static function observationTTV(array $p, string $idPasien, string $idDokter, array $def): array
     {
-        $waktuObservasi = $p['tgl_observasi'] . 'T' . $p['jam_observasi'] . '+07:00';
+        $waktuObservasi = self::sanitizeDateTime($p['tgl_observasi'] ?? null, $p['jam_observasi'] ?? null, $p);
 
         $categoryCode = $def['category_code'] ?? 'vital-signs';
         $categoryDisplay = $def['category_display'] ?? 'Vital Signs';
@@ -612,24 +612,13 @@ class SatuSehatPayloadBuilder
      */
     public static function procedure(array $p, string $idPasien, string $idProcedure = ''): array
     {
-        $startRaw = $p['waktu_registrasi'] ?? '';
-        $endRaw   = $p['waktu_pulang'] ?? $startRaw;
+        $startWaktu = self::sanitizeDateTime($p['waktu_registrasi'] ?? null, null, $p);
+        $endWaktu = self::sanitizeDateTime($p['waktu_pulang'] ?? null, null, $p);
 
-        // Normalize timestamps to ensure start <= end (FHIRPath constraint)
-        $startTs = strtotime($startRaw);
-        $endTs   = strtotime($endRaw);
-
-        if ($startTs === false || $startTs <= 0) {
-            // Fallback: cannot determine start, use current time as a single point
-            $startTs = time();
-            $endTs   = $startTs;
-        } elseif ($endTs === false || $endTs <= 0 || $endTs < $startTs) {
-            // Fallback: end is missing/invalid or before start — use start for both (point-in-time procedure)
-            $endTs = $startTs;
+        // Ensure start <= end (FHIRPath constraint)
+        if (strtotime($endWaktu) < strtotime($startWaktu)) {
+            $endWaktu = $startWaktu;
         }
-
-        $startWaktu = date('Y-m-d\TH:i:s', $startTs) . '+07:00';
-        $endWaktu   = date('Y-m-d\TH:i:s', $endTs)   . '+07:00';
 
         $payload = [
             'resourceType' => 'Procedure',
@@ -692,7 +681,7 @@ class SatuSehatPayloadBuilder
         string $idCarePlan = ''
     ): array {
         $isRalan = ($p['status_lanjut'] === 'Ralan');
-        $createdTime = str_replace(' ', 'T', $p['tgl_perawatan'] . ' ' . $p['jam_rawat']) . '+07:00';
+        $createdTime = self::sanitizeDateTime($p['tgl_perawatan'] ?? null, $p['jam_rawat'] ?? null, $p);
         $waktuRegistrasi = $p['tgl_registrasi'] . ' ' . $p['jam_reg'];
 
         // Clean description: replacing newlines with <br>, tab characters with space
@@ -767,7 +756,7 @@ class SatuSehatPayloadBuilder
      */
     public static function allergyIntolerance(array $a, array $allergyData, string $idPasien, string $idPraktisi, string $idSatuSehat, string $idAllergy = ''): array
     {
-        $recordedDate = $a['tgl_perawatan'] . 'T' . $a['jam_rawat'] . '+07:00';
+        $recordedDate = self::sanitizeDateTime($a['tgl_perawatan'] ?? null, $a['jam_rawat'] ?? null, $a);
 
         $payload = [
             'resourceType' => 'AllergyIntolerance',
@@ -846,12 +835,12 @@ class SatuSehatPayloadBuilder
         string $idImmunization = ''
     ): array {
         // Occurrence time
-        $occurrenceDateTime = $imm['tgl_perawatan'] . 'T' . $imm['jam'] . '+07:00';
+        $occurrenceDateTime = self::sanitizeDateTime($imm['tgl_perawatan'] ?? null, $imm['jam'] ?? null, $imm);
         
         // Expiration date (only if valid)
         $expirationDate = null;
         if (!empty($imm['tgl_kadaluarsa']) && $imm['tgl_kadaluarsa'] !== '0000-00-00' && strpos($imm['tgl_kadaluarsa'], '0000') === false) {
-            $expirationDate = substr($imm['tgl_kadaluarsa'], 0, 10);
+            $expirationDate = self::sanitizeDateTime($imm['tgl_kadaluarsa'], null, [], [], true);
         }
 
         // Parse dose number from 'aturan' (e.g. "Dosis 1", "Dosis 2", etc.)
@@ -1056,7 +1045,7 @@ class SatuSehatPayloadBuilder
         }
 
         // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
-        $authoredOn = str_replace(' ', 'T', $p['tgl_peresepan'] . ' ' . $p['jam_peresepan']) . '+07:00';
+        $authoredOn = self::sanitizeDateTime($p['tgl_peresepan'] ?? null, $p['jam_peresepan'] ?? null, $p);
 
         // Identifiers
         $isRacikan = (bool)$p['is_racikan'];
@@ -1207,28 +1196,8 @@ class SatuSehatPayloadBuilder
         }
 
         // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
-        $tglPrep = $p['tgl_peresepan'] ?? '';
-        $jamPrep = $p['jam_peresepan'] ?? '00:00:00';
-        $yearPrep = (int)substr($tglPrep, 0, 4);
-        if ($yearPrep < 2014) {
-            if (!empty($p['tgl_registrasi'])) {
-                $tglPrep = $p['tgl_registrasi'];
-                $jamPrep = !empty($p['jam_reg']) && $p['jam_reg'] !== '00:00:00' ? $p['jam_reg'] : '00:00:00';
-            } else {
-                $tglPrep = date('Y-m-d');
-                $jamPrep = date('H:i:s');
-            }
-        }
-        $whenPrepared = str_replace(' ', 'T', $tglPrep . ' ' . $jamPrep) . '+07:00';
-
-        $tglHanded = $p['tgl_perawatan'] ?? '';
-        $jamHanded = $p['jam'] ?? '00:00:00';
-        $yearHanded = (int)substr($tglHanded, 0, 4);
-        if ($yearHanded < 2014) {
-            $tglHanded = $tglPrep;
-            $jamHanded = $jamPrep;
-        }
-        $whenHandedOver = str_replace(' ', 'T', $tglHanded . ' ' . $jamHanded) . '+07:00';
+        $whenPrepared = self::sanitizeDateTime($p['tgl_peresepan'] ?? null, $p['jam_peresepan'] ?? null, $p);
+        $whenHandedOver = self::sanitizeDateTime($p['tgl_perawatan'] ?? null, $p['jam'] ?? null, $p);
 
         // Enforce constraint: whenHandedOver >= whenPrepared
         if (strtotime($whenHandedOver) < strtotime($whenPrepared)) {
@@ -1374,7 +1343,7 @@ class SatuSehatPayloadBuilder
         }
 
         // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
-        $dateAsserted = str_replace(' ', 'T', $p['tgl_penyerahan'] . ' ' . $p['jam_penyerahan']) . '+07:00';
+        $dateAsserted = self::sanitizeDateTime($p['tgl_penyerahan'] ?? null, $p['jam_penyerahan'] ?? null, $p);
 
         // Identifiers:
         // System: http://sys-ids.kemkes.go.id/medicationstatement/{orgId}
@@ -1481,7 +1450,7 @@ class SatuSehatPayloadBuilder
         $summary = str_replace(["\r\n", "\r", "\n", "\n\r"], "<br>", $p['penilaian']);
         $summary = str_replace("\t", " ", $summary);
 
-        $effectiveDateTime = $p['tgl_perawatan'] . 'T' . $p['jam_rawat'] . '+07:00';
+        $effectiveDateTime = self::sanitizeDateTime($p['tgl_perawatan'] ?? null, $p['jam_rawat'] ?? null, $p);
 
         $payload = [
             'resourceType' => 'ClinicalImpression',
@@ -1552,7 +1521,7 @@ class SatuSehatPayloadBuilder
         string $idPraktisi,
         ?string $idQR = null
     ): array {
-        $authored = str_replace(' ', 'T', $p['tgl_peresepan'] . ' ' . $p['jam_peresepan']) . '+07:00';
+        $authored = self::sanitizeDateTime($p['tgl_peresepan'] ?? null, $p['jam_peresepan'] ?? null, $p);
 
         $payload = [
             'resourceType' => 'QuestionnaireResponse',
@@ -1736,11 +1705,8 @@ class SatuSehatPayloadBuilder
     ): array {
         $acsn = self::buildAcsn($p['noorder'], $p['kd_jenis_prw']);
         
-        $time = !empty($p['jam_permintaan']) && $p['jam_permintaan'] !== '00:00:00' 
-            ? $p['jam_permintaan'] 
-            : '00:00:00';
-        $authoredOn = $p['tgl_permintaan'] . 'T' . $time . '+07:00';
-        $tglJam = $p['tgl_permintaan'] . ' ' . $time;
+        $authoredOn = self::sanitizeDateTime($p['tgl_permintaan'] ?? null, $p['jam_permintaan'] ?? null, $p);
+        $tglJam = date('Y-m-d H:i:s', strtotime($authoredOn));
 
         $payload = [
             'resourceType' => 'ServiceRequest',
@@ -1814,10 +1780,14 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idDiagnosticReport = ''
     ): array {
-        $time = !empty($p['jam_hasil']) && $p['jam_hasil'] !== '00:00:00' 
-            ? $p['jam_hasil'] 
-            : '00:00:00';
-        $dateTimeStr = $p['tgl_hasil'] . 'T' . $time . '+07:00';
+        $dateTimeStr = self::sanitizeDateTime(
+            $p['tgl_hasil'] ?? null,
+            $p['jam_hasil'] ?? null,
+            $p,
+            [
+                ['tgl_permintaan', 'jam_permintaan']
+            ]
+        );
 
         $conclusion = !empty($p['hasil']) ? $p['hasil'] : '';
         $conclusion = str_replace(["\r\n", "\r", "\n", "\n\r"], '<br>', $conclusion);
@@ -1900,10 +1870,14 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idSpecimen = ''
     ): array {
-        $time = !empty($p['jam_sampel']) && $p['jam_sampel'] !== '00:00:00' 
-            ? $p['jam_sampel'] 
-            : '00:00:00';
-        $receivedTime = $p['tgl_sampel'] . 'T' . $time . '+07:00';
+        $receivedTime = self::sanitizeDateTime(
+            $p['tgl_sampel'] ?? null,
+            $p['jam_sampel'] ?? null,
+            $p,
+            [
+                ['tgl_permintaan', 'jam_permintaan']
+            ]
+        );
 
         $payload = [
             'resourceType' => 'Specimen',
@@ -1949,10 +1923,14 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idObservation = ''
     ): array {
-        $time = !empty($p['jam_hasil']) && $p['jam_hasil'] !== '00:00:00' 
-            ? $p['jam_hasil'] 
-            : '00:00:00';
-        $dateTimeStr = $p['tgl_hasil'] . 'T' . $time . '+07:00';
+        $dateTimeStr = self::sanitizeDateTime(
+            $p['tgl_hasil'] ?? null,
+            $p['jam_hasil'] ?? null,
+            $p,
+            [
+                ['tgl_permintaan', 'jam_permintaan']
+            ]
+        );
 
         // Sanitizing valueString
         $conclusion = str_replace(["\r\n", "\r", "\n"], '<br>', $p['hasil']);
@@ -2040,22 +2018,7 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idServiceRequest = ''
     ): array {
-        $tgl = $p['tgl_permintaan'];
-        $time = !empty($p['jam_permintaan']) && $p['jam_permintaan'] !== '00:00:00' 
-            ? $p['jam_permintaan'] 
-            : '00:00:00';
-
-        $year = (int)substr($tgl, 0, 4);
-        if ($year < 2014) {
-            if (!empty($p['tgl_registrasi'])) {
-                $tgl = $p['tgl_registrasi'];
-                $time = !empty($p['jam_reg']) && $p['jam_reg'] !== '00:00:00' ? $p['jam_reg'] : '00:00:00';
-            } else {
-                $tgl = date('Y-m-d');
-                $time = date('H:i:s');
-            }
-        }
-        $dateTimeStr = $tgl . 'T' . $time . '+07:00';
+        $dateTimeStr = self::sanitizeDateTime($p['tgl_permintaan'] ?? null, $p['jam_permintaan'] ?? null, $p);
 
         $payload = [
             'resourceType' => 'ServiceRequest',
@@ -2126,22 +2089,14 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idSpecimen = ''
     ): array {
-        $tgl = $p['tgl_sampel'];
-        $time = !empty($p['jam_sampel']) && $p['jam_sampel'] !== '00:00:00' 
-            ? $p['jam_sampel'] 
-            : '00:00:00';
-
-        $year = (int)substr($tgl, 0, 4);
-        if ($year < 2014) {
-            if (!empty($p['tgl_registrasi'])) {
-                $tgl = $p['tgl_registrasi'];
-                $time = !empty($p['jam_reg']) && $p['jam_reg'] !== '00:00:00' ? $p['jam_reg'] : '00:00:00';
-            } else {
-                $tgl = date('Y-m-d');
-                $time = date('H:i:s');
-            }
-        }
-        $receivedTime = $tgl . 'T' . $time . '+07:00';
+        $receivedTime = self::sanitizeDateTime(
+            $p['tgl_sampel'] ?? null,
+            $p['jam_sampel'] ?? null,
+            $p,
+            [
+                ['tgl_permintaan', 'jam_permintaan']
+            ]
+        );
 
         $sampelSystem = !empty($p['sampel_system']) ? trim($p['sampel_system']) : '';
         if (strpos($sampelSystem, 'snomed.info') !== false) {
@@ -2194,10 +2149,14 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idObservation = ''
     ): array {
-        $time = !empty($p['jam_hasil']) && $p['jam_hasil'] !== '00:00:00' 
-            ? $p['jam_hasil'] 
-            : '00:00:00';
-        $dateTimeStr = $p['tgl_hasil'] . 'T' . $time . '+07:00';
+        $dateTimeStr = self::sanitizeDateTime(
+            $p['tgl_hasil'] ?? null,
+            $p['jam_hasil'] ?? null,
+            $p,
+            [
+                ['tgl_permintaan', 'jam_permintaan']
+            ]
+        );
 
         $valueString = 'Hasil Lab : ' . $p['nilai'] . ' ' . $p['satuan'] . ', Nilai Rujukan : ' . $p['nilai_rujukan'];
         if (!empty($p['keterangan'])) {
@@ -2268,10 +2227,14 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idDiagnosticReport = ''
     ): array {
-        $time = !empty($p['jam_hasil']) && $p['jam_hasil'] !== '00:00:00' 
-            ? $p['jam_hasil'] 
-            : '00:00:00';
-        $dateTimeStr = $p['tgl_hasil'] . 'T' . $time . '+07:00';
+        $dateTimeStr = self::sanitizeDateTime(
+            $p['tgl_hasil'] ?? null,
+            $p['jam_hasil'] ?? null,
+            $p,
+            [
+                ['tgl_permintaan', 'jam_permintaan']
+            ]
+        );
 
         $conclusion = !empty($p['kesan']) ? $p['kesan'] : '';
         $conclusion = str_replace(["\r\n", "\r", "\n", "\n\r"], '<br>', $conclusion);
@@ -2354,7 +2317,7 @@ class SatuSehatPayloadBuilder
         array $refs,
         string $idComposition = ''
     ): array {
-        $finishedWaktu = $p['waktu_pulang'] ?? date('Y-m-d\TH:i:s+07:00');
+        $finishedWaktu = self::sanitizeDateTime($p['waktu_pulang'] ?? null, null, $p);
 
         $sections = [];
 
@@ -2634,6 +2597,73 @@ class SatuSehatPayloadBuilder
         }
 
         return $res;
+    }
+
+    public static function sanitizeDateTime(
+        ?string $datePart,
+        ?string $timePart = null,
+        array $row = [],
+        array $fallbackPreferences = [],
+        bool $dateOnly = false
+    ): string {
+        $datePart = $datePart !== null ? trim($datePart) : '';
+        $timePart = $timePart !== null ? trim($timePart) : '';
+
+        if ($timePart === '' && strpos($datePart, ' ') !== false) {
+            $parts = explode(' ', $datePart, 2);
+            $datePart = trim($parts[0]);
+            $timePart = trim($parts[1]);
+        }
+
+        $isValidDate = function(?string $d, ?string $t) {
+            $d = $d !== null ? trim($d) : '';
+            $t = $t !== null ? trim($t) : '';
+            if ($d === '' || $d === '0000-00-00' || $d === '0000-00-00 00:00:00') {
+                return false;
+            }
+            $year = (int)substr($d, 0, 4);
+            if ($year < 2014) {
+                return false;
+            }
+            $timeStr = ($t !== '' && $t !== '00:00:00') ? $t : '00:00:00';
+            $ts = @strtotime($d . ' ' . $timeStr);
+            if ($ts === false || $ts <= 0 || $ts > time()) {
+                return false;
+            }
+            return true;
+        };
+
+        if ($isValidDate($datePart, $timePart)) {
+            $timeStr = ($timePart !== '' && $timePart !== '00:00:00') ? $timePart : '00:00:00';
+            $ts = strtotime($datePart . ' ' . $timeStr);
+        } else {
+            $ts = null;
+            foreach ($fallbackPreferences as $pref) {
+                $fDate = $row[$pref[0]] ?? null;
+                $fTime = $row[$pref[1]] ?? null;
+                if ($isValidDate($fDate, $fTime)) {
+                    $timeStr = ($fTime !== '' && $fTime !== '00:00:00') ? $fTime : '00:00:00';
+                    $ts = strtotime($fDate . ' ' . $timeStr);
+                    break;
+                }
+            }
+
+            if ($ts === null) {
+                $regDate = $row['tgl_registrasi'] ?? null;
+                $regTime = $row['jam_reg'] ?? null;
+                if ($isValidDate($regDate, $regTime)) {
+                    $timeStr = ($regTime !== '' && $regTime !== '00:00:00') ? $regTime : '00:00:00';
+                    $ts = strtotime($regDate . ' ' . $timeStr);
+                } else {
+                    $ts = time();
+                }
+            }
+        }
+
+        if ($dateOnly) {
+            return date('Y-m-d', $ts);
+        }
+        return date('Y-m-d\TH:i:s', $ts) . '+07:00';
     }
 }
 
