@@ -1010,17 +1010,17 @@ class SatuSehatDatabase
             SELECT 
                 rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
                 p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter, 
-                rp.stts, rp.status_lanjut, 
+                rp.stts, 'Ralan' as status, 
                 CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang, 
                 sse.id_encounter, 
                 pr.{$dbCol} as value, pr.tgl_perawatan as tgl_observasi, pr.jam_rawat as jam_observasi,
                 st.{$idCol} as synced_id
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
-            INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
-            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
-            LEFT JOIN {$stTable} st ON st.no_rawat = pr.no_rawat AND st.tgl_perawatan = pr.tgl_perawatan AND st.jam_rawat = pr.jam_rawat
+            INNER JOIN pegawai pg ON pg.nik = pr.nip
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            LEFT JOIN {$stTable} st ON st.no_rawat = pr.no_rawat AND st.tgl_perawatan = pr.tgl_perawatan AND st.jam_rawat = pr.jam_rawat AND st.status = 'Ralan'
             WHERE pr.tgl_perawatan BETWEEN :df AND :dt
               AND pr.{$dbCol} IS NOT NULL AND pr.{$dbCol} != '' AND pr.{$dbCol} != '-'
         ";
@@ -1042,17 +1042,17 @@ class SatuSehatDatabase
                     SELECT 
                         rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
                         p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter, 
-                        rp.stts, rp.status_lanjut, 
+                        rp.stts, 'Ranap' as status, 
                         CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang, 
                         sse.id_encounter, 
                         pi.{$dbCol} as value, pi.tgl_perawatan as tgl_observasi, pi.jam_rawat as jam_observasi,
                         st.{$idCol} as synced_id
                     FROM reg_periksa rp
                     INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
-                    INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
-                    INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
                     INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat
-                    LEFT JOIN {$stTable} st ON st.no_rawat = pi.no_rawat AND st.tgl_perawatan = pi.tgl_perawatan AND st.jam_rawat = pi.jam_rawat
+                    INNER JOIN pegawai pg ON pg.nik = pi.nip
+                    INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    LEFT JOIN {$stTable} st ON st.no_rawat = pi.no_rawat AND st.tgl_perawatan = pi.tgl_perawatan AND st.jam_rawat = pi.jam_rawat AND st.status = 'Ranap'
                     WHERE pi.tgl_perawatan BETWEEN :df2 AND :dt2
                       AND pi.{$dbCol} IS NOT NULL AND pi.{$dbCol} != '' AND pi.{$dbCol} != '-'
                 ) as combined
