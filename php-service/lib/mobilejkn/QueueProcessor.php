@@ -279,11 +279,8 @@ class QueueProcessor
                 continue;
             }
 
-            // Defer check: if configured, skip today's patients until the polyclinic has closed
-            if ($this->config->deferRobotInfer && $p['tgl_registrasi'] === date('Y-m-d') && date('H:i:s') < $jadwal['jam_selesai']) {
-                $this->log->debug("[BLOCK 3] {$noRawat}: polyclinic is still active today — deferring robot inference until after {$jadwal['jam_selesai']}");
-                continue;
-            }
+            // Booking creation always runs immediately (no defer)
+            // Task chain processing may be deferred (handled inside processTaskChain)
 
             // Load pre-fetched prescription number and racikan status (Fix #5)
             $noResep   = $noResepMap[$noRawat] ?? '';
@@ -352,11 +349,8 @@ class QueueProcessor
                 continue;
             }
 
-            // Defer check: if configured, skip today's patients until the polyclinic has closed
-            if ($this->config->deferRobotInfer && $p['tgl_registrasi'] === date('Y-m-d') && date('H:i:s') < $jadwal['jam_selesai']) {
-                $this->log->debug("[BLOCK 4] {$noRawat}: polyclinic is still active today — deferring robot inference until after {$jadwal['jam_selesai']}");
-                continue;
-            }
+            // Booking creation always runs immediately (no defer)
+            // Task chain processing may be deferred (handled inside processTaskChain)
 
             // Java: per-patient mapping lookup (lines 718–724)
             $dokterBpjs = $dokterDict[$p['kd_dokter']] ?? '';
@@ -388,6 +382,23 @@ class QueueProcessor
     // ═══════════════════════════════════════════════════════════════════════
     // Core: Per-patient task chain — exact Java robot logic
     // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Check if task chain processing should be deferred.
+     * Booking creation (antrean/add) always runs immediately.
+     * Task chain (updatewaktu) can be deferred until after polyclinic closes.
+     */
+    private function shouldDeferTaskChain(array $patient, string $hari, string $kdDokter, string $kdPoli): bool
+    {
+        if (!$this->config->deferTaskChain) return false;
+        if ($patient['tgl_registrasi'] !== date('Y-m-d')) return false;
+
+        $jadwalDict = $this->db->fetchAllJadwal();
+        $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $kdDokter, $kdPoli);
+        if (!$jadwal) return false;
+
+        return date('H:i:s') < $jadwal['jam_selesai'];
+    }
 
     /**
      * Process task chain 3→4→5→[farmasi]→6→7→[99] for a single patient.
@@ -433,6 +444,13 @@ class QueueProcessor
             $this->syncTaskStateFromBpjs($kodebooking, $noRawat, $state, $label);
         } else {
             $this->log->debug("[{$label}] {$noRawat}: patient is already completed locally or cancelled — skipping BPJS getlisttask verification");
+        }
+
+        // Defer task chain processing (but NOT booking creation)
+        $hari = $this->db->hariForDate($patient['tgl_registrasi']);
+        if ($this->shouldDeferTaskChain($patient, $hari, $patient['kd_dokter'], $patient['kd_poli'])) {
+            $this->log->debug("[{$label}] {$noRawat}: deferring task chain until after polyclinic closes");
+            return;
         }
 
         // ── Task 3: mulai tunggu poli ─────────────────────────────────────
@@ -973,11 +991,8 @@ class QueueProcessor
                 continue;
             }
 
-            // Defer check
-            if ($this->config->deferRobotInfer && $p['tgl_registrasi'] === date('Y-m-d') && date('H:i:s') < $jadwal['jam_selesai']) {
-                $this->log->debug("[BLOCK 5] {$noRawat}: polyclinic is still active today — deferring robot inference until after {$jadwal['jam_selesai']}");
-                continue;
-            }
+            // Booking creation always runs immediately (no defer)
+            // Task chain processing may be deferred (handled inside processTaskChain)
 
             // BPJS mapping lookup from pre-loaded dictionaries
             $dokterBpjs = $dokterDict[$p['kd_dokter']] ?? '';
