@@ -74,7 +74,7 @@ function renderRawCell($erm, $bpjs) {
     return $out_erm . $out_bpjs . $flags;
 }
 
-$sql = "SELECT 
+$sql = "SELECT
     rp.no_rawat,
     rmj.nobooking,
     rp.tgl_registrasi,
@@ -82,20 +82,22 @@ $sql = "SELECT
     ps.nm_pasien,
     pj.png_jawab,
     d.nm_dokter,
-    mpb.nm_poli_bpjs AS `Poliklinik`,
+    COALESCE(mpb.nm_poli_bpjs, '') AS `nm_poli_bpjs`,
     pl.nm_poli AS `poli_rs`,
     COALESCE(jdl.jam_praktek, '-') AS `jadwal`,
     COALESCE(jdl.kuota_jadwal, 0) AS `kuota`,
-    IFNULL(rmj.status, 'On Site') AS `Status Checkin MJKN`,    
+    IFNULL(rmj.status, 'On Site') AS `Status Checkin MJKN`,
+    COALESCE(md.kd_dokter_bpjs, '') AS `kd_dokter_bpjs`,
+    COALESCE(mpb.kd_poli_bpjs, '') AS `kd_poli_bpjs`,
     DATE_FORMAT(MAX(CASE WHEN rmjt.taskid = '1' THEN rmjt.waktu END), '%H:%i:%s') AS `log TID_1`,
-    DATE_FORMAT(MAX(CASE WHEN rmjt.taskid = '2' THEN rmjt.waktu END), '%H:%i:%s') AS `log TID_2`,    
-    COALESCE((CASE WHEN rp.stts = 'Batal' THEN rp.stts END), '-') AS `Cancel`,		
+    DATE_FORMAT(MAX(CASE WHEN rmjt.taskid = '2' THEN rmjt.waktu END), '%H:%i:%s') AS `log TID_2`,
+    COALESCE((CASE WHEN rp.stts = 'Batal' THEN rp.stts END), '-') AS `Cancel`,
     rmj.status AS `status_mjkn`,
     rmb.statuskirim AS `statuskirim_batal`,
     rmb.keterangan AS `ket_batal`,
     bs.no_sep AS `no_sep`,
-    CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) AS `Jam Registrasi`,		
-    rmj.validasi AS `Jam Checkin`,		    
+    CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) AS `Jam Registrasi`,
+    rmj.validasi AS `Jam Checkin`,
     COALESCE(DATE_FORMAT(MAX(CASE WHEN rmjt.taskid = '3' THEN rmjt.waktu END), '%H:%i:%s'), 'SEP tdk Bridging / telat checkin') AS `log TID_3`,
     COALESCE(
         (SELECT CONCAT(pr.tgl_perawatan, ' ', pr.jam_rawat) FROM pemeriksaan_ralan pr WHERE pr.no_rawat = rp.no_rawat LIMIT 1),
@@ -116,17 +118,17 @@ LEFT JOIN penjab pj ON rp.kd_pj = pj.kd_pj
 LEFT JOIN pasien ps ON rp.no_rkm_medis = ps.no_rkm_medis
 LEFT JOIN dokter d ON rp.kd_dokter = d.kd_dokter
 LEFT JOIN poliklinik pl ON rp.kd_poli = pl.kd_poli
-INNER JOIN maping_poli_bpjs mpb ON rp.kd_poli = mpb.kd_poli_rs
-INNER JOIN maping_dokter_dpjpvclaim md ON rp.kd_dokter = md.kd_dokter
+LEFT JOIN maping_poli_bpjs mpb ON rp.kd_poli = mpb.kd_poli_rs
+LEFT JOIN maping_dokter_dpjpvclaim md ON rp.kd_dokter = md.kd_dokter
 LEFT JOIN (
-    SELECT 
-        kd_dokter, kd_poli, hari_kerja, 
+    SELECT
+        kd_dokter, kd_poli, hari_kerja,
         GROUP_CONCAT(CONCAT(DATE_FORMAT(jam_mulai, '%H:%i'), '-', DATE_FORMAT(jam_selesai, '%H:%i')) SEPARATOR ', ') as jam_praktek,
         SUM(kuota) as kuota_jadwal
-    FROM jadwal 
+    FROM jadwal
     GROUP BY kd_dokter, kd_poli, hari_kerja
-) jdl ON rp.kd_dokter = jdl.kd_dokter 
-    AND rp.kd_poli = jdl.kd_poli 
+) jdl ON rp.kd_dokter = jdl.kd_dokter
+    AND rp.kd_poli = jdl.kd_poli
     AND jdl.hari_kerja = (CASE DAYNAME(rp.tgl_registrasi)
         WHEN 'Monday' THEN 'SENIN'
         WHEN 'Tuesday' THEN 'SELASA'
@@ -143,8 +145,11 @@ LEFT JOIN resep_obat ro ON rp.no_rawat = ro.no_rawat
 LEFT JOIN referensi_mobilejkn_bpjs_batal rmb ON rp.no_rawat = rmb.no_rawat_batal
 LEFT JOIN bridging_sep bs ON rp.no_rawat = bs.no_rawat
 WHERE rp.tgl_registrasi BETWEEN ? AND ?
-    AND mpb.nm_poli_bpjs NOT LIKE '%INSTALASI GAWAT DARURAT%'
-    AND pj.png_jawab LIKE '%BPJ%'
+    AND rp.kd_poli != 'IGDK'
+    AND rp.kd_pj = 'BPJ'
+    AND rp.no_rawat NOT IN (
+        SELECT no_rawat FROM referensi_mobilejkn_bpjs_taskid WHERE taskid = '99'
+    )
 GROUP BY rp.no_rawat
 ORDER BY rp.no_rawat ASC";
 
@@ -245,12 +250,18 @@ if ($stmt = $koneksi->prepare($sql)) {
                 $mjkn_badge .= "<br><span class='badge bg-danger mt-1' style='font-size: 0.70rem;'><i class='fas fa-exclamation-triangle'></i> Anomali Batal</span>";
             }
 
+            // Check for missing BPJS mappings (sync service alignment)
+            $noMappingBadge = "";
+            if (empty($row['Poliklinik']) || $row['Poliklinik'] === $row['poli_rs']) {
+                $noMappingBadge = "<br><span class='badge bg-warning text-dark mt-1' style='font-size: 0.65rem;' title='Tidak ada mapping BPJS untuk poli/dokter ini — pasien tetap tampil tapi mungkin tidak ter-sync'><i class='fas fa-exclamation-circle'></i> No BPJS Mapping</span>";
+            }
+
             $tableRows .= "<tr>
                 <td>{$row['tgl_registrasi']}</td>
                 <td><strong>{$row['no_rawat']}</strong> {$mjkn_badge}</td>
                 <td>{$row['nm_pasien']}<br><small class='text-muted'>{$row['nm_dokter']}</small></td>
                 <td>
-                    <span class='fw-bold'>{$row['Poliklinik']}</span><br>
+                    <span class='fw-bold'>{$row['Poliklinik']}</span>{$noMappingBadge}<br>
                     <small class='text-muted'>{$row['poli_rs']}</small><br>
                     <span class='badge bg-info text-dark' style='font-size:0.65rem;'><i class='fas fa-clock me-1'></i>{$row['jadwal']}</span>
                     <span class='badge bg-secondary' style='font-size:0.65rem;' title='Kuota Sesi'><i class='fas fa-users me-1'></i>{$row['kuota']}</span>
