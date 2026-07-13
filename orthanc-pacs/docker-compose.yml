@@ -7,6 +7,19 @@ services:
       MARIADB_DATABASE: ${MARIADB_DATABASE}
       MARIADB_USER: ${MARIADB_USER}
       MARIADB_PASSWORD: ${MARIADB_PASSWORD}
+    # MariaDB performance tuning for PACS workload
+    command: >
+      --innodb-buffer-pool-size=256M
+      --innodb-log-file-size=64M
+      --innodb-flush-log-at-trx-commit=2
+      --innodb-flush-method=O_DIRECT
+      --max-connections=100
+      --table-open-cache=400
+      --sort-buffer-size=2M
+      --read-buffer-size=1M
+      --thread-cache-size=16
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
     volumes:
       - mariadb-data:/var/lib/mysql
     networks:
@@ -63,6 +76,7 @@ services:
     volumes:
       - orthanc-storage:/var/lib/orthanc/db
       - orthanc-worklists:/var/lib/orthanc/worklists
+      - orthanc-logs:/var/log/orthanc
       - ./orthanc-config:/etc/orthanc:ro
     networks:
       - pacs-backend
@@ -112,3 +126,4 @@ volumes:
   mariadb-data:
   orthanc-storage:
   orthanc-worklists:
+  orthanc-logs:

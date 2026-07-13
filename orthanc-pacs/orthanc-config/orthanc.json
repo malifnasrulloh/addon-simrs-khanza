@@ -11,15 +11,70 @@
   "RemoteAccessAllowed" : true,
   "DicomAlwaysAllowFind" : true,
 
+  // ============================================================
+  // Performance Tuning — High I/O & Network Traffic
+  // ============================================================
+
+  // HTTP server thread pool (default: 50)
+  // Increase for high concurrent REST/DICOMweb traffic
+  "HttpThreadsCount" : 50,
+
+  // DICOM server thread pool (default: 4)
+  // Each concurrent C-STORE/C-FIND uses one thread
+  "DicomThreadsCount" : 8,
+
+  // Maximum concurrent background jobs (default: 2)
+  // Higher = more parallel C-MOVE, anonymization, etc.
+  "ConcurrentJobs" : 4,
+
+  // HTTP keep-alive reduces TCP handshake overhead
+  "KeepAlive" : true,
+
+  // Disable Nagle's algorithm — critical for DICOM
+  // Sends data immediately instead of buffering small packets
+  "TcpNoDelay" : true,
+
+  // Maximum DICOM PDU size in bytes (default: 16384)
+  // Larger = fewer round-trips for big DICOM files (CT/MR)
+  // 131072 (128KB) is the DICOM maximum
+  "MaximumPduLength" : 131072,
+
+  // Delay (seconds) before closing a DICOM association
+  // Allows reuse for consecutive operations from same modality
+  "DicomAssociationCloseDelay" : 5,
+
+  // Disable on-disk compression for better I/O throughput
+  // DICOM images are already compressed (JPEG2000, etc.)
+  "StorageCompression" : false,
+
+  // Save jobs engine state across restarts
+  "SaveJobs" : true,
+
+  // No storage/patient limits (production PACS)
+  "MaximumStorageSize" : 0,
+  "MaximumPatientCount" : 0,
+
+  // ============================================================
+  // DICOM Modalities
+  // ============================================================
+
   "DicomModalities" : {
     "FINDSCU": [ "FINDSCU", "host.docker.internal", 104 ]
   },
+
+  // ============================================================
+  // Worklist Plugin (handled by Python plugin)
+  // ============================================================
 
   "Worklists" : {
     "Enable" : false,
     "Database" : "/var/lib/orthanc/worklists",
     "FilterQueryArguments" : false
   },
+
+  // ============================================================
+  // Plugins
+  // ============================================================
 
   "Plugins" : [
     "/usr/share/orthanc/plugins",
