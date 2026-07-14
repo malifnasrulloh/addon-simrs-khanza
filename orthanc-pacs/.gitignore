@@ -12,3 +12,4 @@ mwl/Icon
 
 # Docker
 docker-compose.override.yml
+/dcm_out/

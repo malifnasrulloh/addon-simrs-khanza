@@ -90,6 +90,7 @@ services:
       - "${MWL_DASHBOARD_PORT:-8081}:8080"
     volumes:
       - orthanc-worklists:/var/lib/orthanc/worklists/
+      - ./dcm_out:/var/lib/orthanc/dcm_out/
     environment:
       TZ: ${TZ:-Asia/Jakarta}
       SIMRS_DB_HOST: ${SIMRS_DB_HOST}
@@ -104,6 +105,7 @@ services:
       MWL_WEB_PASS: ${MWL_WEB_PASS:-changeme}
       DICOM_UID_ROOT: ${DICOM_UID_ROOT:-2.25}
       MWL_INSTITUTION_NAME: ${MWL_INSTITUTION_NAME:-}
+      MWL_DCM_OUT_DIR: /var/lib/orthanc/dcm_out/
     depends_on:
       - orthanc
     extra_hosts:

@@ -28,7 +28,8 @@ if ($tz = getenv('TZ')) {
     date_default_timezone_set($tz);
 }
 
-define('WL_DIR',                '/var/lib/orthanc/worklists/');
+define('WL_DIR',                getenv('MWL_WL_DIR') ?: '/var/lib/orthanc/worklists/');
+define('DCM_OUT_DIR',           getenv('MWL_DCM_OUT_DIR') ?: '/var/lib/orthanc/dcm_out/');
 define('DUMP2DCM',              '/usr/bin/dump2dcm');
 define('TMP_DIR',               '/tmp/mwl_dump/');
 define('MODALITY_MAP_JSON',     __DIR__ . '/mapping_tindakan_radiologi.iyem');
@@ -67,6 +68,9 @@ if (php_sapi_name() !== 'cli') {
 
 if (!is_dir(TMP_DIR)) {
     mkdir(TMP_DIR, 0700, true);
+}
+if (!is_dir(DCM_OUT_DIR)) {
+    mkdir(DCM_OUT_DIR, 0777, true);
 }
 
 /**
@@ -246,18 +250,47 @@ function detectModality(string $kdJenisPrw, string $procedureName, array $proced
 }
 
 /**
- * Remove stale worklist files older than STALE_DAYS.
+ * Get SOP Class UID based on modality.
+ */
+function getSopClassUid(string $modality): string {
+    return match (strtoupper($modality)) {
+        'CR' => '1.2.840.10008.5.1.4.1.1.1',
+        'CT' => '1.2.840.10008.5.1.4.1.1.2',
+        'MR' => '1.2.840.10008.5.1.4.1.1.4',
+        'US' => '1.2.840.10008.5.1.4.1.1.6.1',
+        'MG' => '1.2.840.10008.5.1.4.1.1.1.2',
+        'DX' => '1.2.840.10008.5.1.4.1.1.1.1',
+        default => '1.2.840.10008.5.1.4.1.1.7' // Secondary Capture
+    };
+}
+
+/**
+ * Remove stale worklist and dcm files older than STALE_DAYS.
  */
 function cleanStaleWorklists(): int {
     $count     = 0;
     $threshold = time() - (STALE_DAYS * 86400);
 
+    // Clean .wl files
     foreach (glob(WL_DIR . '*.wl') as $file) {
         if (filemtime($file) < $threshold) {
             if (unlink($file)) {
                 $count++;
             } else {
                 error_log("MWL: Failed to remove stale file: {$file}");
+            }
+        }
+    }
+
+    // Clean .dcm files
+    if (is_dir(DCM_OUT_DIR)) {
+        foreach (glob(DCM_OUT_DIR . '*.dcm') as $file) {
+            if (filemtime($file) < $threshold) {
+                if (unlink($file)) {
+                    $count++;
+                } else {
+                    error_log("MWL: Failed to remove stale file: {$file}");
+                }
             }
         }
     }
@@ -442,11 +475,80 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $dump .= "(fffe,e00d) -\n";
         $dump .= "(fffe,e0dd) -\n";
 
-        // --- Convert to DICOM ---
+        // --- Convert to DICOM Worklist ---
         file_put_contents($dumpFile, $dump);
         $cmd    = 'LD_LIBRARY_PATH=/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu '
                 . DUMP2DCM . ' ' . escapeshellarg($dumpFile) . ' ' . escapeshellarg($wlFile) . ' 2>&1';
         $output = shell_exec($cmd);
+
+        // --- Convert to Dummy DICOM Image for Network Import ---
+        $imgDumpFile = TMP_DIR . $noorder . '_img.dump';
+        $dcmFile     = DCM_OUT_DIR . $noorder . '.dcm';
+
+        $sopClassUid = getSopClassUid($modality);
+        $sopInstanceUid = $studyUid . '.1.1';
+        $seriesUid = $studyUid . '.1';
+
+        $imgDump  = "# Dicom-File-Meta\n\n";
+        $imgDump .= "(0002,0000) UL 0\n";
+        $imgDump .= "(0002,0001) OB 00\\01\n";
+        $imgDump .= "(0002,0002) UI [{$sopClassUid}]\n";
+        $imgDump .= "(0002,0003) UI [{$sopInstanceUid}]\n";
+        $imgDump .= "(0002,0010) UI [" . EXPLICIT_VR_LE . "]\n";
+        $imgDump .= "(0002,0016) AE [SIMRS_KHANZA]\n";
+
+        $imgDump .= "\n# Dicom-Data-Set\n\n";
+        $imgDump .= "(0008,0005) CS [ISO_IR 100]\n";
+        $imgDump .= "(0008,0008) CS [DERIVED\\PRIMARY\\" . ($modality === 'XR' ? 'CR' : $modality) . "]\n";
+        $imgDump .= "(0008,0016) UI [{$sopClassUid}]\n";
+        $imgDump .= "(0008,0018) UI [{$sopInstanceUid}]\n";
+        $imgDump .= "(0008,0020) DA [{$tglDicom}]\n";
+        $imgDump .= "(0008,0021) DA [{$tglDicom}]\n";
+        $imgDump .= "(0008,0023) DA [{$tglDicom}]\n";
+        $imgDump .= "(0008,0030) TM [{$jamDicom}.000]\n";
+        $imgDump .= "(0008,0031) TM [{$jamDicom}.000]\n";
+        $imgDump .= "(0008,0033) TM [{$jamDicom}.000]\n";
+        $imgDump .= "(0008,0050) SH [{$noorder}]\n";
+        $imgDump .= "(0008,0060) CS [{$modality}]\n";
+        $imgDump .= "(0008,0070) LO [SIMRS Khanza DICOM Converter]\n";
+        if ($instName !== '') {
+            $imgDump .= "(0008,0080) LO [{$instName}]\n";
+        }
+        $imgDump .= "(0008,0090) PN [{$nmDokter}]\n";
+        $imgDump .= "(0008,1010) SH [{$stationAet}]\n";
+        $imgDump .= "(0008,1030) LO [{$nmPerawatan}]\n";
+        $imgDump .= "(0008,103e) LO [{$nmPerawatan}]\n";
+        $imgDump .= "(0010,0010) PN [{$nmPasien}]\n";
+        $imgDump .= "(0010,0020) LO [{$row['no_rkm_medis']}]\n";
+        $imgDump .= "(0010,0030) DA [{$birthDate}]\n";
+        $imgDump .= "(0010,0040) CS [{$patientSex}]\n";
+        if ($diagnosa !== '') {
+            $imgDump .= "(0010,4000) LT [{$diagnosa}]\n";
+        }
+        $imgDump .= "(0018,0015) CS [" . ($row['diagnosa_klinis'] !== '' ? dicomSanitize($row['diagnosa_klinis'], 16) : 'BODY') . "]\n";
+        $imgDump .= "(0020,000d) UI [{$studyUid}]\n";
+        $imgDump .= "(0020,000e) UI [{$seriesUid}]\n";
+        $imgDump .= "(0020,0010) SH [{$noorder}]\n";
+        $imgDump .= "(0020,0011) IS [1]\n";
+        $imgDump .= "(0020,0013) IS [1]\n";
+        $imgDump .= "(0028,0002) US 1\n";
+        $imgDump .= "(0028,0004) CS [MONOCHROME2]\n";
+        $imgDump .= "(0028,0010) US 1\n";
+        $imgDump .= "(0028,0011) US 1\n";
+        $imgDump .= "(0028,0100) US 16\n";
+        $imgDump .= "(0028,0101) US 16\n";
+        $imgDump .= "(0028,0102) US 15\n";
+        $imgDump .= "(0028,0103) US 0\n";
+        $imgDump .= "(7fe0,0010) OW 0000\n";
+
+        file_put_contents($imgDumpFile, $imgDump);
+        $imgCmd    = 'LD_LIBRARY_PATH=/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu '
+                   . DUMP2DCM . ' ' . escapeshellarg($imgDumpFile) . ' ' . escapeshellarg($dcmFile) . ' 2>&1';
+        $imgOutput = shell_exec($imgCmd);
+
+        if (file_exists($imgDumpFile)) {
+            unlink($imgDumpFile);
+        }
 
         if (file_exists($wlFile)) {
             $stats['ok']++;
