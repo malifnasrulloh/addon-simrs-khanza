@@ -29,7 +29,7 @@ if ($tz = getenv('TZ')) {
 }
 
 define('WL_DIR',                getenv('MWL_WL_DIR') ?: '/var/lib/orthanc/worklists/');
-define('DCM_OUT_DIR',           getenv('MWL_DCM_OUT_DIR') ?: '/var/lib/orthanc/dcm_out/');
+define('DCM_SHARE_DIR',         getenv('MWL_DCM_SHARE_DIR') ?: '/var/lib/orthanc/dicom-share/');
 define('DUMP2DCM',              '/usr/bin/dump2dcm');
 define('TMP_DIR',               '/tmp/mwl_dump/');
 define('MODALITY_MAP_JSON',     __DIR__ . '/mapping_tindakan_radiologi.iyem');
@@ -69,8 +69,8 @@ if (php_sapi_name() !== 'cli') {
 if (!is_dir(TMP_DIR)) {
     mkdir(TMP_DIR, 0700, true);
 }
-if (!is_dir(DCM_OUT_DIR)) {
-    mkdir(DCM_OUT_DIR, 0777, true);
+if (!is_dir(DCM_SHARE_DIR)) {
+    mkdir(DCM_SHARE_DIR, 0777, true);
 }
 
 /**
@@ -283,8 +283,8 @@ function cleanStaleWorklists(): int {
     }
 
     // Clean .dcm files
-    if (is_dir(DCM_OUT_DIR)) {
-        foreach (glob(DCM_OUT_DIR . '*.dcm') as $file) {
+    if (is_dir(DCM_SHARE_DIR)) {
+        foreach (glob(DCM_SHARE_DIR . '*.dcm') as $file) {
             if (filemtime($file) < $threshold) {
                 if (unlink($file)) {
                     $count++;
@@ -483,7 +483,7 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
 
         // --- Convert to Dummy DICOM Image for Network Import ---
         $imgDumpFile = TMP_DIR . $noorder . '_img.dump';
-        $dcmFile     = DCM_OUT_DIR . $noorder . '.dcm';
+        $dcmFile     = DCM_SHARE_DIR . $noorder . '.dcm';
 
         $sopClassUid = getSopClassUid($modality);
         $sopInstanceUid = $studyUid . '.1.1';

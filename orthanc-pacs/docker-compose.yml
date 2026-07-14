@@ -90,7 +90,7 @@ services:
       - "${MWL_DASHBOARD_PORT:-8081}:8080"
     volumes:
       - orthanc-worklists:/var/lib/orthanc/worklists/
-      - ./dcm_out:/var/lib/orthanc/dcm_out/
+      - ./dicom-share:/var/lib/orthanc/dicom-share/
     environment:
       TZ: ${TZ:-Asia/Jakarta}
       SIMRS_DB_HOST: ${SIMRS_DB_HOST}
@@ -105,7 +105,7 @@ services:
       MWL_WEB_PASS: ${MWL_WEB_PASS:-changeme}
       DICOM_UID_ROOT: ${DICOM_UID_ROOT:-2.25}
       MWL_INSTITUTION_NAME: ${MWL_INSTITUTION_NAME:-}
-      MWL_DCM_OUT_DIR: /var/lib/orthanc/dcm_out/
+      MWL_DCM_SHARE_DIR: /var/lib/orthanc/dicom-share/
     depends_on:
       - orthanc
     extra_hosts:
@@ -116,6 +116,23 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    networks:
+      - pacs-frontend
+
+  samba:
+    image: dockurr/samba:latest
+    restart: unless-stopped
+    ports:
+      - "445:445"
+    environment:
+      NAME: ${SHARE_NAME:-DICOM-SHARE}
+      USER: ${SHARE_USER:-orthanc}
+      PASS: ${SHARE_PASS:-orthanc}
+      UID: ${SHARE_UID:-1000}
+      GID: ${SHARE_GID:-1000}
+      TZ: ${TZ:-Asia/Jakarta}
+    volumes:
+      - ./dicom-share:/storage
     networks:
       - pacs-frontend
 
