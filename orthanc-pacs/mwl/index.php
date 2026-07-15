@@ -36,6 +36,8 @@ define('MODALITY_MAP_JSON',     __DIR__ . '/mapping_tindakan_radiologi.iyem');
 define('DASHBOARD_REFRESH_SEC', (int)(getenv('MWL_DASHBOARD_REFRESH_SEC') ?: getenv('MWL_RELOAD_SEC') ?: 300));
 define('STALE_DAYS',            (int)(getenv('MWL_STALE_DAYS') ?: 2));
 define('DEFAULT_AET',           'ORTHANC');
+define('MWL_LOOKBACK_DAYS',    (int)(getenv('MWL_LOOKBACK_DAYS') ?: 7));
+define('MWL_CLEANUP_EVERY',    100);   // Run stale cleanup every N generations
 define('DICOM_UID_ROOT',        getenv('DICOM_UID_ROOT') ?: '2.25');
 define('INSTITUTION_NAME',      getenv('MWL_INSTITUTION_NAME') ?: '');
 
@@ -265,7 +267,7 @@ function getSopClassUid(string $modality): string {
 }
 
 /**
- * Remove stale worklist and dcm files older than STALE_DAYS.
+ * Remove stale worklist, dcm, and orphan dump files older than STALE_DAYS.
  */
 function cleanStaleWorklists(): int {
     $count     = 0;
@@ -290,6 +292,19 @@ function cleanStaleWorklists(): int {
                     $count++;
                 } else {
                     error_log("MWL: Failed to remove stale file: {$file}");
+                }
+            }
+        }
+    }
+
+    // Clean orphan .dump files from TMP_DIR
+    if (is_dir(TMP_DIR)) {
+        foreach (glob(TMP_DIR . '*.dump') as $file) {
+            if (filemtime($file) < $threshold) {
+                if (unlink($file)) {
+                    $count++;
+                } else {
+                    error_log("MWL: Failed to remove stale dump file: {$file}");
                 }
             }
         }
@@ -331,8 +346,13 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
     $logs  = [];
     $stats = ['ok' => 0, 'skip' => 0, 'fail' => 0, 'cleaned' => 0];
 
-    // --- Stale Cleanup ---
-    $stats['cleaned'] = cleanStaleWorklists();
+    // --- Stale Cleanup (gated: every N generations) ---
+    static $cleanupCounter = 0;
+    $cleanupCounter++;
+    if ($cleanupCounter >= MWL_CLEANUP_EVERY) {
+        $cleanupCounter = 0;
+        $stats['cleaned'] = cleanStaleWorklists();
+    }
 
     // --- Load Modality Configuration ---
     $modalityConfig = loadModalityConfig();
@@ -355,7 +375,8 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
     }
 
     // --- Query Radiology Orders ---
-    // Matches the original SIMRS Khanza query structure with penjab JOIN
+    // LEFT JOIN for optional tables so missing rows never drop the order.
+    $lookback = MWL_LOOKBACK_DAYS;
     $sql = "SELECT p.noorder, p.no_rawat, r.no_rkm_medis, ps.nm_pasien,
                    ps.tgl_lahir, ps.jk,
                    j.kd_jenis_prw, j.nm_perawatan,
@@ -369,21 +390,27 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
             INNER JOIN pasien ps ON r.no_rkm_medis = ps.no_rkm_medis
             INNER JOIN permintaan_pemeriksaan_radiologi pr ON p.noorder = pr.noorder
             INNER JOIN jns_perawatan_radiologi j ON j.kd_jenis_prw = pr.kd_jenis_prw
-            INNER JOIN dokter d ON p.dokter_perujuk = d.kd_dokter
-            INNER JOIN poliklinik pl ON r.kd_poli = pl.kd_poli
-            INNER JOIN penjab pj ON r.kd_pj = pj.kd_pj
-            WHERE p.tgl_permintaan >= CURDATE() - INTERVAL 1 DAY
+            LEFT JOIN dokter d ON p.dokter_perujuk = d.kd_dokter
+            LEFT JOIN poliklinik pl ON r.kd_poli = pl.kd_poli
+            LEFT JOIN penjab pj ON r.kd_pj = pj.kd_pj
+            WHERE p.tgl_permintaan >= CURDATE() - INTERVAL {$lookback} DAY
+            GROUP BY pr.noorder, pr.kd_jenis_prw
             ORDER BY p.tgl_permintaan DESC, p.jam_permintaan DESC";
 
     $stmt = $pdo->query($sql);
 
     while ($row = $stmt->fetch()) {
+        // Null-coalesce LEFT JOIN fields to avoid undefined-array-key warnings
+        $row['nm_dokter']  ??= '';
+        $row['nm_poli']    ??= '';
+        $row['png_jawab']  ??= '';
+
         // --- File Identifiers ---
-        // Match original: strip "PR" prefix, concatenate noorder + kd_jenis_prw
-        $noorder  = str_replace('PR', '', $row['noorder'] . $row['kd_jenis_prw']);
-        $noorder  = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $noorder);
-        $wlFile   = WL_DIR . $noorder . '.wl';
-        $dumpFile = TMP_DIR . $noorder . '.dump';
+        // ACSN = combined noorder (without "PR" prefix) + kd_jenis_prw
+        $acsn     = str_replace('PR', '', $row['noorder'] . $row['kd_jenis_prw']);
+        $acsn     = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $acsn);
+        $wlFile   = WL_DIR . $acsn . '.wl';
+        $dumpFile = TMP_DIR . $acsn . '.dump';
 
         if (file_exists($wlFile)) {
             $stats['skip']++;
@@ -410,7 +437,7 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $diagnosa    = dicomSanitize($row['diagnosa_klinis']);
         $birthDate   = dicomDate($row['tgl_lahir'] ?? '');
         $patientSex  = mapSex($row['jk'] ?? '');
-        $studyUid    = generateStudyUid($row['no_rkm_medis'], $noorder);
+        $studyUid    = generateStudyUid($row['no_rkm_medis'], $acsn);
         $tglDicom    = dicomDate($row['tgl_permintaan']);
         $jamDicom    = dicomTime($row['jam_permintaan'] ?? '');
 
@@ -431,7 +458,7 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $dump .= "(0008,0030) TM [{$jamDicom}]\n";
 
         // Accession Number — matches original: uses noorder as accession
-        $dump .= "(0008,0050) SH [{$noorder}]\n";
+        $dump .= "(0008,0050) SH [{$acsn}]\n";
 
         // Referring Physician's Name
         $dump .= "(0008,0090) PN [{$nmDokter}]\n";
@@ -453,7 +480,7 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $dump .= "(0032,1060) LO [{$nmPerawatan}]\n";
 
         // Requested Procedure ID — matches original: uses noorder
-        $dump .= "(0040,1001) SH [{$noorder}]\n";
+        $dump .= "(0040,1001) SH [{$acsn}]\n";
 
         // Reason for Requested Procedure — clinical diagnosis
         $dump .= "(0040,1002) LO [{$diagnosa}]\n";
@@ -467,7 +494,7 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $dump .= "(0040,0003) TM [{$jamDicom}]\n";
         $dump .= "(0040,0006) PN [{$nmDokter}]\n";
         $dump .= "(0040,0007) LO [{$nmPerawatan}]\n";
-        $dump .= "(0040,0009) SH [{$noorder}]\n";
+        $dump .= "(0040,0009) SH [{$acsn}]\n";
         $dump .= "(0040,0010) SH [{$nmPoli}]\n";
         if ($diagnosa !== '') {
             $dump .= "(0040,0400) LT [{$diagnosa}]\n";
@@ -481,74 +508,141 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
                 . DUMP2DCM . ' ' . escapeshellarg($dumpFile) . ' ' . escapeshellarg($wlFile) . ' 2>&1';
         $output = shell_exec($cmd);
 
-        // --- Convert to Dummy DICOM Image for Network Import ---
-        $imgDumpFile = TMP_DIR . $noorder . '_img.dump';
-        $dcmFile     = DCM_SHARE_DIR . $noorder . '.dcm';
+        // --- Generate Dummy DICOM Image for Network Import ---
+        // Uses binary DICOM generation via pack() — avoids dump2dcm's
+        // line-length limits and produces correct pixel data size.
+        $dcmFile = DCM_SHARE_DIR . $acsn . '.dcm';
 
-        $sopClassUid = getSopClassUid($modality);
+        $sopClassUid    = getSopClassUid($modality);
         $sopInstanceUid = $studyUid . '.1.1';
-        $seriesUid = $studyUid . '.1';
+        $seriesUid      = $studyUid . '.1';
 
-        $imgDump  = "# Dicom-File-Meta\n\n";
-        $imgDump .= "(0002,0000) UL 0\n";
-        $imgDump .= "(0002,0001) OB 00\\01\n";
-        $imgDump .= "(0002,0002) UI [{$sopClassUid}]\n";
-        $imgDump .= "(0002,0003) UI [{$sopInstanceUid}]\n";
-        $imgDump .= "(0002,0010) UI [" . EXPLICIT_VR_LE . "]\n";
-        $imgDump .= "(0002,0016) AE [SIMRS_KHANZA]\n";
+        // Modality-appropriate pixel dimensions and photometric interpretation
+        $m = strtoupper($modality);
+        if ($m === 'CT' || $m === 'MR') {
+            $imgRows    = 256;
+            $imgCols    = 256;
+            $imgPhoto   = 'MONOCHROME2';
+            $imgWC      = 40;
+            $imgWW      = 400;
+            $imgPS      = '1.0';
+        } elseif ($m === 'US') {
+            $imgRows    = 480;
+            $imgCols    = 640;
+            $imgPhoto   = 'MONOCHROME2';
+            $imgWC      = 128;
+            $imgWW      = 256;
+            $imgPS      = '0.5';
+        } else {
+            // CR / DX / MG / RF / XR
+            $imgRows    = 320;
+            $imgCols    = 240;
+            $imgPhoto   = 'MONOCHROME1';
+            $imgWC      = 512;
+            $imgWW      = 1024;
+            $imgPS      = '0.2';
+        }
 
-        $imgDump .= "\n# Dicom-Data-Set\n\n";
-        $imgDump .= "(0008,0005) CS [ISO_IR 100]\n";
-        $imgDump .= "(0008,0008) CS [DERIVED\\PRIMARY\\" . ($modality === 'XR' ? 'CR' : $modality) . "]\n";
-        $imgDump .= "(0008,0016) UI [{$sopClassUid}]\n";
-        $imgDump .= "(0008,0018) UI [{$sopInstanceUid}]\n";
-        $imgDump .= "(0008,0020) DA [{$tglDicom}]\n";
-        $imgDump .= "(0008,0021) DA [{$tglDicom}]\n";
-        $imgDump .= "(0008,0023) DA [{$tglDicom}]\n";
-        $imgDump .= "(0008,0030) TM [{$jamDicom}.000]\n";
-        $imgDump .= "(0008,0031) TM [{$jamDicom}.000]\n";
-        $imgDump .= "(0008,0033) TM [{$jamDicom}.000]\n";
-        $imgDump .= "(0008,0050) SH [{$noorder}]\n";
-        $imgDump .= "(0008,0060) CS [{$modality}]\n";
-        $imgDump .= "(0008,0070) LO [SIMRS Khanza DICOM Converter]\n";
+        $imageBytes = $imgRows * $imgCols * 2; // 16-bit = 2 bytes/pixel
+        $pixelData  = str_repeat("\0", $imageBytes);
+        $tsUid      = EXPLICIT_VR_LE;
+
+        // Helper: pack a DICOM tag in Explicit VR Little Endian
+        $dcm = function (int $g, int $e, string $vr, string $val) use (&$metaGrpLen, &$dataStart): string {
+            $tag = pack('vv', $g, $e);
+            $len = strlen($val);
+            $longVRs = ['OB','OD','OF','OL','OW','SQ','UC','UN','UR','UT'];
+            if (in_array($vr, $longVRs)) {
+                return $tag . $vr . "\x00\x00" . pack('V', $len) . $val;
+            }
+            return $tag . $vr . pack('v', $len) . $val;
+        };
+
+        // Helper: null-pad a string to even length (DICOM padding rule)
+        $pad = function (string $s): string {
+            return strlen($s) % 2 !== 0 ? $s . "\x00" : $s;
+        };
+
+        // DICOM preamble (128 zero bytes)
+        $bin = str_repeat("\x00", 128) . "DICM";
+
+        // --- File Meta Information (Group 0002) ---
+        $metaContent  = $dcm(0x0002, 0x0001, 'OB', "\x00\x01");
+        $metaContent .= $dcm(0x0002, 0x0002, 'UI', $pad($sopClassUid));
+        $metaContent .= $dcm(0x0002, 0x0003, 'UI', $pad($sopInstanceUid));
+        $metaContent .= $dcm(0x0002, 0x0010, 'UI', $pad($tsUid));
+        $metaContent .= $dcm(0x0002, 0x0016, 'AE', $pad('SIMRS_KHANZA'));
+        $bin .= $dcm(0x0002, 0x0000, 'UL', pack('V', strlen($metaContent)));
+        $bin .= $metaContent;
+
+        // --- Dataset ---
+        $bin .= $dcm(0x0008, 0x0005, 'CS', $pad('ISO_IR 100'));  // SpecificCharacterSet
+        $bin .= $dcm(0x0008, 0x0008, 'CS', $pad("DERIVED\\PRIMARY\\{$m}")); // ImageType
+        $bin .= $dcm(0x0008, 0x0016, 'UI', $pad($sopClassUid));            // SOPClassUID
+        $bin .= $dcm(0x0008, 0x0018, 'UI', $pad($sopInstanceUid));         // SOPInstanceUID
+        $bin .= $dcm(0x0008, 0x0020, 'DA', $pad($tglDicom ?: '00000000')); // StudyDate
+        $bin .= $dcm(0x0008, 0x0021, 'DA', $pad($tglDicom ?: '00000000')); // SeriesDate
+        $bin .= $dcm(0x0008, 0x0022, 'DA', $pad($tglDicom ?: '00000000')); // AcquisitionDate
+        $bin .= $dcm(0x0008, 0x0023, 'DA', $pad($tglDicom ?: '00000000')); // ContentDate
+        $bin .= $dcm(0x0008, 0x0030, 'TM', $pad($jamDicom ? $jamDicom . '.000' : '000000.000')); // StudyTime
+        $bin .= $dcm(0x0008, 0x0031, 'TM', $pad($jamDicom ? $jamDicom . '.000' : '000000.000')); // SeriesTime
+        $bin .= $dcm(0x0008, 0x0032, 'TM', $pad($jamDicom ? $jamDicom . '.000' : '000000.000')); // AcquisitionTime
+        $bin .= $dcm(0x0008, 0x0033, 'TM', $pad($jamDicom ? $jamDicom . '.000' : '000000.000')); // ContentTime
+        $bin .= $dcm(0x0008, 0x0050, 'SH', $pad($acsn));                   // AccessionNumber
+        $bin .= $dcm(0x0008, 0x0060, 'CS', $pad($m));                      // Modality
+        $bin .= $dcm(0x0008, 0x0070, 'LO', $pad('SIMRS KHANZA DICOM CONVERTER')); // Manufacturer
         if ($instName !== '') {
-            $imgDump .= "(0008,0080) LO [{$instName}]\n";
+            $bin .= $dcm(0x0008, 0x0080, 'LO', $pad($instName));          // InstitutionName
         }
-        $imgDump .= "(0008,0090) PN [{$nmDokter}]\n";
-        $imgDump .= "(0008,1010) SH [{$stationAet}]\n";
-        $imgDump .= "(0008,1030) LO [{$nmPerawatan}]\n";
-        $imgDump .= "(0008,103e) LO [{$nmPerawatan}]\n";
-        $imgDump .= "(0010,0010) PN [{$nmPasien}]\n";
-        $imgDump .= "(0010,0020) LO [{$row['no_rkm_medis']}]\n";
-        $imgDump .= "(0010,0030) DA [{$birthDate}]\n";
-        $imgDump .= "(0010,0040) CS [{$patientSex}]\n";
+        $bin .= $dcm(0x0008, 0x0090, 'PN', $pad($nmDokter));              // ReferringPhysicianName
+        $bin .= $dcm(0x0008, 0x1010, 'SH', $pad($stationAet));            // StationName
+        $bin .= $dcm(0x0008, 0x1030, 'LO', $pad($nmPerawatan));           // StudyDescription
+        $bin .= $dcm(0x0008, 0x103e, 'LO', $pad($nmPerawatan));           // SeriesDescription
+
+        // Patient Module
+        $bin .= $dcm(0x0010, 0x0010, 'PN', $pad($nmPasien));              // PatientName
+        $bin .= $dcm(0x0010, 0x0020, 'LO', $pad($row['no_rkm_medis']));   // PatientID
+        $bin .= $dcm(0x0010, 0x0030, 'DA', $pad($birthDate));             // PatientBirthDate
+        $bin .= $dcm(0x0010, 0x0040, 'CS', $pad($patientSex));            // PatientSex
         if ($diagnosa !== '') {
-            $imgDump .= "(0010,4000) LT [{$diagnosa}]\n";
+            $bin .= $dcm(0x0010, 0x4000, 'LT', $pad($diagnosa));          // PatientComments
         }
-        $imgDump .= "(0018,0015) CS [" . ($row['diagnosa_klinis'] !== '' ? dicomSanitize($row['diagnosa_klinis'], 16) : 'BODY') . "]\n";
-        $imgDump .= "(0020,000d) UI [{$studyUid}]\n";
-        $imgDump .= "(0020,000e) UI [{$seriesUid}]\n";
-        $imgDump .= "(0020,0010) SH [{$noorder}]\n";
-        $imgDump .= "(0020,0011) IS [1]\n";
-        $imgDump .= "(0020,0013) IS [1]\n";
-        $imgDump .= "(0028,0002) US 1\n";
-        $imgDump .= "(0028,0004) CS [MONOCHROME2]\n";
-        $imgDump .= "(0028,0010) US 1\n";
-        $imgDump .= "(0028,0011) US 1\n";
-        $imgDump .= "(0028,0100) US 16\n";
-        $imgDump .= "(0028,0101) US 16\n";
-        $imgDump .= "(0028,0102) US 15\n";
-        $imgDump .= "(0028,0103) US 0\n";
-        $imgDump .= "(7fe0,0010) OW 0000\n";
 
-        file_put_contents($imgDumpFile, $imgDump);
-        $imgCmd    = 'LD_LIBRARY_PATH=/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu '
-                   . DUMP2DCM . ' ' . escapeshellarg($imgDumpFile) . ' ' . escapeshellarg($dcmFile) . ' 2>&1';
-        $imgOutput = shell_exec($imgCmd);
+        // Body Part Examined
+        $bin .= $dcm(0x0018, 0x0015, 'CS', $pad(
+            $nmPerawatan !== '' ? substr($nmPerawatan, 0, 16) : 'BODY'
+        ));
 
-        if (file_exists($imgDumpFile)) {
-            unlink($imgDumpFile);
-        }
+        // Study/Series UIDs
+        $bin .= $dcm(0x0020, 0x000d, 'UI', $pad($studyUid));              // StudyInstanceUID
+        $bin .= $dcm(0x0020, 0x000e, 'UI', $pad($seriesUid));             // SeriesInstanceUID
+        $bin .= $dcm(0x0020, 0x0010, 'SH', $pad($acsn));                  // StudyID
+        $bin .= $dcm(0x0020, 0x0011, 'IS', $pad('1'));                    // SeriesNumber
+        $bin .= $dcm(0x0020, 0x0012, 'IS', $pad('1'));                    // AcquisitionNumber
+        $bin .= $dcm(0x0020, 0x0013, 'IS', $pad('1'));                    // InstanceNumber
+
+        // Image Pixel Module
+        $bin .= $dcm(0x0028, 0x0002, 'US', pack('v', 1));                 // SamplesPerPixel
+        $bin .= $dcm(0x0028, 0x0004, 'CS', $pad($imgPhoto));              // PhotometricInterpretation
+        $bin .= $dcm(0x0028, 0x0010, 'US', pack('v', $imgRows));          // Rows
+        $bin .= $dcm(0x0028, 0x0011, 'US', pack('v', $imgCols));          // Columns
+        $bin .= $dcm(0x0028, 0x0030, 'DS', $pad("{$imgPS}\\{$imgPS}"));   // PixelSpacing
+        $bin .= $dcm(0x0028, 0x0100, 'US', pack('v', 16));                // BitsAllocated
+        $bin .= $dcm(0x0028, 0x0101, 'US', pack('v', 10));                // BitsStored
+        $bin .= $dcm(0x0028, 0x0102, 'US', pack('v', 9));                 // HighBit
+        $bin .= $dcm(0x0028, 0x0103, 'US', pack('v', 0));                 // PixelRepresentation
+        $bin .= $dcm(0x0028, 0x0106, 'US', pack('v', 0));                 // SmallestImagePixelValue
+        $bin .= $dcm(0x0028, 0x1050, 'DS', $pad((string)$imgWC));         // WindowCenter
+        $bin .= $dcm(0x0028, 0x1051, 'DS', $pad((string)$imgWW));         // WindowWidth
+        $bin .= $dcm(0x0028, 0x1052, 'DS', $pad('0'));                    // RescaleIntercept
+        $bin .= $dcm(0x0028, 0x1053, 'DS', $pad('1'));                    // RescaleSlope
+        $bin .= $dcm(0x0028, 0x1054, 'LO', $pad('US'));                   // RescaleType
+        $bin .= $dcm(0x0028, 0x2110, 'CS', $pad('00'));                   // LossyImageCompression
+
+        // PixelData (7fe0,0010) — OW with exact byte count
+        $bin .= $dcm(0x7fe0, 0x0010, 'OW', $pixelData);
+
+        file_put_contents($dcmFile, $bin);
 
         if (file_exists($wlFile)) {
             $stats['ok']++;
