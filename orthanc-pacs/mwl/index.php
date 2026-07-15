@@ -38,8 +38,10 @@ define('STALE_DAYS',            (int)(getenv('MWL_STALE_DAYS') ?: 2));
 define('DEFAULT_AET',           'ORTHANC');
 define('MWL_LOOKBACK_DAYS',    (int)(getenv('MWL_LOOKBACK_DAYS') ?: 7));
 define('MWL_CLEANUP_EVERY',    100);   // Run stale cleanup every N generations
-define('DICOM_UID_ROOT',        getenv('DICOM_UID_ROOT') ?: '2.25');
-define('INSTITUTION_NAME',      getenv('MWL_INSTITUTION_NAME') ?: '');
+define('DICOM_UID_ROOT',                getenv('DICOM_UID_ROOT') ?: '2.25');
+define('INSTITUTION_NAME',              getenv('MWL_INSTITUTION_NAME') ?: '');
+define('IMPLEMENTATION_CLASS_UID',      getenv('IMPLEMENTATION_CLASS_UID') ?: '1.2.392.200036.9125.5154.1');
+define('IMPLEMENTATION_VERSION_NAME',   getenv('IMPLEMENTATION_VERSION_NAME') ?: 'V2.0B');
 
 // MWL SOP Class UID (Modality Worklist Information Model - FIND)
 define('MWL_SOP_CLASS_UID',     '1.2.840.10008.5.1.4.31');
@@ -571,6 +573,8 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $metaContent .= $dcm(0x0002, 0x0002, 'UI', $pad($sopClassUid));
         $metaContent .= $dcm(0x0002, 0x0003, 'UI', $pad($sopInstanceUid));
         $metaContent .= $dcm(0x0002, 0x0010, 'UI', $pad($tsUid));
+        $metaContent .= $dcm(0x0002, 0x0012, 'UI', $pad(IMPLEMENTATION_CLASS_UID));
+        $metaContent .= $dcm(0x0002, 0x0013, 'SH', $pad(IMPLEMENTATION_VERSION_NAME));
         $metaContent .= $dcm(0x0002, 0x0016, 'AE', $pad('SIMRS_KHANZA'));
         $bin .= $dcm(0x0002, 0x0000, 'UL', pack('V', strlen($metaContent)));
         $bin .= $metaContent;
