@@ -581,7 +581,7 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
 
         // --- Dataset ---
         $bin .= $dcm(0x0008, 0x0005, 'CS', $pad('ISO_IR 100'));  // SpecificCharacterSet
-        $bin .= $dcm(0x0008, 0x0008, 'CS', $pad("DERIVED\\PRIMARY\\{$m}")); // ImageType
+        $bin .= $dcm(0x0008, 0x0008, 'CS', $pad("DERIVED\\PRIMARY\\POST_PROCESSED\\\\\\\\\\\\100000")); // ImageType
         $bin .= $dcm(0x0008, 0x0016, 'UI', $pad($sopClassUid));            // SOPClassUID
         $bin .= $dcm(0x0008, 0x0018, 'UI', $pad($sopInstanceUid));         // SOPInstanceUID
         $bin .= $dcm(0x0008, 0x0020, 'DA', $pad($tglDicom ?: '00000000')); // StudyDate
@@ -602,6 +602,9 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $bin .= $dcm(0x0008, 0x1010, 'SH', $pad($stationAet));            // StationName
         $bin .= $dcm(0x0008, 0x1030, 'LO', $pad($nmPerawatan));           // StudyDescription
         $bin .= $dcm(0x0008, 0x103e, 'LO', $pad($nmPerawatan));           // SeriesDescription
+        $bin .= $dcm(0x0008, 0x1050, 'PN', $pad($nmDokter));              // PerformingPhysicianName
+        $bin .= $dcm(0x0008, 0x1070, 'PN', $pad($nmDokter));              // OperatorsName
+        $bin .= $dcm(0x0008, 0x1090, 'LO', $pad('SIMRS-KHANZA/1.0'));     // ManufacturerModelName
 
         // Patient Module
         $bin .= $dcm(0x0010, 0x0010, 'PN', $pad($nmPasien));              // PatientName
@@ -635,7 +638,6 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $bin .= $dcm(0x0028, 0x0101, 'US', pack('v', 10));                // BitsStored
         $bin .= $dcm(0x0028, 0x0102, 'US', pack('v', 9));                 // HighBit
         $bin .= $dcm(0x0028, 0x0103, 'US', pack('v', 0));                 // PixelRepresentation
-        $bin .= $dcm(0x0028, 0x0106, 'US', pack('v', 0));                 // SmallestImagePixelValue
         $bin .= $dcm(0x0028, 0x1050, 'DS', $pad((string)$imgWC));         // WindowCenter
         $bin .= $dcm(0x0028, 0x1051, 'DS', $pad((string)$imgWW));         // WindowWidth
         $bin .= $dcm(0x0028, 0x1052, 'DS', $pad('0'));                    // RescaleIntercept
