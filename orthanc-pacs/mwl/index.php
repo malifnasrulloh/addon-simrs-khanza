@@ -299,15 +299,24 @@ function cleanStaleWorklists(): int {
         }
     }
 
-    // Clean orphan .dump files from TMP_DIR
+    // Clean orphan .dump, .meta.json, and .meta.hash files from TMP_DIR
     if (is_dir(TMP_DIR)) {
         foreach (glob(TMP_DIR . '*.dump') as $file) {
             if (filemtime($file) < $threshold) {
-                if (unlink($file)) {
-                    $count++;
-                } else {
-                    error_log("MWL: Failed to remove stale dump file: {$file}");
-                }
+                if (unlink($file)) { $count++; }
+                else { error_log("MWL: Failed to remove stale dump file: {$file}"); }
+            }
+        }
+        foreach (glob(TMP_DIR . '*.meta.json') as $file) {
+            if (filemtime($file) < $threshold) {
+                if (unlink($file)) { $count++; }
+                else { error_log("MWL: Failed to remove stale meta file: {$file}"); }
+            }
+        }
+        foreach (glob(TMP_DIR . '*.meta.hash') as $file) {
+            if (filemtime($file) < $threshold) {
+                if (unlink($file)) { $count++; }
+                else { error_log("MWL: Failed to remove stale hash file: {$file}"); }
             }
         }
     }
@@ -413,14 +422,29 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $acsn     = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $acsn);
         $wlFile   = WL_DIR . $acsn . '.wl';
         $dumpFile = TMP_DIR . $acsn . '.dump';
+        $hashFile = TMP_DIR . $acsn . '.meta.hash';
+        $dcmFile  = DCM_SHARE_DIR . $acsn . '.dcm';
 
-        if (file_exists($wlFile)) {
+        // --- Hash-based Skip Detection ---
+        // Compute SHA256 of all DICOM-relevant DB fields to detect metadata changes.
+        // If hash matches AND both .wl and .dcm exist, skip regeneration.
+        $hashInput = json_encode([
+            $row['no_rkm_medis'], $row['nm_pasien'], $row['tgl_lahir'],
+            $row['jk'], $row['nm_perawatan'], $row['nm_dokter'],
+            $row['diagnosa_klinis'], $row['nm_poli'], $row['tgl_permintaan'],
+            $row['jam_permintaan'], $row['kd_jenis_prw'], $instName,
+            $row['noorder'], $row['png_jawab'],
+        ]);
+        $currentHash = hash('sha256', $hashInput);
+        $storedHash  = file_exists($hashFile) ? trim(file_get_contents($hashFile)) : '';
+
+        if ($storedHash === $currentHash && file_exists($wlFile) && file_exists($dcmFile)) {
             $stats['skip']++;
             $logs[] = [
                 'status'  => 'skip',
                 'noorder' => $row['noorder'],
                 'pasien'  => $row['nm_pasien'],
-                'pesan'   => 'File .wl sudah ada, dilewati',
+                'pesan'   => 'Data tidak berubah, dilewati',
             ];
             continue;
         }
@@ -511,146 +535,83 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
         $output = shell_exec($cmd);
 
         // --- Generate Dummy DICOM Image for Network Import ---
-        // Uses binary DICOM generation via pack() — avoids dump2dcm's
-        // line-length limits and produces correct pixel data size.
-        $dcmFile = DCM_SHARE_DIR . $acsn . '.dcm';
-
+        // Uses Python/pydicom via JSON metadata handoff. pydicom's encoder
+        // produces byte-exact DICOM files matching CR modality expectations,
+        // unlike the fragile PHP binary pack() approach.
         $sopClassUid    = getSopClassUid($modality);
         $sopInstanceUid = $studyUid . '.1.1';
         $seriesUid      = $studyUid . '.1';
+        $m = strtoupper($modality);
 
         // Modality-appropriate pixel dimensions and photometric interpretation
-        $m = strtoupper($modality);
         if ($m === 'CT' || $m === 'MR') {
-            $imgRows    = 256;
-            $imgCols    = 256;
-            $imgPhoto   = 'MONOCHROME2';
-            $imgWC      = 40;
-            $imgWW      = 400;
-            $imgPS      = '1.0';
+            $imgRows  = 256; $imgCols  = 256;
+            $imgPhoto = 'MONOCHROME2';
+            $imgWC    = 40;  $imgWW    = 400;  $imgPS = '1.0';
         } elseif ($m === 'US') {
-            $imgRows    = 480;
-            $imgCols    = 640;
-            $imgPhoto   = 'MONOCHROME2';
-            $imgWC      = 128;
-            $imgWW      = 256;
-            $imgPS      = '0.5';
+            $imgRows  = 480; $imgCols  = 640;
+            $imgPhoto = 'MONOCHROME2';
+            $imgWC    = 128; $imgWW    = 256;  $imgPS = '0.5';
         } else {
             // CR / DX / MG / RF / XR
-            $imgRows    = 320;
-            $imgCols    = 240;
-            $imgPhoto   = 'MONOCHROME1';
-            $imgWC      = 512;
-            $imgWW      = 1024;
-            $imgPS      = '0.2';
+            $imgRows  = 320; $imgCols  = 240;
+            $imgPhoto = 'MONOCHROME1';
+            $imgWC    = 512; $imgWW    = 1024; $imgPS = '0.2';
         }
 
-        $imageBytes = $imgRows * $imgCols * 2; // 16-bit = 2 bytes/pixel
-        $pixelData  = str_repeat("\0", $imageBytes);
-        $tsUid      = EXPLICIT_VR_LE;
+        // Write metadata as JSON, call Python/pydicom sidecar
+        $metaFile = TMP_DIR . $acsn . '.meta.json';
+        $pyResult = ['ok' => false, 'output' => ''];
 
-        // Helper: pack a DICOM tag in Explicit VR Little Endian
-        $dcm = function (int $g, int $e, string $vr, string $val) use (&$metaGrpLen, &$dataStart): string {
-            $tag = pack('vv', $g, $e);
-            $len = strlen($val);
-            $longVRs = ['OB','OD','OF','OL','OW','SQ','UC','UN','UR','UT'];
-            if (in_array($vr, $longVRs)) {
-                return $tag . $vr . "\x00\x00" . pack('V', $len) . $val;
+        try {
+            file_put_contents($metaFile, json_encode([
+                'acsn'         => $acsn,
+                'nmPasien'     => $nmPasien,
+                'nmDokter'     => $nmDokter,
+                'nmPerawatan'  => $nmPerawatan,
+                'modality'     => $m,
+                'imgRows'      => $imgRows,
+                'imgCols'      => $imgCols,
+                'imgPhoto'     => $imgPhoto,
+                'imgWC'        => $imgWC,
+                'imgWW'        => $imgWW,
+                'imgPS'        => $imgPS,
+                'sopClassUid'  => $sopClassUid,
+                'sopInstanceUid' => $sopInstanceUid,
+                'seriesUid'    => $seriesUid,
+                'studyUid'     => $studyUid,
+                'instName'     => $instName,
+                'tglDicom'     => $tglDicom,
+                'jamDicom'     => $jamDicom,
+                'birthDate'    => $birthDate,
+                'patientSex'   => $patientSex,
+                'diagnosa'     => $diagnosa,
+                'stationAet'   => $stationAet,
+                'noRkmMedis'   => $row['no_rkm_medis'],
+            ], JSON_UNESCAPED_UNICODE));
+
+            $pyCmd  = '/app/venv/bin/python3 /app/gen_dicom.py '
+                    . escapeshellarg($metaFile) . ' ' . escapeshellarg($dcmFile) . ' 2>&1';
+            $pyOutput = [];
+            exec($pyCmd, $pyOutput, $pyExit);
+            $pyOut = implode("\n", $pyOutput);
+
+            if ($pyExit === 0 && file_exists($dcmFile)) {
+                $pyResult['ok'] = true;
+            } else {
+                $pyResult['output'] = trim($pyOut ?? '');
             }
-            return $tag . $vr . pack('v', $len) . $val;
-        };
-
-        // Helper: null-pad a string to even length (DICOM padding rule)
-        $pad = function (string $s): string {
-            return strlen($s) % 2 !== 0 ? $s . "\x00" : $s;
-        };
-
-        // DICOM preamble (128 zero bytes)
-        $bin = str_repeat("\x00", 128) . "DICM";
-
-        // --- File Meta Information (Group 0002) ---
-        $metaContent  = $dcm(0x0002, 0x0001, 'OB', "\x00\x01");
-        $metaContent .= $dcm(0x0002, 0x0002, 'UI', $pad($sopClassUid));
-        $metaContent .= $dcm(0x0002, 0x0003, 'UI', $pad($sopInstanceUid));
-        $metaContent .= $dcm(0x0002, 0x0010, 'UI', $pad($tsUid));
-        $metaContent .= $dcm(0x0002, 0x0012, 'UI', $pad(IMPLEMENTATION_CLASS_UID));
-        $metaContent .= $dcm(0x0002, 0x0013, 'SH', $pad(IMPLEMENTATION_VERSION_NAME));
-        $metaContent .= $dcm(0x0002, 0x0016, 'AE', $pad('SIMRS_KHANZA'));
-        $bin .= $dcm(0x0002, 0x0000, 'UL', pack('V', strlen($metaContent)));
-        $bin .= $metaContent;
-
-        // --- Dataset ---
-        $bin .= $dcm(0x0008, 0x0005, 'CS', $pad('ISO_IR 100'));  // SpecificCharacterSet
-        $bin .= $dcm(0x0008, 0x0008, 'CS', $pad("DERIVED\\PRIMARY\\POST_PROCESSED\\\\\\\\\\\\100000")); // ImageType
-        $bin .= $dcm(0x0008, 0x0016, 'UI', $pad($sopClassUid));            // SOPClassUID
-        $bin .= $dcm(0x0008, 0x0018, 'UI', $pad($sopInstanceUid));         // SOPInstanceUID
-        $bin .= $dcm(0x0008, 0x0020, 'DA', $pad($tglDicom ?: '00000000')); // StudyDate
-        $bin .= $dcm(0x0008, 0x0021, 'DA', $pad($tglDicom ?: '00000000')); // SeriesDate
-        $bin .= $dcm(0x0008, 0x0022, 'DA', $pad($tglDicom ?: '00000000')); // AcquisitionDate
-        $bin .= $dcm(0x0008, 0x0023, 'DA', $pad($tglDicom ?: '00000000')); // ContentDate
-        $bin .= $dcm(0x0008, 0x0030, 'TM', $pad($jamDicom ? $jamDicom . '.000' : '000000.000')); // StudyTime
-        $bin .= $dcm(0x0008, 0x0031, 'TM', $pad($jamDicom ? $jamDicom . '.000' : '000000.000')); // SeriesTime
-        $bin .= $dcm(0x0008, 0x0032, 'TM', $pad($jamDicom ? $jamDicom . '.000' : '000000.000')); // AcquisitionTime
-        $bin .= $dcm(0x0008, 0x0033, 'TM', $pad($jamDicom ? $jamDicom . '.000' : '000000.000')); // ContentTime
-        $bin .= $dcm(0x0008, 0x0050, 'SH', $pad($acsn));                   // AccessionNumber
-        $bin .= $dcm(0x0008, 0x0060, 'CS', $pad($m));                      // Modality
-        $bin .= $dcm(0x0008, 0x0070, 'LO', $pad('SIMRS KHANZA DICOM CONVERTER')); // Manufacturer
-        if ($instName !== '') {
-            $bin .= $dcm(0x0008, 0x0080, 'LO', $pad($instName));          // InstitutionName
-        }
-        $bin .= $dcm(0x0008, 0x0090, 'PN', $pad($nmDokter));              // ReferringPhysicianName
-        $bin .= $dcm(0x0008, 0x1010, 'SH', $pad($stationAet));            // StationName
-        $bin .= $dcm(0x0008, 0x1030, 'LO', $pad($nmPerawatan));           // StudyDescription
-        $bin .= $dcm(0x0008, 0x103e, 'LO', $pad($nmPerawatan));           // SeriesDescription
-        $bin .= $dcm(0x0008, 0x1050, 'PN', $pad($nmDokter));              // PerformingPhysicianName
-        $bin .= $dcm(0x0008, 0x1070, 'PN', $pad($nmDokter));              // OperatorsName
-        $bin .= $dcm(0x0008, 0x1090, 'LO', $pad('SIMRS-KHANZA/1.0'));     // ManufacturerModelName
-
-        // Patient Module
-        $bin .= $dcm(0x0010, 0x0010, 'PN', $pad($nmPasien));              // PatientName
-        $bin .= $dcm(0x0010, 0x0020, 'LO', $pad($row['no_rkm_medis']));   // PatientID
-        $bin .= $dcm(0x0010, 0x0030, 'DA', $pad($birthDate));             // PatientBirthDate
-        $bin .= $dcm(0x0010, 0x0040, 'CS', $pad($patientSex));            // PatientSex
-        if ($diagnosa !== '') {
-            $bin .= $dcm(0x0010, 0x4000, 'LT', $pad($diagnosa));          // PatientComments
+        } catch (\Exception $e) {
+            $pyResult['output'] = $e->getMessage();
+        } finally {
+            if (file_exists($metaFile)) {
+                unlink($metaFile);
+            }
         }
 
-        // Body Part Examined
-        $bin .= $dcm(0x0018, 0x0015, 'CS', $pad(
-            $nmPerawatan !== '' ? substr($nmPerawatan, 0, 16) : 'BODY'
-        ));
-
-        // Study/Series UIDs
-        $bin .= $dcm(0x0020, 0x000d, 'UI', $pad($studyUid));              // StudyInstanceUID
-        $bin .= $dcm(0x0020, 0x000e, 'UI', $pad($seriesUid));             // SeriesInstanceUID
-        $bin .= $dcm(0x0020, 0x0010, 'SH', $pad($acsn));                  // StudyID
-        $bin .= $dcm(0x0020, 0x0011, 'IS', $pad('1'));                    // SeriesNumber
-        $bin .= $dcm(0x0020, 0x0012, 'IS', $pad('1'));                    // AcquisitionNumber
-        $bin .= $dcm(0x0020, 0x0013, 'IS', $pad('1'));                    // InstanceNumber
-
-        // Image Pixel Module
-        $bin .= $dcm(0x0028, 0x0002, 'US', pack('v', 1));                 // SamplesPerPixel
-        $bin .= $dcm(0x0028, 0x0004, 'CS', $pad($imgPhoto));              // PhotometricInterpretation
-        $bin .= $dcm(0x0028, 0x0010, 'US', pack('v', $imgRows));          // Rows
-        $bin .= $dcm(0x0028, 0x0011, 'US', pack('v', $imgCols));          // Columns
-        $bin .= $dcm(0x0028, 0x0030, 'DS', $pad("{$imgPS}\\{$imgPS}"));   // PixelSpacing
-        $bin .= $dcm(0x0028, 0x0100, 'US', pack('v', 16));                // BitsAllocated
-        $bin .= $dcm(0x0028, 0x0101, 'US', pack('v', 10));                // BitsStored
-        $bin .= $dcm(0x0028, 0x0102, 'US', pack('v', 9));                 // HighBit
-        $bin .= $dcm(0x0028, 0x0103, 'US', pack('v', 0));                 // PixelRepresentation
-        $bin .= $dcm(0x0028, 0x1050, 'DS', $pad((string)$imgWC));         // WindowCenter
-        $bin .= $dcm(0x0028, 0x1051, 'DS', $pad((string)$imgWW));         // WindowWidth
-        $bin .= $dcm(0x0028, 0x1052, 'DS', $pad('0'));                    // RescaleIntercept
-        $bin .= $dcm(0x0028, 0x1053, 'DS', $pad('1'));                    // RescaleSlope
-        $bin .= $dcm(0x0028, 0x1054, 'LO', $pad('US'));                   // RescaleType
-        $bin .= $dcm(0x0028, 0x2110, 'CS', $pad('00'));                   // LossyImageCompression
-
-        // PixelData (7fe0,0010) — OW with exact byte count
-        $bin .= $dcm(0x7fe0, 0x0010, 'OW', $pixelData);
-
-        file_put_contents($dcmFile, $bin);
-
-        if (file_exists($wlFile)) {
+        if (file_exists($wlFile) && $pyResult['ok']) {
+            // Both MWL worklist and DICOM image generated successfully
+            file_put_contents($hashFile, $currentHash);
             $stats['ok']++;
             $logs[] = [
                 'status'  => 'ok',
@@ -660,12 +621,20 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
             ];
         } else {
             $stats['fail']++;
-            error_log("MWL dump2dcm failed [{$row['noorder']}]: {$output}");
+            $errorParts = [];
+            if (!file_exists($wlFile)) {
+                $errorParts[] = 'dump2dcm error: ' . trim($output ?? '');
+            }
+            if (!$pyResult['ok']) {
+                $errorParts[] = 'pydicom error: ' . ($pyResult['output'] ?: 'unknown error');
+            }
+            $errMsg = implode(' | ', $errorParts);
+            error_log("MWL generation failed [{$row['noorder']}]: {$errMsg}");
             $logs[] = [
                 'status'  => 'fail',
                 'noorder' => $row['noorder'],
                 'pasien'  => $row['nm_pasien'],
-                'pesan'   => 'dump2dcm error: ' . trim($output ?? ''),
+                'pesan'   => $errMsg,
             ];
         }
 
