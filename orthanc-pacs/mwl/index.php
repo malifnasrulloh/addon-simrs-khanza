@@ -565,7 +565,7 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
 
         try {
             file_put_contents($metaFile, json_encode([
-                'acsn'         => $acsn,
+                'acsn'         => substr($acsn, 0, 16),
                 'nmPasien'     => $nmPasien,
                 'nmDokter'     => $nmDokter,
                 'nmPerawatan'  => $nmPerawatan,

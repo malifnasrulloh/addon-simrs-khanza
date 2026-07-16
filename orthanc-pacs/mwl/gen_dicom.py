@@ -134,7 +134,7 @@ def build_dicom(meta):
     # Identifiers
     ds.AccessionNumber = acsn
     ds.Modality = modality
-    ds.Manufacturer = "SIMRS KHANZA DICOM CONVERTER"
+    ds.Manufacturer = "PYDICOM"
     if inst_name:
         ds.InstitutionName = inst_name
     ds.ReferringPhysicianName = dokter

@@ -7,7 +7,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     python3 \
     python3-venv \
-    python3-numpy \
     && rm -rf /var/lib/apt/lists/*
 
 # Install PHP extensions (PDO only — mysqli not used)
@@ -15,7 +14,7 @@ RUN docker-php-ext-install pdo pdo_mysql
 
 # Create Python venv and install pydicom (avoids global pip restrictions on newer systems)
 RUN python3 -m venv /app/venv && \
-    /app/venv/bin/pip install --no-cache-dir pydicom
+    /app/venv/bin/pip install --no-cache-dir pydicom numpy
 
 WORKDIR /app
 
