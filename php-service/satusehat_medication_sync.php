@@ -95,6 +95,7 @@ $log->info("  API Base: " . $config->baseUrl);
 $log->info("══════════════════════════════════════════════════════════════");
 
 require_once BASE_DIR . '/lib/satusehat/SatuSehatClient.php';
+require_once BASE_DIR . '/lib/satusehat/BatchCursor.php';
 require_once BASE_DIR . '/lib/satusehat/Database.php';
 require_once BASE_DIR . '/lib/satusehat/PayloadBuilder.php';
 require_once BASE_DIR . '/lib/satusehat/Supervisor.php';
@@ -115,97 +116,48 @@ $startTime = microtime(true);
 $db->printSyncDiagnostics('medication', '', '');
 
 // 1. Fetch pending records
-$activeRecords = $db->fetchPendingMedicationActive();
-$updateRecords = $db->fetchPendingMedicationUpdate();
+$batchSize = $config->batchSize;
+$processor = new SatuSehatMedicationProcessor($db, $client, $config, $log);
+$totalSuccess = 0;
+$totalFail = 0;
+$totalSkip = 0;
 
-$totalActive = count($activeRecords);
-$totalUpdate = count($updateRecords);
-$totalPending = $totalActive + $totalUpdate;
+try {
+    $log->info("──────────────────────────────────────────────────────────────");
+    $log->info("[SYNC] Phase 1: POST New Medication (batches of {$batchSize})");
+    $cursor = new SatuSehatBatchCursor($db, 'fetchPendingMedicationActive', [], $batchSize, $log, 'Medication/active');
+    foreach ($cursor->batches() as $batch) {
+        $stats = $processor->run($batch, []);
+        $totalSuccess += $stats['success'];
+        $totalFail += $stats['fail'];
+        $totalSkip += $stats['skip'];
+        $cursor->tick();
+    }
+    $log->info("[PHASE 1] Active: Success={$totalSuccess} Fail={$totalFail} Skip={$totalSkip}");
 
-if ($totalPending === 0) {
-    $log->info("No pending Medication records found.");
-    $log->info("══════════════════════════════════════════════════════════════");
+    $log->info("──────────────────────────────────────────────────────────────");
+    $log->info("[SYNC] Phase 2: PUT Update Medication (batches of {$batchSize})");
+    $cursor = new SatuSehatBatchCursor($db, 'fetchPendingMedicationUpdate', [], $batchSize, $log, 'Medication/update');
+    foreach ($cursor->batches() as $batch) {
+        $stats = $processor->run([], $batch);
+        $totalSuccess += $stats['success'];
+        $totalFail += $stats['fail'];
+        $totalSkip += $stats['skip'];
+        $cursor->tick();
+    }
+    $log->info("[PHASE 2] Update: Success={$totalSuccess} Fail={$totalFail} Skip={$totalSkip}");
+} catch (\Throwable $e) {
+    $log->error("[FATAL] Unhandled exception: " . $e->getMessage());
+    $log->error("[FATAL] Stack trace: " . $e->getTraceAsString());
     $db->close();
-    exit(0);
+    exit(1);
 }
 
-$log->info("[INIT] Found {$totalActive} active and {$totalUpdate} update medications pending sync.");
-
-// 2. Execution path: Parallel workers vs Single process
-if ($isParallel && $totalPending > 1) {
-    $log->info("[CONCURRENCY] Splitting work among {$numWorkers} parallel workers...");
-
-    // Split arrays into chunks safely
-    $activeChunks = $totalActive > 0 ? (array_chunk($activeRecords, (int) ceil($totalActive / $numWorkers)) ?: []) : [];
-    $updateChunks = $totalUpdate > 0 ? (array_chunk($updateRecords, (int) ceil($totalUpdate / $numWorkers)) ?: []) : [];
-
-    $workers = [];
-    $db->close(); // Close DB handle before fork to avoid shared-connection issues!
-
-    for ($i = 0; $i < $numWorkers; $i++) {
-        $actChunk = $activeChunks[$i] ?? [];
-        $updChunk = $updateChunks[$i] ?? [];
-
-        if (empty($actChunk) && empty($updChunk)) {
-            continue;
-        }
-
-        $pid = pcntl_fork();
-
-        if ($pid === -1) {
-            $log->error("[CONCURRENCY] Failed to fork worker {$i}");
-        } elseif ($pid === 0) {
-            // ── CHILD PROCESS WORKER ──
-            $childClient = new SatuSehatClient($config, $log);
-            try {
-                $childDb = new SatuSehatDatabase($config, $log, $childClient);
-            } catch (\Throwable $e) {
-                $log->error("[WORKER {$i}] Failed to connect to database: " . $e->getMessage());
-                exit(1);
-            }
-
-            $processor = new SatuSehatMedicationProcessor($childDb, $childClient, $config, $log);
-            $stats = $processor->run($actChunk, $updChunk);
-
-            $childDb->close();
-            exit($stats['fail'] > 0 ? 2 : 0);
-        } else {
-            // ── PARENT PROCESS ──
-            $workers[] = $pid;
-        }
-    }
-
-    // Wait for all workers to finish using the Concurrency Supervisor
-    $supervisor = new SatuSehatSupervisor($log);
-    $allSuccess = $supervisor->monitor($workers);
-
-    $elapsed = round(microtime(true) - $startTime, 2);
-    $log->info("══════════════════════════════════════════════════════════════");
-    $log->info("[SUMMARY] Parallel Sync Finished. All Workers Completed.");
-    $log->info("[SUMMARY] Elapsed: {$elapsed}s");
-    $log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
-    $log->info("══════════════════════════════════════════════════════════════");
-    exit($allSuccess ? 0 : 2);
-
-} else {
-    // ── SINGLE PROCESS FALLBACK ──
-    $processor = new SatuSehatMedicationProcessor($db, $client, $config, $log);
-    try {
-        $stats = $processor->run($activeRecords, $updateRecords);
-    } catch (\Throwable $e) {
-        $log->error("[FATAL] Unhandled exception: " . $e->getMessage());
-        $log->error("[FATAL] Stack trace: " . $e->getTraceAsString());
-        $db->close();
-        exit(1);
-    }
-
-    $elapsed = round(microtime(true) - $startTime, 2);
-    $log->info("══════════════════════════════════════════════════════════════");
-    $log->info("[SUMMARY] Success: {$stats['success']} | Failed: {$stats['fail']} | Skipped: {$stats['skip']}");
-    $log->info("[SUMMARY] Elapsed: {$elapsed}s");
-    $log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
-    $log->info("══════════════════════════════════════════════════════════════");
-
-    $db->close();
-    exit($stats['fail'] > 0 ? 2 : 0);
-}
+$elapsed = round(microtime(true) - $startTime, 2);
+$log->info("══════════════════════════════════════════════════════════════");
+$log->info("[SUMMARY] Success: {$totalSuccess} | Failed: {$totalFail} | Skipped: {$totalSkip}");
+$log->info("[SUMMARY] Elapsed: {$elapsed}s");
+$log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
+$log->info("══════════════════════════════════════════════════════════════");
+$db->close();
+exit($totalFail > 0 ? 2 : 0);

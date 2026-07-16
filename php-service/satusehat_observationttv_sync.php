@@ -94,6 +94,7 @@ $log->info("  Timestamp: " . date('Y-m-d H:i:s T'));
 $log->info("  API Base: " . $config->baseUrl);
 $log->info("══════════════════════════════════════════════════════════════");
 
+require_once BASE_DIR . '/lib/satusehat/BatchCursor.php';
 require_once BASE_DIR . '/lib/satusehat/SatuSehatClient.php';
 require_once BASE_DIR . '/lib/satusehat/Database.php';
 require_once BASE_DIR . '/lib/satusehat/PayloadBuilder.php';
@@ -123,108 +124,37 @@ if ($config->lookbackDays > 0) {
 // Run Diagnostics
 $db->printSyncDiagnostics('observationttv', $dateFrom, $dateTo);
 
-// 1. Fetch pending records for all vital signs
 $definitions = ObservationTTVDictionary::getDefinitions();
-$allPendingRecords = [];
-$totalPending = 0;
+$batchSize = $config->batchSize;
+$processor = new SatuSehatObservationTTVProcessor($db, $client, $config, $log);
+$totalSuccess = 0; $totalFail = 0;
 
+// Process each TTV type independently with its own BatchCursor
+$log->info("[BATCH] Processing " . count($definitions) . " TTV type(s) with batch size $batchSize");
 foreach ($definitions as $ttvType => $def) {
-    $records = $db->fetchPendingObservations($ttvType, $def, $dateFrom, $dateTo) ?: [];
-    if (!empty($records)) {
-        $allPendingRecords[$ttvType] = $records;
-        $totalPending += count($records);
+    $cursor = new SatuSehatBatchCursor(
+        $db,
+        'fetchPendingObservations',
+        [$ttvType, $def, $dateFrom, $dateTo],
+        $batchSize,
+        $log,
+        $ttvType
+    );
+
+    foreach ($cursor->batches() as $batch) {
+        $hash = [$ttvType => $batch];
+        $stats = $processor->run($hash);
+        $totalSuccess += $stats['success'];
+        $totalFail += $stats['fail'];
+        $cursor->tick();
     }
 }
 
-if ($totalPending === 0) {
-    $log->info("No pending Observation TTV records found.");
-    $log->info("══════════════════════════════════════════════════════════════");
-    $db->close();
-    exit(0);
-}
-
-$log->info("[INIT] Found {$totalPending} vital signs observation records pending sync.");
-
-// 2. Execution path: Parallel workers vs Single process
-if ($isParallel && $totalPending > 1) {
-    $log->info("[CONCURRENCY] Splitting work among {$numWorkers} parallel workers...");
-
-    // Split records by worker
-    $workerChunks = array_fill(0, $numWorkers, []);
-    $idx = 0;
-    foreach ($allPendingRecords as $ttvType => $records) {
-        foreach ($records as $record) {
-            $workerChunks[$idx % $numWorkers][$ttvType][] = $record;
-            $idx++;
-        }
-    }
-
-    $workers = [];
-    $db->close(); // Close DB handle before fork to avoid shared-connection issues!
-
-    for ($i = 0; $i < $numWorkers; $i++) {
-        $chunk = $workerChunks[$i];
-
-        if (empty($chunk)) {
-            continue;
-        }
-
-        $pid = pcntl_fork();
-
-        if ($pid === -1) {
-            $log->error("[CONCURRENCY] Failed to fork worker {$i}");
-        } elseif ($pid === 0) {
-            // ── CHILD PROCESS WORKER ──
-            $childClient = new SatuSehatClient($config, $log);
-            try {
-                $childDb = new SatuSehatDatabase($config, $log, $childClient);
-            } catch (\Throwable $e) {
-                $log->error("[WORKER {$i}] Failed to connect to database: " . $e->getMessage());
-                exit(1);
-            }
-
-            $processor = new SatuSehatObservationTTVProcessor($childDb, $childClient, $config, $log);
-            $stats = $processor->run($chunk);
-
-            $childDb->close();
-            exit($stats['fail'] > 0 ? 2 : 0);
-        } else {
-            // ── PARENT PROCESS ──
-            $workers[] = $pid;
-        }
-    }
-
-    // Wait for all workers to finish using the Concurrency Supervisor
-    $supervisor = new SatuSehatSupervisor($log);
-    $allSuccess = $supervisor->monitor($workers);
-
-    $elapsed = round(microtime(true) - $startTime, 2);
-    $log->info("══════════════════════════════════════════════════════════════");
-    $log->info("[SUMMARY] Parallel Sync Finished. All Workers Completed.");
-    $log->info("[SUMMARY] Elapsed: {$elapsed}s");
-    $log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
-    $log->info("══════════════════════════════════════════════════════════════");
-    exit($allSuccess ? 0 : 2);
-
-} else {
-    // ── SINGLE PROCESS FALLBACK ──
-    $processor = new SatuSehatObservationTTVProcessor($db, $client, $config, $log);
-    try {
-        $stats = $processor->run($allPendingRecords);
-    } catch (\Throwable $e) {
-        $log->error("[FATAL] Unhandled exception: " . $e->getMessage());
-        $log->error("[FATAL] Stack trace: " . $e->getTraceAsString());
-        $db->close();
-        exit(1);
-    }
-
-    $elapsed = round(microtime(true) - $startTime, 2);
-    $log->info("══════════════════════════════════════════════════════════════");
-    $log->info("[SUMMARY] Success: {$stats['success']} | Failed: {$stats['fail']} | Skipped: {$stats['skip']}");
-    $log->info("[SUMMARY] Elapsed: {$elapsed}s");
-    $log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
-    $log->info("══════════════════════════════════════════════════════════════");
-
-    $db->close();
-    exit($stats['fail'] > 0 ? 2 : 0);
-}
+$elapsed = round(microtime(true) - $startTime, 2);
+$log->info("══════════════════════════════════════════════════════════════");
+$log->info("[SUMMARY] Success: {$totalSuccess} | Failed: {$totalFail}");
+$log->info("[SUMMARY] Elapsed: {$elapsed}s");
+$log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
+$log->info("══════════════════════════════════════════════════════════════");
+$db->close();
+exit($totalFail > 0 ? 2 : 0);

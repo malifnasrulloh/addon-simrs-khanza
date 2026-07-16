@@ -98,6 +98,7 @@ require_once BASE_DIR . '/lib/satusehat/SatuSehatClient.php';
 require_once BASE_DIR . '/lib/satusehat/Database.php';
 require_once BASE_DIR . '/lib/satusehat/PayloadBuilder.php';
 require_once BASE_DIR . '/lib/satusehat/Supervisor.php';
+require_once BASE_DIR . '/lib/satusehat/BatchCursor.php';
 require_once BASE_DIR . '/lib/satusehat/EncounterProcessor.php';
 
 $client = new SatuSehatClient($config, $log);
@@ -123,88 +124,76 @@ if ($config->lookbackDays > 0) {
 // Run Diagnostics
 $db->printSyncDiagnostics('encounter', $dateFrom, $dateTo);
 
-// 1. Fetch pending records
-$arrivedRecords = $db->fetchPendingArrived($dateFrom, $dateTo);
-$inProgressRecords = $db->fetchPendingInProgress($dateFrom, $dateTo);
-$finishedRecords = $db->fetchPendingFinished($dateFrom, $dateTo);
+$batchSize = $config->batchSize;
 
-$totalArrived = count($arrivedRecords);
-$totalInProgress = count($inProgressRecords);
-$totalFinished = count($finishedRecords);
-$totalPending = $totalArrived + $totalInProgress + $totalFinished;
+/**
+ * Process records for a given phase in batch iterations.
+ * Returns accumulated stats array ['success' => int, 'fail' => int, 'skip' => int].
+ */
+function processPhase(
+    SatuSehatBatchCursor $cursor,
+    SatuSehatEncounterProcessor $processor,
+    Logger $logger,
+    string $label,
+    string $batchFor // which param to fill: 'arrived', 'in-progress', 'finished'
+): array {
+    $stats = ['success' => 0, 'fail' => 0, 'skip' => 0];
+    $batchIdx = 0;
 
-if ($totalPending === 0) {
-    $log->info("No pending Encounter records found.");
-    $log->info("══════════════════════════════════════════════════════════════");
-    $db->close();
-    exit(0);
-}
+    foreach ($cursor->batches() as $batch) {
+        $batchIdx++;
+        $logger->info("[BATCH {$batchIdx}] Processing " . count($batch) . " {$label} encounters...");
 
-$log->info("[INIT] Found {$totalArrived} arrived, {$totalInProgress} in-progress, and {$totalFinished} finished encounters.");
+        $arr = ($batchFor === 'arrived') ? $batch : [];
+        $prog = ($batchFor === 'in-progress') ? $batch : [];
+        $fin = ($batchFor === 'finished') ? $batch : [];
 
-// 2. Execution path: Parallel workers vs Single process
-if ($isParallel && $totalPending > 1) {
-    $log->info("[CONCURRENCY] Splitting work among {$numWorkers} parallel workers...");
+        $s = $processor->run($arr, $prog, $fin);
+        $stats['success'] += $s['success'];
+        $stats['fail'] += $s['fail'];
+        $stats['skip'] += $s['skip'];
 
-    // Split arrays into chunks safely
-    $arrivedChunks = $totalArrived > 0 ? (array_chunk($arrivedRecords, (int) ceil($totalArrived / $numWorkers)) ?: []) : [];
-    $inProgressChunks = $totalInProgress > 0 ? (array_chunk($inProgressRecords, (int) ceil($totalInProgress / $numWorkers)) ?: []) : [];
-    $finishedChunks = $totalFinished > 0 ? (array_chunk($finishedRecords, (int) ceil($totalFinished / $numWorkers)) ?: []) : [];
-
-    $workers = [];
-    $db->close(); // Close DB handle before fork to avoid shared-connection issues!
-
-    for ($i = 0; $i < $numWorkers; $i++) {
-        $arrChunk = $arrivedChunks[$i] ?? [];
-        $progChunk = $inProgressChunks[$i] ?? [];
-        $finChunk = $finishedChunks[$i] ?? [];
-
-        if (empty($arrChunk) && empty($progChunk) && empty($finChunk)) {
-            continue;
-        }
-
-        $pid = pcntl_fork();
-
-        if ($pid === -1) {
-            $log->error("[CONCURRENCY] Failed to fork worker {$i}");
-        } elseif ($pid === 0) {
-            // ── CHILD PROCESS WORKER ──
-            $childClient = new SatuSehatClient($config, $log);
-            try {
-                $childDb = new SatuSehatDatabase($config, $log, $childClient);
-            } catch (\Throwable $e) {
-                $log->error("[WORKER {$i}] Failed to connect to database: " . $e->getMessage());
-                exit(1);
-            }
-
-            $processor = new SatuSehatEncounterProcessor($childDb, $childClient, $config, $log);
-            $stats = $processor->run($arrChunk, $progChunk, $finChunk);
-
-            $childDb->close();
-            exit($stats['fail'] > 0 ? 2 : 0);
-        } else {
-            // ── PARENT PROCESS ──
-            $workers[] = $pid;
-        }
+        $cursor->tick();
     }
 
-    // Wait for all workers to finish using the Concurrency Supervisor
-    $supervisor = new SatuSehatSupervisor($log);
-    $allSuccess = $supervisor->monitor($workers);
+    return $stats;
+}
 
-    $elapsed = round(microtime(true) - $startTime, 2);
-    $log->info("══════════════════════════════════════════════════════════════");
-    $log->info("[SUMMARY] Parallel Sync Finished. All Workers Completed.");
-    $log->info("[SUMMARY] Elapsed: {$elapsed}s");
-    $log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
-    $log->info("══════════════════════════════════════════════════════════════");
-    exit($allSuccess ? 0 : 2);
+$logGlobal = $log; // alias for use in helper functions
 
-} else {
-    // ── SINGLE PROCESS FALLBACK ──
+// ── SINGLE PROCESS PATH (Batch Cursor) ──
+if (!$isParallel) {
     $processor = new SatuSehatEncounterProcessor($db, $client, $config, $log);
+
+    $totalSuccess = 0;
+    $totalFail = 0;
+    $totalSkip = 0;
+
     try {
-        $stats = $processor->run($arrivedRecords, $inProgressRecords, $finishedRecords);
+        // Phase 1: Arrived
+        $log->info("──────────────────────────────────────────────────────────────");
+        $log->info("[SYNC] Phase 1: POST 'arrived' Encounters (batches of {$batchSize})");
+        $cursor = new SatuSehatBatchCursor($db, 'fetchPendingArrived', [$dateFrom, $dateTo], $batchSize, $log, 'arrived');
+        $s = processPhase($cursor, $processor, $logGlobal, 'arrived', 'arrived');
+        $totalSuccess += $s['success']; $totalFail += $s['fail']; $totalSkip += $s['skip'];
+        $log->info("[PHASE 1] Arrived: Success={$s['success']} Fail={$s['fail']} Skip={$s['skip']}");
+
+        // Phase 2: In-Progress
+        $log->info("──────────────────────────────────────────────────────────────");
+        $log->info("[SYNC] Phase 2: PUT 'in-progress' Encounters (batches of {$batchSize})");
+        $cursor = new SatuSehatBatchCursor($db, 'fetchPendingInProgress', [$dateFrom, $dateTo], $batchSize, $log, 'in-progress');
+        $s = processPhase($cursor, $processor, $logGlobal, 'in-progress', 'in-progress');
+        $totalSuccess += $s['success']; $totalFail += $s['fail']; $totalSkip += $s['skip'];
+        $log->info("[PHASE 2] In-Progress: Success={$s['success']} Fail={$s['fail']} Skip={$s['skip']}");
+
+        // Phase 3: Finished
+        $log->info("──────────────────────────────────────────────────────────────");
+        $log->info("[SYNC] Phase 3: PUT 'finished' Encounters (batches of {$batchSize})");
+        $cursor = new SatuSehatBatchCursor($db, 'fetchPendingFinished', [$dateFrom, $dateTo], $batchSize, $log, 'finished');
+        $s = processPhase($cursor, $processor, $logGlobal, 'finished', 'finished');
+        $totalSuccess += $s['success']; $totalFail += $s['fail']; $totalSkip += $s['skip'];
+        $log->info("[PHASE 3] Finished: Success={$s['success']} Fail={$s['fail']} Skip={$s['skip']}");
+
     } catch (\Throwable $e) {
         $log->error("[FATAL] Unhandled exception: " . $e->getMessage());
         $log->error("[FATAL] Stack trace: " . $e->getTraceAsString());
@@ -214,11 +203,83 @@ if ($isParallel && $totalPending > 1) {
 
     $elapsed = round(microtime(true) - $startTime, 2);
     $log->info("══════════════════════════════════════════════════════════════");
-    $log->info("[SUMMARY] Success: {$stats['success']} | Failed: {$stats['fail']} | Skipped: {$stats['skip']}");
+    $log->info("[SUMMARY] Success: {$totalSuccess} | Failed: {$totalFail} | Skipped: {$totalSkip}");
     $log->info("[SUMMARY] Elapsed: {$elapsed}s");
     $log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
     $log->info("══════════════════════════════════════════════════════════════");
 
     $db->close();
-    exit($stats['fail'] > 0 ? 2 : 0);
+    exit($totalFail > 0 ? 2 : 0);
 }
+
+// ── PARALLEL PATH (Date-window split + Batch Cursor per worker) ──
+$log->info("[CONCURRENCY] Splitting date range among {$numWorkers} parallel workers...");
+
+$dateWindows = SatuSehatBatchCursor::splitDateRange($dateFrom, $dateTo, $numWorkers);
+$workers = [];
+$db->close();
+
+for ($i = 0; $i < $numWorkers; $i++) {
+    [$wFrom, $wTo] = $dateWindows[$i];
+    $log->info("[WORKER {$i}] Date window: {$wFrom} to {$wTo}");
+
+    $pid = pcntl_fork();
+
+    if ($pid === -1) {
+        $log->error("[CONCURRENCY] Failed to fork worker {$i}");
+    } elseif ($pid === 0) {
+        // ── CHILD PROCESS WORKER ──
+        $childClient = new SatuSehatClient($config, $log);
+        try {
+            $childDb = new SatuSehatDatabase($config, $log, $childClient);
+        } catch (\Throwable $e) {
+            $log->error("[WORKER {$i}] Failed to connect to database: " . $e->getMessage());
+            exit(1);
+        }
+
+        $processor = new SatuSehatEncounterProcessor($childDb, $childClient, $config, $log);
+        $workerFail = 0;
+
+        // Arrived
+        $cursor = new SatuSehatBatchCursor($childDb, 'fetchPendingArrived', [$wFrom, $wTo], $batchSize, $log, "W{$i}/arrived");
+        foreach ($cursor->batches() as $batch) {
+            $s = $processor->run($batch, [], []);
+            $workerFail += $s['fail'];
+            $cursor->tick();
+        }
+
+        // In-Progress
+        $cursor = new SatuSehatBatchCursor($childDb, 'fetchPendingInProgress', [$wFrom, $wTo], $batchSize, $log, "W{$i}/prog");
+        foreach ($cursor->batches() as $batch) {
+            $s = $processor->run([], $batch, []);
+            $workerFail += $s['fail'];
+            $cursor->tick();
+        }
+
+        // Finished
+        $cursor = new SatuSehatBatchCursor($childDb, 'fetchPendingFinished', [$wFrom, $wTo], $batchSize, $log, "W{$i}/fin");
+        foreach ($cursor->batches() as $batch) {
+            $s = $processor->run([], [], $batch);
+            $workerFail += $s['fail'];
+            $cursor->tick();
+        }
+
+        $childDb->close();
+        exit($workerFail > 0 ? 2 : 0);
+    } else {
+        // ── PARENT PROCESS ──
+        $workers[] = $pid;
+    }
+}
+
+// Wait for all workers to finish
+$supervisor = new SatuSehatSupervisor($log);
+$allSuccess = $supervisor->monitor($workers);
+
+$elapsed = round(microtime(true) - $startTime, 2);
+$log->info("══════════════════════════════════════════════════════════════");
+$log->info("[SUMMARY] Parallel Sync Finished. All Workers Completed.");
+$log->info("[SUMMARY] Elapsed: {$elapsed}s");
+$log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
+$log->info("══════════════════════════════════════════════════════════════");
+exit($allSuccess ? 0 : 2);

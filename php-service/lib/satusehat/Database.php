@@ -309,7 +309,7 @@ class SatuSehatDatabase
     /**
      * Fetch pending 'arrived' encounters (Registered but not in satu_sehat_encounter).
      */
-    public function fetchPendingArrived(string $dateFrom, string $dateTo): array
+    public function fetchPendingArrived(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -324,9 +324,17 @@ class SatuSehatDatabase
             WHERE rp.status_bayar = 'Sudah Bayar' 
               AND rp.tgl_registrasi BETWEEN :df AND :dt
               AND rp.no_rawat NOT IN (SELECT no_rawat FROM satu_sehat_encounter)
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -334,7 +342,7 @@ class SatuSehatDatabase
      * Fetch encounters needing 'in-progress' state.
      * Must be in satu_sehat_encounter, have a medical check time, and local state < 'in-progress'
      */
-    public function fetchPendingInProgress(string $dateFrom, string $dateTo): array
+    public function fetchPendingInProgress(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         // For simplicity, Java used tgl_registrasi for in-progress start, or tgl_perawatan from pemeriksaan_ralan
         $sql = "
@@ -352,9 +360,17 @@ class SatuSehatDatabase
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -362,7 +378,7 @@ class SatuSehatDatabase
      * Fetch encounters needing 'finished' state.
      * Must be in satu_sehat_encounter, have billing time (nota_jalan/nota_inap).
      */
-    public function fetchPendingFinished(string $dateFrom, string $dateTo): array
+    public function fetchPendingFinished(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -397,9 +413,17 @@ class SatuSehatDatabase
             ) ki ON ki.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -586,7 +610,7 @@ class SatuSehatDatabase
 
     // ─── EPISODE OF CARE MYSQL OPERATIONS ──────────────────────────────────────
 
-    public function fetchPendingEocActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingEocActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -604,13 +628,21 @@ class SatuSehatDatabase
             LEFT JOIN kamar_inap ki ON ki.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND rp.no_rawat NOT IN (SELECT no_rawat FROM satu_sehat_episode_of_care)
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingEocFinished(string $dateFrom, string $dateTo): array
+    public function fetchPendingEocFinished(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -632,9 +664,17 @@ class SatuSehatDatabase
             LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -687,7 +727,7 @@ class SatuSehatDatabase
 
     // ─── CONDITION MYSQL OPERATIONS ────────────────────────────────────────────
 
-    public function fetchPendingConditionActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingConditionActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -705,13 +745,21 @@ class SatuSehatDatabase
                 AND ssc.status = dp.status
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND ssc.id_condition IS NULL
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingConditionUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingConditionUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -729,9 +777,17 @@ class SatuSehatDatabase
                 AND ssc.kd_penyakit = dp.kd_penyakit 
                 AND ssc.status = dp.status
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -998,13 +1054,38 @@ class SatuSehatDatabase
 
     // ─── OBSERVATION-TTV MYSQL OPERATIONS ──────────────────────────────────────
 
-    public function fetchPendingObservations(string $ttvTypeKey, array $def, string $dateFrom, string $dateTo): array
+    public function fetchPendingObservations(string $ttvTypeKey, array $def, string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
-        $dbCol   = $def['db_column'];
-        $stTable = $def['state_table'];
+        // Validate dynamic SQL identifiers against allowlist to prevent SQL injection
+        $allowedColumns = ['suhu_tubuh', 'respirasi', 'nadi', 'spo2', 'tinggi', 'berat', 'lingkar_perut', 'tensi', 'gcs', 'kesadaran'];
+        $allowedTables = [
+            'satu_sehat_observationttvsuhu', 'satu_sehat_observationttvrespirasi',
+            'satu_sehat_observationttvnadi', 'satu_sehat_observationttvspo2',
+            'satu_sehat_observationttvtb', 'satu_sehat_observationttvbb',
+            'satu_sehat_observationttvlp', 'satu_sehat_observationttvtensi',
+            'satu_sehat_observationttvgcs', 'satu_sehat_observationttvkesadaran',
+        ];
+        $allowedIdCols = ['id_observation'];
+
+        $dbCol   = $def['db_column'] ?? '';
+        $stTable = $def['state_table'] ?? '';
         $idCol   = $def['state_id_col'] ?? 'id_observation';
 
+        if (!in_array($dbCol, $allowedColumns, true)) {
+            throw new \InvalidArgumentException("Invalid db_column for TTV observation: {$dbCol}");
+        }
+        if (!in_array($stTable, $allowedTables, true)) {
+            throw new \InvalidArgumentException("Invalid state_table for TTV observation: {$stTable}");
+        }
+        if (!in_array($idCol, $allowedIdCols, true)) {
+            throw new \InvalidArgumentException("Invalid state_id_col for TTV observation: {$idCol}");
+        }
+
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
 
         $ralanQuery = "
             SELECT 
@@ -1023,6 +1104,7 @@ class SatuSehatDatabase
             LEFT JOIN {$stTable} st ON st.no_rawat = pr.no_rawat AND st.tgl_perawatan = pr.tgl_perawatan AND st.jam_rawat = pr.jam_rawat AND st.status = 'Ralan'
             WHERE pr.tgl_perawatan BETWEEN :df AND :dt
               AND pr.{$dbCol} IS NOT NULL AND pr.{$dbCol} != '' AND pr.{$dbCol} != '-'
+         ORDER BY rp.no_rawat ASC
         ";
 
         if ($dbCol === 'lingkar_perut') {
@@ -1031,6 +1113,7 @@ class SatuSehatDatabase
                     {$ralanQuery}
                 ) as combined
                 WHERE synced_id IS NULL
+         ORDER BY no_rawat ASC
             ";
         } else {
             $params['df2'] = $dateFrom;
@@ -1057,7 +1140,12 @@ class SatuSehatDatabase
                       AND pi.{$dbCol} IS NOT NULL AND pi.{$dbCol} != '' AND pi.{$dbCol} != '-'
                 ) as combined
                 WHERE synced_id IS NULL
+         ORDER BY rp.no_rawat ASC
             ";
+        }
+
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
         }
 
         $stmt = $this->mysql->prepare($sql);
@@ -1106,7 +1194,7 @@ class SatuSehatDatabase
 
     // ─── PROCEDURE MYSQL OPERATIONS ────────────────────────────────────────────
 
-    public function fetchPendingProcedureActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingProcedureActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -1128,13 +1216,21 @@ class SatuSehatDatabase
                 AND ssp.status = pp.status
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND ssp.id_procedure IS NULL
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingProcedureUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingProcedureUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -1156,9 +1252,17 @@ class SatuSehatDatabase
                 AND ssp.kode = pp.kode 
                 AND ssp.status = pp.status
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -1201,7 +1305,7 @@ class SatuSehatDatabase
 
     // ─── CAREPLAN MYSQL OPERATIONS ───────────────────────────────────────────────────────
 
-    public function fetchPendingCarePlanActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingCarePlanActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT * FROM (
@@ -1243,13 +1347,21 @@ class SatuSehatDatabase
                   AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
                   AND ssc.id_careplan IS NULL
             ) AS combined
+         ORDER BY rp.no_rawat ASC
         ";
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingCarePlanUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingCarePlanUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT * FROM (
@@ -1289,9 +1401,17 @@ class SatuSehatDatabase
                 WHERE pi.rtl <> '' 
                   AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
             ) AS combined
+         ORDER BY rp.no_rawat ASC
         ";
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -1335,7 +1455,7 @@ class SatuSehatDatabase
 
     // ─── ALLERGY INTOLERANCE MYSQL OPERATIONS ────────────────────────────────────────────
 
-    public function fetchPendingAllergyActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingAllergyActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT * FROM (
@@ -1375,13 +1495,21 @@ class SatuSehatDatabase
                   AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
                   AND ssai.id_allergy_intolerance IS NULL
             ) AS combined
+         ORDER BY rp.no_rawat ASC
         ";
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingAllergyUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingAllergyUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT * FROM (
@@ -1419,9 +1547,17 @@ class SatuSehatDatabase
                 WHERE pi.alergi <> '' 
                   AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
             ) AS combined
+         ORDER BY rp.no_rawat ASC
         ";
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -1465,7 +1601,7 @@ class SatuSehatDatabase
 
     // ─── IMMUNIZATION MYSQL OPERATIONS ───────────────────────────────────────────
 
-    public function fetchPendingImmunizationActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingImmunizationActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT * FROM (
@@ -1529,12 +1665,19 @@ class SatuSehatDatabase
             ) AS combined
             ORDER BY tgl_perawatan, jam
         ";
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingImmunizationUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingImmunizationUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT * FROM (
@@ -1596,8 +1739,15 @@ class SatuSehatDatabase
             ) AS combined
             ORDER BY tgl_perawatan, jam
         ";
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo]);
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -1644,39 +1794,59 @@ class SatuSehatDatabase
     /**
      * Fetch pending medications that do not have an id_medication yet.
      */
-    public function fetchPendingMedicationActive(): array
+    public function fetchPendingMedicationActive(?int $limit = null, int $offset = 0): array
     {
         $sql = "
-            SELECT 
+            SELECT
                 ssmo.obat_code, ssmo.obat_system, db.status,
                 ssmo.kode_brng, ssmo.obat_display, ssmo.form_code,
-                ssmo.form_system, ssmo.form_display, 
+                ssmo.form_system, ssmo.form_display,
                 IFNULL(ssm.id_medication, '') as id_medication
             FROM satu_sehat_mapping_obat ssmo
             INNER JOIN databarang db ON ssmo.kode_brng = db.kode_brng
             LEFT JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
             WHERE ssm.id_medication IS NULL OR ssm.id_medication = ''
+         ORDER BY ssmo.kode_brng ASC
         ";
-        $stmt = $this->mysql->query($sql);
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+        }
+        $stmt = $this->mysql->prepare($sql);
+        $params = [];
+        if ($limit !== null) {
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
     /**
      * Fetch all medications that already have an id_medication (for update verification).
      */
-    public function fetchPendingMedicationUpdate(): array
+    public function fetchPendingMedicationUpdate(?int $limit = null, int $offset = 0): array
     {
         $sql = "
-            SELECT 
+            SELECT
                 ssmo.obat_code, ssmo.obat_system, db.status,
                 ssmo.kode_brng, ssmo.obat_display, ssmo.form_code,
-                ssmo.form_system, ssmo.form_display, 
+                ssmo.form_system, ssmo.form_display,
                 ssm.id_medication
             FROM satu_sehat_mapping_obat ssmo
             INNER JOIN databarang db ON ssmo.kode_brng = db.kode_brng
             INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
+         ORDER BY ssmo.kode_brng ASC
         ";
-        $stmt = $this->mysql->query($sql);
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+        }
+        $stmt = $this->mysql->prepare($sql);
+        $params = [];
+        if ($limit !== null) {
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -1723,7 +1893,7 @@ class SatuSehatDatabase
     /**
      * Unified query to fetch pending medication requests across Ralan/Ranap and Non-racikan/Racikan.
      */
-    public function fetchPendingMedicationRequestActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingMedicationRequestActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             (
@@ -1772,18 +1942,25 @@ class SatuSehatDatabase
             )
             ORDER BY tgl_registrasi ASC, jam_reg ASC
         ";
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute([
+        
+        $params = [
             'df1' => $dateFrom, 'dt1' => $dateTo,
             'df2' => $dateFrom, 'dt2' => $dateTo
-        ]);
+        ];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
     /**
      * Unified query to fetch existing medication requests that have an ID (for PUT updates).
      */
-    public function fetchPendingMedicationRequestUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingMedicationRequestUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             (
@@ -1830,11 +2007,18 @@ class SatuSehatDatabase
             )
             ORDER BY tgl_registrasi ASC, jam_reg ASC
         ";
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute([
+        
+        $params = [
             'df1' => $dateFrom, 'dt1' => $dateTo,
             'df2' => $dateFrom, 'dt2' => $dateTo
-        ]);
+        ];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -1925,7 +2109,7 @@ class SatuSehatDatabase
     /**
      * Fetch pending MedicationDispense records cross Ralan and Ranap.
      */
-    public function fetchPendingMedicationDispenseActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingMedicationDispenseActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             (
@@ -1989,18 +2173,25 @@ class SatuSehatDatabase
             )
             ORDER BY tgl_registrasi ASC, jam_reg ASC
         ";
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute([
+        
+        $params = [
             'df1' => $dateFrom, 'dt1' => $dateTo,
             'df2' => $dateFrom, 'dt2' => $dateTo
-        ]);
+        ];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
     /**
      * Fetch existing MedicationDispense records cross Ralan and Ranap (for Phase 2 updates).
      */
-    public function fetchPendingMedicationDispenseUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingMedicationDispenseUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             (
@@ -2062,11 +2253,18 @@ class SatuSehatDatabase
             )
             ORDER BY tgl_registrasi ASC, jam_reg ASC
         ";
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute([
+        
+        $params = [
             'df1' => $dateFrom, 'dt1' => $dateTo,
             'df2' => $dateFrom, 'dt2' => $dateTo
-        ]);
+        ];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -2132,7 +2330,7 @@ class SatuSehatDatabase
     /**
      * Fetch pending MedicationStatement records cross Ralan and Ranap, racikan and non-racikan.
      */
-    public function fetchPendingMedicationStatementActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingMedicationStatementActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             (
@@ -2228,20 +2426,27 @@ class SatuSehatDatabase
             )
             ORDER BY tgl_registrasi ASC, jam_reg ASC
         ";
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute([
+        
+        $params = [
             'df1' => $dateFrom, 'dt1' => $dateTo,
             'df2' => $dateFrom, 'dt2' => $dateTo,
             'df3' => $dateFrom, 'dt3' => $dateTo,
             'df4' => $dateFrom, 'dt4' => $dateTo
-        ]);
+        ];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
     /**
      * Fetch existing MedicationStatement records cross Ralan and Ranap, racikan and non-racikan (for updates).
      */
-    public function fetchPendingMedicationStatementUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingMedicationStatementUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             (
@@ -2333,13 +2538,20 @@ class SatuSehatDatabase
             )
             ORDER BY tgl_registrasi ASC, jam_reg ASC
         ";
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute([
+        
+        $params = [
             'df1' => $dateFrom, 'dt1' => $dateTo,
             'df2' => $dateFrom, 'dt2' => $dateTo,
             'df3' => $dateFrom, 'dt3' => $dateTo,
             'df4' => $dateFrom, 'dt4' => $dateTo
-        ]);
+        ];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -2447,7 +2659,7 @@ class SatuSehatDatabase
 
     // ─── CLINICAL IMPRESSION MYSQL OPERATIONS ───────────────────────────────────
 
-    public function fetchPendingClinicalImpressionActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingClinicalImpressionActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $ralanSql = "
             SELECT 
@@ -2474,6 +2686,7 @@ class SatuSehatDatabase
             WHERE pem.penilaian <> ''
               AND rp.tgl_registrasi BETWEEN :df AND :dt
               AND ssci.id_clinicalimpression IS NULL
+         ORDER BY rp.no_rawat ASC
         ";
 
         $ranapSql = "
@@ -2501,20 +2714,40 @@ class SatuSehatDatabase
             WHERE pem.penilaian <> ''
               AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
               AND ssci.id_clinicalimpression IS NULL
+         ORDER BY rp.no_rawat ASC
         ";
 
+        if ($limit !== null) {
+            $ralanSql .= " LIMIT :lim OFFSET :off";
+            $ranapSql .= " LIMIT :lim2 OFFSET :off2";
+        }
+
         $stmtRalan = $this->mysql->prepare($ralanSql);
-        $stmtRalan->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $ralanParams = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $ralanParams['lim'] = $limit;
+            $ralanParams['off'] = $offset;
+        }
+        $stmtRalan->execute($ralanParams);
         $ralan = $stmtRalan->fetchAll();
 
         $stmtRanap = $this->mysql->prepare($ranapSql);
-        $stmtRanap->execute(['df2' => $dateFrom, 'dt2' => $dateTo]);
+        $ranapParams = ['df2' => $dateFrom, 'dt2' => $dateTo];
+        if ($limit !== null) {
+            $ranapParams['lim2'] = $limit;
+            $ranapParams['off2'] = $offset;
+        }
+        $stmtRanap->execute($ranapParams);
         $ranap = $stmtRanap->fetchAll();
 
-        return array_merge($ralan, $ranap);
+        $merged = array_merge($ralan, $ranap);
+        if ($limit !== null) {
+            $merged = array_slice($merged, 0, $limit);
+        }
+        return $merged;
     }
 
-    public function fetchPendingClinicalImpressionUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingClinicalImpressionUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $ralanSql = "
             SELECT 
@@ -2540,6 +2773,7 @@ class SatuSehatDatabase
                 AND ssci.status = 'Ralan'
             WHERE pem.penilaian <> ''
               AND rp.tgl_registrasi BETWEEN :df AND :dt
+         ORDER BY rp.no_rawat ASC
         ";
 
         $ranapSql = "
@@ -2566,17 +2800,37 @@ class SatuSehatDatabase
                 AND ssci.status = 'Ranap'
             WHERE pem.penilaian <> ''
               AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+         ORDER BY rp.no_rawat ASC
         ";
 
+        if ($limit !== null) {
+            $ralanSql .= " LIMIT :lim OFFSET :off";
+            $ranapSql .= " LIMIT :lim2 OFFSET :off2";
+        }
+
         $stmtRalan = $this->mysql->prepare($ralanSql);
-        $stmtRalan->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $ralanParams = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $ralanParams['lim'] = $limit;
+            $ralanParams['off'] = $offset;
+        }
+        $stmtRalan->execute($ralanParams);
         $ralan = $stmtRalan->fetchAll();
 
         $stmtRanap = $this->mysql->prepare($ranapSql);
-        $stmtRanap->execute(['df2' => $dateFrom, 'dt2' => $dateTo]);
+        $ranapParams = ['df2' => $dateFrom, 'dt2' => $dateTo];
+        if ($limit !== null) {
+            $ranapParams['lim2'] = $limit;
+            $ranapParams['off2'] = $offset;
+        }
+        $stmtRanap->execute($ranapParams);
         $ranap = $stmtRanap->fetchAll();
 
-        return array_merge($ralan, $ranap);
+        $merged = array_merge($ralan, $ranap);
+        if ($limit !== null) {
+            $merged = array_slice($merged, 0, $limit);
+        }
+        return $merged;
     }
 
     public function saveClinicalImpression(
@@ -2602,7 +2856,7 @@ class SatuSehatDatabase
 
     // ─── SERVICEREQUEST RADIOLOGI MYSQL OPERATIONS ──────────────────────────────
 
-    public function fetchPendingServiceRequestRadiologiActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingServiceRequestRadiologiActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -2626,12 +2880,19 @@ class SatuSehatDatabase
               AND (ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '' OR ssr.id_servicerequest = '-')
             GROUP BY ppr.noorder, ppr.kd_jenis_prw
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingServiceRequestRadiologiUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingServiceRequestRadiologiUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -2655,8 +2916,15 @@ class SatuSehatDatabase
               AND ssr.id_servicerequest IS NOT NULL AND ssr.id_servicerequest <> '' AND ssr.id_servicerequest <> '-'
             GROUP BY ppr.noorder, ppr.kd_jenis_prw
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -2679,7 +2947,7 @@ class SatuSehatDatabase
 
     // ─── DIAGNOSTICREPORT RADIOLOGI MYSQL OPERATIONS ────────────────────────────
 
-    public function fetchPendingDiagnosticReportRadiologiActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingDiagnosticReportRadiologiActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -2707,13 +2975,21 @@ class SatuSehatDatabase
             INNER JOIN pegawai peg ON prad.kd_dokter = peg.nik
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (ssdr.id_diagnosticreport IS NULL OR ssdr.id_diagnosticreport = '' OR ssdr.id_diagnosticreport = '-')
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingDiagnosticReportRadiologiUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingDiagnosticReportRadiologiUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -2741,9 +3017,17 @@ class SatuSehatDatabase
             INNER JOIN pegawai peg ON prad.kd_dokter = peg.nik
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND ssdr.id_diagnosticreport IS NOT NULL AND ssdr.id_diagnosticreport <> '' AND ssdr.id_diagnosticreport <> '-'
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -2766,7 +3050,7 @@ class SatuSehatDatabase
 
     // ─── SPECIMEN RADIOLOGI MYSQL OPERATIONS ────────────────────────────────────
 
-    public function fetchPendingSpecimenRadiologiActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingSpecimenRadiologiActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -2784,13 +3068,21 @@ class SatuSehatDatabase
             LEFT JOIN satu_sehat_specimen_radiologi sssp ON ssr.noorder = sssp.noorder AND ssr.kd_jenis_prw = sssp.kd_jenis_prw
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (sssp.id_specimen IS NULL OR sssp.id_specimen = '' OR sssp.id_specimen = '-')
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingSpecimenRadiologiUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingSpecimenRadiologiUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -2808,9 +3100,17 @@ class SatuSehatDatabase
             INNER JOIN satu_sehat_specimen_radiologi sssp ON ssr.noorder = sssp.noorder AND ssr.kd_jenis_prw = sssp.kd_jenis_prw
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -2833,7 +3133,7 @@ class SatuSehatDatabase
 
     // ─── OBSERVATION RADIOLOGI MYSQL OPERATIONS ─────────────────────────────────
 
-    public function fetchPendingObservationRadiologiActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingObservationRadiologiActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -2859,13 +3159,21 @@ class SatuSehatDatabase
             INNER JOIN pegawai peg ON prad.kd_dokter = peg.nik
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (sso.id_observation IS NULL OR sso.id_observation = '' OR sso.id_observation = '-')
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingObservationRadiologiUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingObservationRadiologiUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -2891,9 +3199,17 @@ class SatuSehatDatabase
             INNER JOIN pegawai peg ON prad.kd_dokter = peg.nik
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -2916,7 +3232,7 @@ class SatuSehatDatabase
 
     // ─── SERVICE REQUEST LAB PK MYSQL OPERATIONS ────────────────────────────────
 
-    public function fetchPendingServiceRequestLabPKActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingServiceRequestLabPKActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -2939,13 +3255,21 @@ class SatuSehatDatabase
               AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (sssl.id_servicerequest IS NULL OR sssl.id_servicerequest = '' OR sssl.id_servicerequest = '-')
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingServiceRequestLabPKUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingServiceRequestLabPKUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -2968,9 +3292,17 @@ class SatuSehatDatabase
               AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -2995,7 +3327,7 @@ class SatuSehatDatabase
 
     // ─── SERVICE REQUEST LAB MB MYSQL OPERATIONS ────────────────────────────────
 
-    public function fetchPendingServiceRequestLabMBActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingServiceRequestLabMBActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3018,13 +3350,21 @@ class SatuSehatDatabase
               AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (sssl.id_servicerequest IS NULL OR sssl.id_servicerequest = '' OR sssl.id_servicerequest = '-')
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingServiceRequestLabMBUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingServiceRequestLabMBUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3047,9 +3387,17 @@ class SatuSehatDatabase
               AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -3074,7 +3422,7 @@ class SatuSehatDatabase
 
     // ─── SPECIMEN LAB PK MYSQL OPERATIONS ────────────────────────────────────────
 
-    public function fetchPendingSpecimenLabPKActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingSpecimenLabPKActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3098,13 +3446,21 @@ class SatuSehatDatabase
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
               AND (sssp.id_specimen IS NULL OR sssp.id_specimen = '' OR sssp.id_specimen = '-')
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingSpecimenLabPKUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingSpecimenLabPKUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3128,9 +3484,17 @@ class SatuSehatDatabase
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -3155,7 +3519,7 @@ class SatuSehatDatabase
 
     // ─── SPECIMEN LAB MB MYSQL OPERATIONS ────────────────────────────────────────
 
-    public function fetchPendingSpecimenLabMBActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingSpecimenLabMBActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3179,13 +3543,21 @@ class SatuSehatDatabase
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
               AND (sssp.id_specimen IS NULL OR sssp.id_specimen = '' OR sssp.id_specimen = '-')
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingSpecimenLabMBUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingSpecimenLabMBUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3209,9 +3581,17 @@ class SatuSehatDatabase
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -3234,7 +3614,7 @@ class SatuSehatDatabase
         ]);
     }
 
-    public function fetchPendingObservationLabPKActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingObservationLabPKActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3271,13 +3651,21 @@ class SatuSehatDatabase
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
               AND (sso.id_observation IS NULL OR sso.id_observation = '' OR sso.id_observation = '-')
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingObservationLabPKUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingObservationLabPKUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3314,9 +3702,17 @@ class SatuSehatDatabase
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -3339,7 +3735,7 @@ class SatuSehatDatabase
         ]);
     }
 
-    public function fetchPendingObservationLabMBActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingObservationLabMBActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3376,13 +3772,21 @@ class SatuSehatDatabase
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
               AND (sso.id_observation IS NULL OR sso.id_observation = '' OR sso.id_observation = '-')
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingObservationLabMBUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingObservationLabMBUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3419,9 +3823,17 @@ class SatuSehatDatabase
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -3452,7 +3864,7 @@ class SatuSehatDatabase
 
 
 
-    public function fetchPendingDiagnosticReportLabPKActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingDiagnosticReportLabPKActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3496,12 +3908,19 @@ class SatuSehatDatabase
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
               AND (ssdr.id_diagnosticreport IS NULL OR ssdr.id_diagnosticreport = '' OR ssdr.id_diagnosticreport = '-')
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingDiagnosticReportLabPKUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingDiagnosticReportLabPKUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3545,8 +3964,15 @@ class SatuSehatDatabase
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
               AND ssdr.id_diagnosticreport IS NOT NULL AND ssdr.id_diagnosticreport <> '' AND ssdr.id_diagnosticreport <> '-'
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -3569,7 +3995,7 @@ class SatuSehatDatabase
         ]);
     }
 
-    public function fetchPendingDiagnosticReportLabMBActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingDiagnosticReportLabMBActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3613,12 +4039,19 @@ class SatuSehatDatabase
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
               AND (ssdr.id_diagnosticreport IS NULL OR ssdr.id_diagnosticreport = '' OR ssdr.id_diagnosticreport = '-')
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingDiagnosticReportLabMBUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingDiagnosticReportLabMBUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT DISTINCT 
@@ -3662,8 +4095,15 @@ class SatuSehatDatabase
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
               AND ssdr.id_diagnosticreport IS NOT NULL AND ssdr.id_diagnosticreport <> '' AND ssdr.id_diagnosticreport <> '-'
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -3708,7 +4148,7 @@ class SatuSehatDatabase
 
     // ─── QUESTIONNAIRE RESPONSE MYSQL OPERATIONS ───────────────────────────────
 
-    public function fetchPendingQuestionnaireResponseActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingQuestionnaireResponseActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -3729,13 +4169,21 @@ class SatuSehatDatabase
             LEFT JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = resep_obat.no_resep 
             WHERE resep_obat.tgl_peresepan BETWEEN :df AND :dt
               AND (ssqr.id_questionresponse IS NULL OR ssqr.id_questionresponse = '')
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    public function fetchPendingQuestionnaireResponseUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingQuestionnaireResponseUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -3756,9 +4204,17 @@ class SatuSehatDatabase
             INNER JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = resep_obat.no_resep 
             WHERE resep_obat.tgl_peresepan BETWEEN :df AND :dt
               AND ssqr.id_questionresponse IS NOT NULL AND ssqr.id_questionresponse <> ''
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
@@ -5257,7 +5713,7 @@ class SatuSehatDatabase
         return $healedCount;
     }
 
-    public function fetchPendingImagingStudies(string $dateFrom, string $dateTo): array
+    public function fetchPendingImagingStudies(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -5299,10 +5755,18 @@ class SatuSehatDatabase
                   OR ssi.id_imaging = '-' 
                   OR ssi.status_webhook = 'FAILED'
               )
+         ORDER BY prad.no_rawat ASC
         ";
         try {
-            $stmt = $this->mysql->prepare($sql);
-            $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+            
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+    $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+$stmt = $this->mysql->prepare($sql);
+                    $stmt->execute($params);
             return $stmt->fetchAll(\PDO::FETCH_ASSOC);
         } catch (\PDOException $e) {
             $this->log->error("[DATABASE] Failed to fetch pending ImagingStudies: " . $e->getMessage());
@@ -5323,6 +5787,7 @@ class SatuSehatDatabase
             WHERE prad.no_rawat = :norawat 
               AND prad.kd_jenis_prw = :kd 
               AND pr.noorder = :noorder
+         ORDER BY prad.no_rawat ASC
         ";
         try {
             $stmt = $this->mysql->prepare($sql);
@@ -5391,7 +5856,7 @@ class SatuSehatDatabase
 
     // ─── COMPOSITION DATABASE METHODS ──────────────────────────────────────────
 
-    public function fetchPendingCompositionActive(string $dateFrom, string $dateTo): array
+    public function fetchPendingCompositionActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -5412,13 +5877,21 @@ class SatuSehatDatabase
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
               AND rp.no_rawat NOT IN (SELECT no_rawat FROM satu_sehat_composition)
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
-    public function fetchPendingCompositionUpdate(string $dateFrom, string $dateTo): array
+    public function fetchPendingCompositionUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
             SELECT 
@@ -5440,9 +5913,17 @@ class SatuSehatDatabase
             LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
+         ORDER BY rp.no_rawat ASC
         ";
+        
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
         $stmt = $this->mysql->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
@@ -5722,5 +6203,33 @@ class SatuSehatDatabase
         }
 
         return $refs;
+    }
+
+    // ─── PATIENT IHS SYNC ───────────────────────────────────────────────────────
+
+    /**
+     * Fetch patients with valid NIK (16 digits) but no IHS number yet.
+     */
+    public function fetchPendingPatients(?int $limit = null, int $offset = 0): array
+    {
+        $sql = "
+            SELECT p.no_ktp as nik, p.nm_pasien, p.no_rkm_medis
+            FROM pasien p
+            LEFT JOIN satu_sehat_ihs_patient i ON p.no_ktp = i.nikpasien
+            WHERE i.ihspasien IS NULL
+              AND p.no_ktp REGEXP '^[0-9]{16}$'
+         ORDER BY p.no_rkm_medis ASC
+        ";
+        if ($limit !== null) {
+            $sql .= " LIMIT :lim OFFSET :off";
+        }
+        $stmt = $this->mysql->prepare($sql);
+        $params = [];
+        if ($limit !== null) {
+            $params['lim'] = $limit;
+            $params['off'] = $offset;
+        }
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }

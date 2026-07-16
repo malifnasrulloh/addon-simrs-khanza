@@ -103,6 +103,7 @@ $log->info("  Orthanc URL: " . $config->orthancUrl . ":" . $config->orthancPort)
 $log->info("══════════════════════════════════════════════════════════════");
 
 require_once BASE_DIR . '/lib/satusehat/OrthancClient.php';
+require_once BASE_DIR . '/lib/satusehat/BatchCursor.php';
 require_once BASE_DIR . '/lib/satusehat/Database.php';
 require_once BASE_DIR . '/lib/satusehat/PayloadBuilder.php';
 require_once BASE_DIR . '/lib/satusehat/Supervisor.php';
@@ -138,91 +139,39 @@ $db->printSyncDiagnostics('imagingstudy_radiologi', $dateFrom, $dateTo);
 $db->healFailedImagingStudies($dateFrom, $dateTo);
 
 // 1. Fetch pending records
-$pendingRecords = $db->fetchPendingImagingStudies($dateFrom, $dateTo);
-$totalPending = count($pendingRecords);
+$batchSize = $config->batchSize;
+$processor = new SatuSehatImagingStudyProcessor($db, $client, $config, $log);
+$totalSuccess = 0;
+$totalFail = 0;
+$totalSkip = 0;
 
-if ($totalPending === 0) {
-    $log->info("No pending/failed ImagingStudy records found.");
-    $log->info("══════════════════════════════════════════════════════════════");
-    $db->close();
-    exit(0);
-}
-
-$log->info("[INIT] Found {$totalPending} examinations pending ImagingStudy sync.");
-
-// 2. Execution path: Parallel workers vs Single process
-if ($isParallel && $totalPending > 1) {
-    $log->info("[CONCURRENCY] Splitting work among {$numWorkers} parallel workers...");
-
-    // Split arrays into chunks safely
-    $chunks = array_chunk($pendingRecords, (int) ceil($totalPending / $numWorkers)) ?: [];
-
-    $workers = [];
-    $db->close(); // Close DB handle before fork to avoid shared-connection issues!
-
-    for ($i = 0; $i < $numWorkers; $i++) {
-        $chunk = $chunks[$i] ?? [];
-
-        if (empty($chunk)) {
-            continue;
-        }
-
-        $pid = pcntl_fork();
-
-        if ($pid === -1) {
-            $log->error("[CONCURRENCY] Failed to fork worker {$i}");
-        } elseif ($pid === 0) {
-            // ── CHILD PROCESS WORKER ──
-            $childOrthanc = new OrthancClient($config, $log);
-            try {
-                $childDb = new SatuSehatDatabase($config, $log, null);
-            } catch (\Throwable $e) {
-                $log->error("[WORKER {$i}] Failed to connect to database: " . $e->getMessage());
-                exit(1);
-            }
-
-            $processor = new SatuSehatImagingStudyProcessor($childDb, $childOrthanc, $config, $log);
-            $stats = $processor->run($chunk);
-
-            $childDb->close();
-            exit($stats['fail'] > 0 ? 2 : 0);
-        } else {
-            // ── PARENT PROCESS ──
-            $workers[] = $pid;
-        }
+try {
+    $log->info("──────────────────────────────────────────────────────────────");
+    $log->info("[SYNC] Phase: POST ImagingStudies (batches of {$batchSize})");
+    $cursor = new SatuSehatBatchCursor($db, 'fetchPendingImagingStudies', [$dateFrom, $dateTo], $batchSize, $log, 'ImagingStudies');
+    foreach ($cursor->batches() as $batch) {
+        $stats = $processor->run($batch);
+        $totalSuccess += $stats['success'];
+        $totalFail += $stats['fail'];
+        $totalSkip += $stats['skip'];
+        $cursor->tick();
     }
 
-    // Wait for all workers to finish using the Concurrency Supervisor
-    $supervisor = new SatuSehatSupervisor($log);
-    $allSuccess = $supervisor->monitor($workers);
-
-    $elapsed = round(microtime(true) - $startTime, 2);
-    $log->info("══════════════════════════════════════════════════════════════");
-    $log->info("[SUMMARY] Parallel Sync Finished. All Workers Completed.");
-    $log->info("[SUMMARY] Elapsed: {$elapsed}s");
-    $log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
-    $log->info("══════════════════════════════════════════════════════════════");
-    exit($allSuccess ? 0 : 2);
-
-} else {
-    // ── SINGLE PROCESS FALLBACK ──
-    $processor = new SatuSehatImagingStudyProcessor($db, $orthanc, $config, $log);
-    try {
-        $stats = $processor->run($pendingRecords);
-    } catch (\Throwable $e) {
-        $log->error("[FATAL] Unhandled exception: " . $e->getMessage());
-        $log->error("[FATAL] Stack trace: " . $e->getTraceAsString());
-        $db->close();
-        exit(1);
+    if ($isParallel && $totalSuccess + $totalFail + $totalSkip > 1) {
+        $log->info("[CONCURRENCY] Date-window parallel mode not supported for single-phase. Falling back to single-process.");
     }
-
-    $elapsed = round(microtime(true) - $startTime, 2);
-    $log->info("══════════════════════════════════════════════════════════════");
-    $log->info("[SUMMARY] Success: {$stats['success']} | Failed: {$stats['fail']} | Skipped: {$stats['skip']}");
-    $log->info("[SUMMARY] Elapsed: {$elapsed}s");
-    $log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
-    $log->info("══════════════════════════════════════════════════════════════");
-
+} catch (\Throwable $e) {
+    $log->error("[FATAL] Unhandled exception: " . $e->getMessage());
+    $log->error("[FATAL] Stack trace: " . $e->getTraceAsString());
     $db->close();
-    exit($stats['fail'] > 0 ? 2 : 0);
+    exit(1);
 }
+
+$elapsed = round(microtime(true) - $startTime, 2);
+$log->info("══════════════════════════════════════════════════════════════");
+$log->info("[SUMMARY] Success: {$totalSuccess} | Failed: {$totalFail} | Skipped: {$totalSkip}");
+$log->info("[SUMMARY] Elapsed: {$elapsed}s");
+$log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
+$log->info("══════════════════════════════════════════════════════════════");
+$db->close();
+exit($totalFail > 0 ? 2 : 0);

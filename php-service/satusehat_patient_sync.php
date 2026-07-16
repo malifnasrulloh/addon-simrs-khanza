@@ -19,13 +19,13 @@ require_once BASE_DIR . '/lib/Logger.php';
 require_once BASE_DIR . '/lib/satusehat/Config.php';
 require_once BASE_DIR . '/lib/satusehat/SatuSehatClient.php';
 require_once BASE_DIR . '/lib/satusehat/Database.php';
+require_once BASE_DIR . '/lib/satusehat/BatchCursor.php';
 
 try {
     $config = new SatuSehatConfig(BASE_DIR . '/.env');
     $log = new Logger($config->logDir, 'satusehat_patient_sync', $config->logLevel, true);
     $client = new SatuSehatClient($config, $log);
     $db = new SatuSehatDatabase($config, $log, $client);
-    $pdo = $db->getMysql();
 } catch (Exception $e) {
     fwrite(STDERR, "[FATAL] Initialization failed: {$e->getMessage()}\n");
     exit(1);
@@ -38,54 +38,50 @@ $log->info("==================================================================")
 // Run Diagnostics
 $db->printSyncDiagnostics('patient', '', '');
 
-// Fetch patients with a valid NIK (16 digits) but no IHS number yet
-$stmt = $pdo->prepare("
-    SELECT p.no_ktp as nik, p.nm_pasien, p.no_rkm_medis 
-    FROM pasien p 
-    LEFT JOIN satu_sehat_ihs_patient i ON p.no_ktp = i.nikpasien 
-    WHERE i.ihspasien IS NULL 
-      AND p.no_ktp REGEXP '^[0-9]{16}$'
-");
-$stmt->execute();
-$patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-if (empty($patients)) {
-    $log->info("No pending patients found for synchronization.");
-    exit(0);
-}
-
-$log->info("Found " . count($patients) . " patients to synchronize. Processing...");
-
+$batchSize = $config->batchSize;
 $successCount = 0;
 $failCount = 0;
+$totalCount = 0;
 
-foreach ($patients as $idx => $patient) {
-    $nik = $patient['nik'];
-    $rm = $patient['no_rkm_medis'];
-    $name = $patient['nm_pasien'];
-    
-    $log->info(sprintf("[%03d/%03d] Fetching IHS for RM: %s | NIK: %s | Name: %s", $idx + 1, count($patients), $rm, $nik, $name));
-    
-    try {
-        $ihsNumber = $db->getIhsPatient($nik);
-        if ($ihsNumber) {
-            $log->info("  -> Success: Mapped IHS {$ihsNumber}");
-            $successCount++;
-        } else {
-            $log->warning("  -> Failed or skipped.");
+// Fetch and process patients in batches using cursor
+$cursor = new SatuSehatBatchCursor($db, 'fetchPendingPatients', [], $batchSize, $log, 'patient');
+
+foreach ($cursor->batches() as $batch) {
+    $batchTotal = count($batch);
+
+    foreach ($batch as $idx => $patient) {
+        $globalIdx = $totalCount + $idx + 1;
+        $nik = $patient['nik'];
+        $rm = $patient['no_rkm_medis'];
+        $name = $patient['nm_pasien'];
+
+        $log->info(sprintf("[%03d/%03d] Fetching IHS for RM: %s | NIK: %s | Name: %s", $globalIdx, $totalCount + $batchTotal, $rm, $nik, $name));
+
+        try {
+            $ihsNumber = $db->getIhsPatient($nik);
+            if ($ihsNumber) {
+                $log->info("  -> Success: Mapped IHS {$ihsNumber}");
+                $successCount++;
+            } else {
+                $log->warning("  -> Failed or skipped.");
+                $failCount++;
+            }
+
+            // Sleep to avoid hammering the API rate limits (e.g., 200ms)
+            usleep(200000);
+        } catch (Exception $e) {
+            $log->error("  -> API Error: " . $e->getMessage());
             $failCount++;
+            usleep(1000000); // Backoff on error
         }
-        
-        // Sleep to avoid hammering the API rate limits (e.g., 200ms)
-        usleep(200000); 
-    } catch (Exception $e) {
-        $log->error("  -> API Error: " . $e->getMessage());
-        $failCount++;
-        usleep(1000000); // Backoff on error
     }
+
+    $totalCount += $batchTotal;
+    $cursor->tick();
 }
 
 $log->info("==================================================================");
 $log->info(" Synchronization Completed.");
-$log->info(" Success: {$successCount} | Failed/Not Found: {$failCount}");
+$log->info(" Total: {$totalCount} | Success: {$successCount} | Failed/Not Found: {$failCount}");
 $log->info("==================================================================");
+exit($failCount > 0 ? 2 : 0);
