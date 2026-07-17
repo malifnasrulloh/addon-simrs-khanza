@@ -112,8 +112,17 @@ try {
 
 $startTime = microtime(true);
 
+// Resolve dates matching MedicationStatementProcessor
+if ($config->lookbackDays > 0) {
+    $dateTo = date('Y-m-d', strtotime('-1 day'));
+    $dateFrom = date('Y-m-d', strtotime('-' . $config->lookbackDays . ' days'));
+} else {
+    $dateFrom = $config->dateFrom;
+    $dateTo = $config->dateTo;
+}
+
 // Run Diagnostics
-$db->printSyncDiagnostics('medication_statement', $config->dateFrom, $config->dateTo);
+$db->printSyncDiagnostics('medication_statement', $dateFrom, $dateTo);
 
 // 1. Fetch pending records
 $batchSize = $config->batchSize;
@@ -125,7 +134,7 @@ $totalSkip = 0;
 try {
     $log->info("──────────────────────────────────────────────────────────────");
     $log->info("[SYNC] Phase 1: POST New MedicationStatement (batches of {$batchSize})");
-    $cursor = new SatuSehatBatchCursor($db, 'fetchPendingMedicationStatementActive', [$config->dateFrom, $config->dateTo], $batchSize, $log, 'MedicationStatement/active');
+    $cursor = new SatuSehatBatchCursor($db, 'fetchPendingMedicationStatementActive', [$dateFrom, $dateTo], $batchSize, $log, 'MedicationStatement/active');
     foreach ($cursor->batches() as $batch) {
         $stats = $processor->run($batch, []);
         $totalSuccess += $stats['success'];
@@ -137,7 +146,7 @@ try {
 
     $log->info("──────────────────────────────────────────────────────────────");
     $log->info("[SYNC] Phase 2: PUT Update MedicationStatement (batches of {$batchSize})");
-    $cursor = new SatuSehatBatchCursor($db, 'fetchPendingMedicationStatementUpdate', [$config->dateFrom, $config->dateTo], $batchSize, $log, 'MedicationStatement/update');
+    $cursor = new SatuSehatBatchCursor($db, 'fetchPendingMedicationStatementUpdate', [$dateFrom, $dateTo], $batchSize, $log, 'MedicationStatement/update');
     foreach ($cursor->batches() as $batch) {
         $stats = $processor->run([], $batch);
         $totalSuccess += $stats['success'];

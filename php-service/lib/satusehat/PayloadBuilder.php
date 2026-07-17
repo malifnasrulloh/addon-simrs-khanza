@@ -648,7 +648,7 @@ class SatuSehatPayloadBuilder
             ],
             'encounter' => [
                 'reference' => 'Encounter/' . $p['id_encounter'],
-                'display'   => 'Prosedur ' . $p['nm_pasien'] . ' selama kunjungan/dirawat dari tanggal ' . $startRaw . ' sampai ' . $endRaw
+                'display'   => 'Prosedur ' . $p['nm_pasien'] . ' selama kunjungan/dirawat dari tanggal ' . $startWaktu . ' sampai ' . $endWaktu
             ],
             'performedPeriod' => [
                 'start' => $startWaktu,

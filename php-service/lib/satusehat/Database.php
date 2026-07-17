@@ -335,7 +335,7 @@ class SatuSehatDatabase
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
@@ -371,7 +371,7 @@ class SatuSehatDatabase
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
@@ -424,7 +424,7 @@ class SatuSehatDatabase
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchDiagnoses(string $noRawat): array
@@ -440,7 +440,7 @@ class SatuSehatDatabase
         ";
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute(['nr' => $noRawat]);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveEncounter(string $noRawat, string $idEncounter): bool
@@ -639,7 +639,7 @@ class SatuSehatDatabase
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingEocFinished(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -675,7 +675,7 @@ class SatuSehatDatabase
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveEpisodeOfCare(string $noRawat, string $kdPenyakit, string $status, string $idEpisode): bool
@@ -756,7 +756,7 @@ class SatuSehatDatabase
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingConditionUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -788,7 +788,7 @@ class SatuSehatDatabase
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveCondition(string $noRawat, string $kdPenyakit, string $status, string $idCondition): bool
@@ -1149,7 +1149,7 @@ class SatuSehatDatabase
 
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveObservationTTV(string $stTable, string $idCol, string $noRawat, string $tgl, string $jam, string $statusRawat, string $idObservation): bool
@@ -1226,7 +1226,7 @@ class SatuSehatDatabase
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingProcedureUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -1262,7 +1262,7 @@ class SatuSehatDatabase
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveProcedure(string $noRawat, string $kode, string $status, string $idProcedure): bool
@@ -1357,7 +1357,7 @@ class SatuSehatDatabase
         }
 $stmt = $this->mysql->prepare($sql);
                 $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingCarePlanUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -1411,7 +1411,7 @@ $stmt = $this->mysql->prepare($sql);
         }
 $stmt = $this->mysql->prepare($sql);
                 $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveCarePlan(string $noRawat, string $tglPerawatan, string $jamRawat, string $status, string $idCarePlan): bool
@@ -1505,7 +1505,7 @@ $stmt = $this->mysql->prepare($sql);
         }
 $stmt = $this->mysql->prepare($sql);
                 $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingAllergyUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -1557,7 +1557,7 @@ $stmt = $this->mysql->prepare($sql);
         }
 $stmt = $this->mysql->prepare($sql);
                 $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveAllergyIntolerance(string $noRawat, string $tglPerawatan, string $jamRawat, string $statusRawat, string $idAllergy): bool
@@ -1673,7 +1673,7 @@ $stmt = $this->mysql->prepare($sql);
         }
 $stmt = $this->mysql->prepare($sql);
                 $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingImmunizationUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -1747,7 +1747,7 @@ $stmt = $this->mysql->prepare($sql);
         }
 $stmt = $this->mysql->prepare($sql);
                 $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveImmunization(string $noRawat, string $tglPerawatan, string $jam, string $kodeBrng, string $noBatch, string $noFaktur, string $idImmunization): bool
@@ -1817,7 +1817,7 @@ $stmt = $this->mysql->prepare($sql);
             $params['off'] = $offset;
         }
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
@@ -1846,7 +1846,7 @@ $stmt = $this->mysql->prepare($sql);
             $params['off'] = $offset;
         }
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
@@ -1953,7 +1953,7 @@ $stmt = $this->mysql->prepare($sql);
         }
 $stmt = $this->mysql->prepare($sql);
                 $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
@@ -2018,7 +2018,7 @@ $stmt = $this->mysql->prepare($sql);
         }
 $stmt = $this->mysql->prepare($sql);
                 $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
@@ -2184,7 +2184,7 @@ $stmt = $this->mysql->prepare($sql);
         }
 $stmt = $this->mysql->prepare($sql);
                 $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
@@ -2264,7 +2264,7 @@ $stmt = $this->mysql->prepare($sql);
         }
 $stmt = $this->mysql->prepare($sql);
                 $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
@@ -2439,7 +2439,7 @@ $stmt = $this->mysql->prepare($sql);
         }
 $stmt = $this->mysql->prepare($sql);
                 $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
@@ -2551,7 +2551,7 @@ $stmt = $this->mysql->prepare($sql);
         }
 $stmt = $this->mysql->prepare($sql);
                 $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
@@ -2728,7 +2728,7 @@ $stmt = $this->mysql->prepare($sql);
             $ralanParams['off'] = $offset;
         }
         $stmtRalan->execute($ralanParams);
-        $ralan = $stmtRalan->fetchAll();
+        $ralan = $stmtRalan->fetchAll(PDO::FETCH_ASSOC);
 
         $stmtRanap = $this->mysql->prepare($ranapSql);
         $ranapParams = ['df2' => $dateFrom, 'dt2' => $dateTo];
@@ -2737,7 +2737,7 @@ $stmt = $this->mysql->prepare($sql);
             $ranapParams['off2'] = $offset;
         }
         $stmtRanap->execute($ranapParams);
-        $ranap = $stmtRanap->fetchAll();
+        $ranap = $stmtRanap->fetchAll(PDO::FETCH_ASSOC);
 
         $merged = array_merge($ralan, $ranap);
         if ($limit !== null) {
@@ -2814,7 +2814,7 @@ $stmt = $this->mysql->prepare($sql);
             $ralanParams['off'] = $offset;
         }
         $stmtRalan->execute($ralanParams);
-        $ralan = $stmtRalan->fetchAll();
+        $ralan = $stmtRalan->fetchAll(PDO::FETCH_ASSOC);
 
         $stmtRanap = $this->mysql->prepare($ranapSql);
         $ranapParams = ['df2' => $dateFrom, 'dt2' => $dateTo];
@@ -2823,7 +2823,7 @@ $stmt = $this->mysql->prepare($sql);
             $ranapParams['off2'] = $offset;
         }
         $stmtRanap->execute($ranapParams);
-        $ranap = $stmtRanap->fetchAll();
+        $ranap = $stmtRanap->fetchAll(PDO::FETCH_ASSOC);
 
         $merged = array_merge($ralan, $ranap);
         if ($limit !== null) {
@@ -2878,8 +2878,9 @@ $stmt = $this->mysql->prepare($sql);
             WHERE pr.tgl_permintaan BETWEEN :df AND :dt
               AND (ssr.id_servicerequest IS NULL OR ssr.id_servicerequest = '' OR ssr.id_servicerequest = '-')
             GROUP BY ppr.noorder, ppr.kd_jenis_prw
+         ORDER BY ppr.noorder, ppr.kd_jenis_prw ASC
         ";
-        
+
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
         if ($limit !== null) {
             $sql .= " LIMIT :lim OFFSET :off";
@@ -2888,7 +2889,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingServiceRequestRadiologiUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -2914,8 +2915,9 @@ $stmt = $this->mysql->prepare($sql);
             WHERE pr.tgl_permintaan BETWEEN :df AND :dt
               AND ssr.id_servicerequest IS NOT NULL AND ssr.id_servicerequest <> '' AND ssr.id_servicerequest <> '-'
             GROUP BY ppr.noorder, ppr.kd_jenis_prw
+         ORDER BY ppr.noorder, ppr.kd_jenis_prw ASC
         ";
-        
+
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
         if ($limit !== null) {
             $sql .= " LIMIT :lim OFFSET :off";
@@ -2924,7 +2926,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveServiceRequestRadiologi(
@@ -2985,7 +2987,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingDiagnosticReportRadiologiUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -3027,7 +3029,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveDiagnosticReportRadiologi(
@@ -3078,7 +3080,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingSpecimenRadiologiUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -3110,7 +3112,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveSpecimenRadiologi(
@@ -3169,7 +3171,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingObservationRadiologiUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -3209,7 +3211,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveObservationRadiologi(
@@ -3265,7 +3267,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingServiceRequestLabPKUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -3302,7 +3304,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveServiceRequestLabPK(
@@ -3360,7 +3362,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingServiceRequestLabMBUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -3397,7 +3399,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveServiceRequestLabMB(
@@ -3456,7 +3458,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingSpecimenLabPKUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -3494,7 +3496,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveSpecimenLabPK(
@@ -3553,7 +3555,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingSpecimenLabMBUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -3591,7 +3593,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveSpecimenLabMB(
@@ -3661,7 +3663,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingObservationLabPKUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -3712,7 +3714,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveObservationLabPK(
@@ -3782,7 +3784,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingObservationLabMBUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -3833,7 +3835,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveObservationLabMB(
@@ -3906,8 +3908,9 @@ $stmt = $this->mysql->prepare($sql);
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
               AND (ssdr.id_diagnosticreport IS NULL OR ssdr.id_diagnosticreport = '' OR ssdr.id_diagnosticreport = '-')
+         ORDER BY rp.no_rawat ASC
         ";
-        
+
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
         if ($limit !== null) {
             $sql .= " LIMIT :lim OFFSET :off";
@@ -3916,7 +3919,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingDiagnosticReportLabPKUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -3962,8 +3965,9 @@ $stmt = $this->mysql->prepare($sql);
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
               AND ssdr.id_diagnosticreport IS NOT NULL AND ssdr.id_diagnosticreport <> '' AND ssdr.id_diagnosticreport <> '-'
+         ORDER BY rp.no_rawat ASC
         ";
-        
+
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
         if ($limit !== null) {
             $sql .= " LIMIT :lim OFFSET :off";
@@ -3972,7 +3976,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveDiagnosticReportLabPK(
@@ -4037,8 +4041,9 @@ $stmt = $this->mysql->prepare($sql);
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
               AND (ssdr.id_diagnosticreport IS NULL OR ssdr.id_diagnosticreport = '' OR ssdr.id_diagnosticreport = '-')
+         ORDER BY rp.no_rawat ASC
         ";
-        
+
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
         if ($limit !== null) {
             $sql .= " LIMIT :lim OFFSET :off";
@@ -4047,7 +4052,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingDiagnosticReportLabMBUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -4093,8 +4098,9 @@ $stmt = $this->mysql->prepare($sql);
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
               AND ssdr.id_diagnosticreport IS NOT NULL AND ssdr.id_diagnosticreport <> '' AND ssdr.id_diagnosticreport <> '-'
+         ORDER BY rp.no_rawat ASC
         ";
-        
+
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
         if ($limit !== null) {
             $sql .= " LIMIT :lim OFFSET :off";
@@ -4103,7 +4109,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function saveDiagnosticReportLabMB(
@@ -5887,7 +5893,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function fetchPendingCompositionUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
@@ -5923,7 +5929,7 @@ $stmt = $this->mysql->prepare($sql);
         }
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function getCompositionLocalState(string $noRawat): ?string

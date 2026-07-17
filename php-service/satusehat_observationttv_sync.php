@@ -142,8 +142,7 @@ foreach ($definitions as $ttvType => $def) {
     );
 
     foreach ($cursor->batches() as $batch) {
-        $hash = [$ttvType => $batch];
-        $stats = $processor->run($hash);
+        $stats = $processor->run([$ttvType => $batch]);
         $totalSuccess += $stats['success'];
         $totalFail += $stats['fail'];
         $totalSkip += $stats['skip'];

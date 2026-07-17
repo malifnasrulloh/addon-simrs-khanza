@@ -49,11 +49,26 @@ class SatuSehatObservationTTVProcessor
 
         $definitions = ObservationTTVDictionary::getDefinitions();
 
-        foreach ($definitions as $ttvType => $def) {
-            $this->log->info("──────────────────────────────────────────────────────────────");
-            $this->log->info("[SYNC] Processing Observation: " . strtoupper($ttvType));
-            $records = $preFetchedObservations[$ttvType] ?? null;
-            $this->processObservation($ttvType, $def, $dateFrom, $dateTo, $records);
+        // When pre-fetched observations are provided, only process those types
+        // (the entry script iterates per-type and passes one type at a time).
+        // When null, process all definitions (original full-sync fallback).
+        if ($preFetchedObservations !== null) {
+            foreach ($preFetchedObservations as $ttvType => $records) {
+                $def = $definitions[$ttvType] ?? null;
+                if ($def === null) {
+                    $this->log->warning("[SYNC] Unknown TTV type '{$ttvType}' skipped.");
+                    continue;
+                }
+                $this->log->info("──────────────────────────────────────────────────────────────");
+                $this->log->info("[SYNC] Processing Observation: " . strtoupper($ttvType));
+                $this->processObservation($ttvType, $def, $dateFrom, $dateTo, $records);
+            }
+        } else {
+            foreach ($definitions as $ttvType => $def) {
+                $this->log->info("──────────────────────────────────────────────────────────────");
+                $this->log->info("[SYNC] Processing Observation: " . strtoupper($ttvType));
+                $this->processObservation($ttvType, $def, $dateFrom, $dateTo, null);
+            }
         }
 
         return [

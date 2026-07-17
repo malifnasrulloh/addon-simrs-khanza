@@ -24,6 +24,7 @@ require_once BASE_DIR . '/lib/satusehat/BatchCursor.php';
 try {
     $config = new SatuSehatConfig(BASE_DIR . '/.env');
     $log = new Logger($config->logDir, 'satusehat_patient_sync', $config->logLevel, true);
+    $log->cleanOldLogs($config->logRetentionDays);
     $client = new SatuSehatClient($config, $log);
     $db = new SatuSehatDatabase($config, $log, $client);
 } catch (Exception $e) {
@@ -66,13 +67,9 @@ foreach ($cursor->batches() as $batch) {
                 $log->warning("  -> Failed or skipped.");
                 $failCount++;
             }
-
-            // Sleep to avoid hammering the API rate limits (e.g., 200ms)
-            usleep(200000);
         } catch (Exception $e) {
             $log->error("  -> API Error: " . $e->getMessage());
             $failCount++;
-            usleep(1000000); // Backoff on error
         }
     }
 
