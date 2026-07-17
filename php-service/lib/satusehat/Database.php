@@ -324,7 +324,7 @@ class SatuSehatDatabase
             WHERE rp.status_bayar = 'Sudah Bayar' 
               AND rp.tgl_registrasi BETWEEN :df AND :dt
               AND rp.no_rawat NOT IN (SELECT no_rawat FROM satu_sehat_encounter)
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -360,7 +360,7 @@ class SatuSehatDatabase
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -413,7 +413,7 @@ class SatuSehatDatabase
             ) ki ON ki.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -628,7 +628,7 @@ class SatuSehatDatabase
             LEFT JOIN kamar_inap ki ON ki.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND rp.no_rawat NOT IN (SELECT no_rawat FROM satu_sehat_episode_of_care)
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -664,7 +664,7 @@ class SatuSehatDatabase
             LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -745,7 +745,7 @@ class SatuSehatDatabase
                 AND ssc.status = dp.status
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND ssc.id_condition IS NULL
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -777,7 +777,7 @@ class SatuSehatDatabase
                 AND ssc.kd_penyakit = dp.kd_penyakit 
                 AND ssc.status = dp.status
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -1104,7 +1104,6 @@ class SatuSehatDatabase
             LEFT JOIN {$stTable} st ON st.no_rawat = pr.no_rawat AND st.tgl_perawatan = pr.tgl_perawatan AND st.jam_rawat = pr.jam_rawat AND st.status = 'Ralan'
             WHERE pr.tgl_perawatan BETWEEN :df AND :dt
               AND pr.{$dbCol} IS NOT NULL AND pr.{$dbCol} != '' AND pr.{$dbCol} != '-'
-         ORDER BY rp.no_rawat ASC
         ";
 
         if ($dbCol === 'lingkar_perut') {
@@ -1140,7 +1139,7 @@ class SatuSehatDatabase
                       AND pi.{$dbCol} IS NOT NULL AND pi.{$dbCol} != '' AND pi.{$dbCol} != '-'
                 ) as combined
                 WHERE synced_id IS NULL
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
             ";
         }
 
@@ -1216,7 +1215,7 @@ class SatuSehatDatabase
                 AND ssp.status = pp.status
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND ssp.id_procedure IS NULL
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -1252,7 +1251,7 @@ class SatuSehatDatabase
                 AND ssp.kode = pp.kode 
                 AND ssp.status = pp.status
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -1347,7 +1346,7 @@ class SatuSehatDatabase
                   AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
                   AND ssc.id_careplan IS NULL
             ) AS combined
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
@@ -1401,7 +1400,7 @@ $stmt = $this->mysql->prepare($sql);
                 WHERE pi.rtl <> '' 
                   AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
             ) AS combined
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
@@ -1495,7 +1494,7 @@ $stmt = $this->mysql->prepare($sql);
                   AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
                   AND ssai.id_allergy_intolerance IS NULL
             ) AS combined
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
@@ -1547,7 +1546,7 @@ $stmt = $this->mysql->prepare($sql);
                 WHERE pi.alergi <> '' 
                   AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
             ) AS combined
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
@@ -2686,7 +2685,7 @@ $stmt = $this->mysql->prepare($sql);
             WHERE pem.penilaian <> ''
               AND rp.tgl_registrasi BETWEEN :df AND :dt
               AND ssci.id_clinicalimpression IS NULL
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
 
         $ranapSql = "
@@ -2714,7 +2713,7 @@ $stmt = $this->mysql->prepare($sql);
             WHERE pem.penilaian <> ''
               AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
               AND ssci.id_clinicalimpression IS NULL
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
 
         if ($limit !== null) {
@@ -2773,7 +2772,7 @@ $stmt = $this->mysql->prepare($sql);
                 AND ssci.status = 'Ralan'
             WHERE pem.penilaian <> ''
               AND rp.tgl_registrasi BETWEEN :df AND :dt
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
 
         $ranapSql = "
@@ -2800,7 +2799,7 @@ $stmt = $this->mysql->prepare($sql);
                 AND ssci.status = 'Ranap'
             WHERE pem.penilaian <> ''
               AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
 
         if ($limit !== null) {
@@ -2975,7 +2974,7 @@ $stmt = $this->mysql->prepare($sql);
             INNER JOIN pegawai peg ON prad.kd_dokter = peg.nik
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (ssdr.id_diagnosticreport IS NULL OR ssdr.id_diagnosticreport = '' OR ssdr.id_diagnosticreport = '-')
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3017,7 +3016,7 @@ $stmt = $this->mysql->prepare($sql);
             INNER JOIN pegawai peg ON prad.kd_dokter = peg.nik
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND ssdr.id_diagnosticreport IS NOT NULL AND ssdr.id_diagnosticreport <> '' AND ssdr.id_diagnosticreport <> '-'
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3068,7 +3067,7 @@ $stmt = $this->mysql->prepare($sql);
             LEFT JOIN satu_sehat_specimen_radiologi sssp ON ssr.noorder = sssp.noorder AND ssr.kd_jenis_prw = sssp.kd_jenis_prw
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (sssp.id_specimen IS NULL OR sssp.id_specimen = '' OR sssp.id_specimen = '-')
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3100,7 +3099,7 @@ $stmt = $this->mysql->prepare($sql);
             INNER JOIN satu_sehat_specimen_radiologi sssp ON ssr.noorder = sssp.noorder AND ssr.kd_jenis_prw = sssp.kd_jenis_prw
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3159,7 +3158,7 @@ $stmt = $this->mysql->prepare($sql);
             INNER JOIN pegawai peg ON prad.kd_dokter = peg.nik
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (sso.id_observation IS NULL OR sso.id_observation = '' OR sso.id_observation = '-')
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3199,7 +3198,7 @@ $stmt = $this->mysql->prepare($sql);
             INNER JOIN pegawai peg ON prad.kd_dokter = peg.nik
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3255,7 +3254,7 @@ $stmt = $this->mysql->prepare($sql);
               AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (sssl.id_servicerequest IS NULL OR sssl.id_servicerequest = '' OR sssl.id_servicerequest = '-')
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3292,7 +3291,7 @@ $stmt = $this->mysql->prepare($sql);
               AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3350,7 +3349,7 @@ $stmt = $this->mysql->prepare($sql);
               AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (sssl.id_servicerequest IS NULL OR sssl.id_servicerequest = '' OR sssl.id_servicerequest = '-')
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3387,7 +3386,7 @@ $stmt = $this->mysql->prepare($sql);
               AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3446,7 +3445,7 @@ $stmt = $this->mysql->prepare($sql);
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
               AND (sssp.id_specimen IS NULL OR sssp.id_specimen = '' OR sssp.id_specimen = '-')
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3484,7 +3483,7 @@ $stmt = $this->mysql->prepare($sql);
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3543,7 +3542,7 @@ $stmt = $this->mysql->prepare($sql);
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
               AND (sssp.id_specimen IS NULL OR sssp.id_specimen = '' OR sssp.id_specimen = '-')
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3581,7 +3580,7 @@ $stmt = $this->mysql->prepare($sql);
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssl.id_servicerequest IS NOT NULL AND sssl.id_servicerequest <> '' AND sssl.id_servicerequest <> '-'
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3651,7 +3650,7 @@ $stmt = $this->mysql->prepare($sql);
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
               AND (sso.id_observation IS NULL OR sso.id_observation = '' OR sso.id_observation = '-')
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3702,7 +3701,7 @@ $stmt = $this->mysql->prepare($sql);
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3772,7 +3771,7 @@ $stmt = $this->mysql->prepare($sql);
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
               AND (sso.id_observation IS NULL OR sso.id_observation = '' OR sso.id_observation = '-')
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -3823,7 +3822,7 @@ $stmt = $this->mysql->prepare($sql);
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND sssp.id_specimen IS NOT NULL AND sssp.id_specimen <> '' AND sssp.id_specimen <> '-'
               AND sso.id_observation IS NOT NULL AND sso.id_observation <> '' AND sso.id_observation <> '-'
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -4169,7 +4168,7 @@ $stmt = $this->mysql->prepare($sql);
             LEFT JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = resep_obat.no_resep 
             WHERE resep_obat.tgl_peresepan BETWEEN :df AND :dt
               AND (ssqr.id_questionresponse IS NULL OR ssqr.id_questionresponse = '')
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -4204,7 +4203,7 @@ $stmt = $this->mysql->prepare($sql);
             INNER JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = resep_obat.no_resep 
             WHERE resep_obat.tgl_peresepan BETWEEN :df AND :dt
               AND ssqr.id_questionresponse IS NOT NULL AND ssqr.id_questionresponse <> ''
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -5877,7 +5876,7 @@ $stmt = $this->mysql->prepare($sql);
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
               AND rp.no_rawat NOT IN (SELECT no_rawat FROM satu_sehat_composition)
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
@@ -5913,7 +5912,7 @@ $stmt = $this->mysql->prepare($sql);
             LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
-         ORDER BY rp.no_rawat ASC
+         ORDER BY no_rawat ASC
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];

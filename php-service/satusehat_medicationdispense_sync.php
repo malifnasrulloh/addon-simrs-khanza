@@ -125,7 +125,7 @@ $totalSkip = 0;
 try {
     $log->info("──────────────────────────────────────────────────────────────");
     $log->info("[SYNC] Phase 1: POST New MedicationDispense (batches of {$batchSize})");
-    $cursor = new SatuSehatBatchCursor($db, 'fetchPendingMedicationDispenseActive', [$dateFrom, $dateTo], $batchSize, $log, 'MedicationDispense/active');
+    $cursor = new SatuSehatBatchCursor($db, 'fetchPendingMedicationDispenseActive', [$config->dateFrom, $config->dateTo], $batchSize, $log, 'MedicationDispense/active');
     foreach ($cursor->batches() as $batch) {
         $stats = $processor->run($batch, []);
         $totalSuccess += $stats['success'];
@@ -137,7 +137,7 @@ try {
 
     $log->info("──────────────────────────────────────────────────────────────");
     $log->info("[SYNC] Phase 2: PUT Update MedicationDispense (batches of {$batchSize})");
-    $cursor = new SatuSehatBatchCursor($db, 'fetchPendingMedicationDispenseUpdate', [$dateFrom, $dateTo], $batchSize, $log, 'MedicationDispense/update');
+    $cursor = new SatuSehatBatchCursor($db, 'fetchPendingMedicationDispenseUpdate', [$config->dateFrom, $config->dateTo], $batchSize, $log, 'MedicationDispense/update');
     foreach ($cursor->batches() as $batch) {
         $stats = $processor->run([], $batch);
         $totalSuccess += $stats['success'];

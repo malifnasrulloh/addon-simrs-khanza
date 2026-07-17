@@ -140,7 +140,7 @@ $db->healFailedImagingStudies($dateFrom, $dateTo);
 
 // 1. Fetch pending records
 $batchSize = $config->batchSize;
-$processor = new SatuSehatImagingStudyProcessor($db, $client, $config, $log);
+$processor = new SatuSehatImagingStudyProcessor($db, $orthanc, $config, $log);
 $totalSuccess = 0;
 $totalFail = 0;
 $totalSkip = 0;

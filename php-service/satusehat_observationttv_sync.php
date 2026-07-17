@@ -127,7 +127,7 @@ $db->printSyncDiagnostics('observationttv', $dateFrom, $dateTo);
 $definitions = ObservationTTVDictionary::getDefinitions();
 $batchSize = $config->batchSize;
 $processor = new SatuSehatObservationTTVProcessor($db, $client, $config, $log);
-$totalSuccess = 0; $totalFail = 0;
+$totalSuccess = 0; $totalFail = 0; $totalSkip = 0;
 
 // Process each TTV type independently with its own BatchCursor
 $log->info("[BATCH] Processing " . count($definitions) . " TTV type(s) with batch size $batchSize");
@@ -146,6 +146,7 @@ foreach ($definitions as $ttvType => $def) {
         $stats = $processor->run($hash);
         $totalSuccess += $stats['success'];
         $totalFail += $stats['fail'];
+        $totalSkip += $stats['skip'];
         $cursor->tick();
     }
 }
