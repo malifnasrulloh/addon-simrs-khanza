@@ -63,7 +63,7 @@ class SatuSehatConditionProcessor
         if ($patients === null) {
             $patients = $this->db->fetchPendingConditionActive($dateFrom, $dateTo);
         }
-        
+
         if (empty($patients)) {
             $this->log->info("[PHASE 1] No pending conditions to POST.");
             return;
@@ -92,9 +92,20 @@ class SatuSehatConditionProcessor
                 continue;
             }
 
+            // Look up practitioner for recorder field
+            $idDokter = null;
+            $namaDokter = null;
+            if (!empty($p['ktp_dokter'])) {
+                $idDokter = $this->db->getIhsPractitioner($p['ktp_dokter']);
+                $namaDokter = $p['nama_dokter'] ?? '';
+            }
+
             $payload = SatuSehatPayloadBuilder::condition(
                 $p,
-                $idPasien
+                $idPasien,
+                '',
+                $idDokter,
+                $namaDokter
             );
 
             // null means the ICD-10 code is empty or invalid — skip before sending to API
@@ -116,11 +127,11 @@ class SatuSehatConditionProcessor
                 $this->successCount++;
             } else {
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
-                
-                $isValidationError = (stripos($errorMessage, 'Code not found') !== false || 
-                                       stripos($errorMessage, 'invalid') !== false || 
+
+                $isValidationError = (stripos($errorMessage, 'Code not found') !== false ||
+                                       stripos($errorMessage, 'invalid') !== false ||
                                        stripos($errorMessage, 'incorrect') !== false);
-                
+
                 if ($isValidationError) {
                     $this->log->warning("[PHASE 1] {$noRawat}: ✗ Skipped -> Invalid ICD-10 Code '{$kdPenyakit}' (Satu Sehat Terminology rejected it)");
                     $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code');
@@ -153,16 +164,16 @@ class SatuSehatConditionProcessor
         }
 
         if (empty($patients)) {
-            $this->log->info("[PHASE 2] No pending conditions to PUT.");
+            $this->log->info("[PHASE 2] No pending conditions to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($patients) . " diagnosis record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($patients) . " diagnosis record(s) to PATCH.");
 
         foreach ($patients as $p) {
             $noRawat = $p['no_rawat'];
             $kdPenyakit = $p['kd_penyakit'];
-            $statusRawat = $p['status'];
+            $idCondition = $p['id_condition'];
             $localState = $this->db->getConditionLocalState($noRawat, $kdPenyakit);
 
             if ($localState === 'updated' || $localState === 'skipped' || $localState === 'invalid_code') {
@@ -170,44 +181,41 @@ class SatuSehatConditionProcessor
                 continue;
             }
 
-            $nik = $p['no_ktp'];
+            // Build PATCH operations dynamically
+            $ops = [];
 
-            $idPasien = $this->db->getIhsPatient($nik);
+            // Currently conditions always set clinicalStatus=active at POST.
+            // On update, we just confirm status remains active (or could be changed)
+            // The main update is acknowledging the condition still exists.
+            // We patch clinicalStatus as a confirmation ping.
+            $ops[] = [
+                'op' => 'replace',
+                'path' => '/clinicalStatus',
+                'value' => [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/condition-clinical',
+                            'code'    => 'active',
+                            'display' => 'Active'
+                        ]
+                    ]
+                ]
+            ];
 
-            if (!$idPasien) {
-                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID. Skipped.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $payload = SatuSehatPayloadBuilder::condition(
-                $p,
-                $idPasien,
-                $p['id_condition']
-            );
-
-            // null means the ICD-10 code is empty or invalid — skip before sending to API
-            if ($payload === null) {
-                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Skipped -> Empty or invalid ICD-10 code '{$kdPenyakit}' (pre-validation)");
-                $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code');
-                $this->skipCount++;
-                continue;
-            }
-
-            $this->log->info("[PHASE 2] {$noRawat}: PUT /Condition/{$p['id_condition']} (ICD: {$kdPenyakit})");
-            $result = $this->api->put("/Condition/{$p['id_condition']}", $payload);
+            $this->log->info("[PHASE 2] {$noRawat}: PATCH /Condition/{$idCondition} (" . count($ops) . " ops)");
+            $result = $this->api->patch("/Condition/{$idCondition}", $ops);
 
             if ($result['success']) {
                 $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'updated');
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Condition {$p['id_condition']}");
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Condition {$idCondition} via PATCH");
                 $this->successCount++;
             } else {
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
-                
-                $isValidationError = (stripos($errorMessage, 'Code not found') !== false || 
-                                       stripos($errorMessage, 'invalid') !== false || 
+
+                $isValidationError = (stripos($errorMessage, 'Code not found') !== false ||
+                                       stripos($errorMessage, 'invalid') !== false ||
                                        stripos($errorMessage, 'incorrect') !== false);
-                
+
                 if ($isValidationError) {
                     $this->log->warning("[PHASE 2] {$noRawat}: ✗ Skipped -> Invalid ICD-10 Code '{$kdPenyakit}' (Satu Sehat Terminology rejected it on update)");
                     $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code');

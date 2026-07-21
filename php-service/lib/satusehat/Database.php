@@ -771,24 +771,26 @@ class SatuSehatDatabase
     public function fetchPendingConditionActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                p.nm_pasien, p.no_ktp, rp.stts, rp.status_lanjut, 
-                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang, 
-                sse.id_encounter, dp.kd_penyakit, py.nm_penyakit, dp.status
+            SELECT
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp, rp.stts, rp.status_lanjut,
+                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
+                sse.id_encounter, dp.kd_penyakit, py.nm_penyakit, dp.status,
+                pg.nama as nama_dokter, pg.no_ktp as ktp_dokter
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             INNER JOIN diagnosa_pasien dp ON dp.no_rawat = rp.no_rawat
             INNER JOIN penyakit py ON dp.kd_penyakit = py.kd_penyakit
-            LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = dp.no_rawat 
-                AND ssc.kd_penyakit = dp.kd_penyakit 
+            INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
+            LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = dp.no_rawat
+                AND ssc.kd_penyakit = dp.kd_penyakit
                 AND ssc.status = dp.status
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND ssc.id_condition IS NULL
          ORDER BY no_rawat ASC
         ";
-        
+
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
         if ($limit !== null) {
             $sql .= " LIMIT :lim OFFSET :off";
@@ -1237,28 +1239,30 @@ class SatuSehatDatabase
     public function fetchPendingProcedureActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                p.nm_pasien, p.no_ktp, rp.stts, rp.status_lanjut, 
-                CONCAT(rp.tgl_registrasi, 'T', rp.jam_reg, '+07:00') as waktu_registrasi, 
+            SELECT
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp, rp.stts, rp.status_lanjut,
+                CONCAT(rp.tgl_registrasi, 'T', rp.jam_reg, '+07:00') as waktu_registrasi,
                 sse.id_encounter, pp.kode, py.deskripsi_panjang, pp.status,
-                CASE 
+                CASE
                     WHEN rp.status_lanjut = 'Ralan' THEN (SELECT CONCAT(tanggal, 'T', jam, '+07:00') FROM nota_jalan WHERE no_rawat = rp.no_rawat LIMIT 1)
                     WHEN rp.status_lanjut = 'Ranap' THEN (SELECT CONCAT(tanggal, 'T', jam, '+07:00') FROM nota_inap WHERE no_rawat = rp.no_rawat LIMIT 1)
-                END as waktu_pulang
+                END as waktu_pulang,
+                pg.nama as nama_dokter, pg.no_ktp as ktp_dokter
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             INNER JOIN prosedur_pasien pp ON pp.no_rawat = rp.no_rawat
             INNER JOIN icd9 py ON pp.kode = py.kode
-            LEFT JOIN satu_sehat_procedure ssp ON ssp.no_rawat = pp.no_rawat 
-                AND ssp.kode = pp.kode 
+            INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
+            LEFT JOIN satu_sehat_procedure ssp ON ssp.no_rawat = pp.no_rawat
+                AND ssp.kode = pp.kode
                 AND ssp.status = pp.status
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND ssp.id_procedure IS NULL
          ORDER BY no_rawat ASC
         ";
-        
+
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
         if ($limit !== null) {
             $sql .= " LIMIT :lim OFFSET :off";

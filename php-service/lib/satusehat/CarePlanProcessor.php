@@ -112,11 +112,19 @@ class SatuSehatCarePlanProcessor
                 continue;
             }
 
+            // Determine title based on context
+            $title = 'Instruksi Medik dan Keperawatan Pasien';
+            if ($statusLanjut === 'Ranap') {
+                $title = 'Rencana Rawat Pasien';
+            }
+
             $payload = SatuSehatPayloadBuilder::carePlan(
                 $this->config->orgId,
                 $p,
                 $idPasien,
-                $idDokter
+                $idDokter,
+                '',
+                $title
             );
 
             $this->log->info("[PHASE 1] {$noRawat}: POST /CarePlan");
@@ -160,11 +168,11 @@ class SatuSehatCarePlanProcessor
         }
 
         if (empty($patients)) {
-            $this->log->info("[PHASE 2] No pending CarePlans to PUT.");
+            $this->log->info("[PHASE 2] No pending CarePlans to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($patients) . " care plan record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($patients) . " care plan record(s) to PATCH.");
 
         foreach ($patients as $p) {
             $noRawat = $p['no_rawat'];
@@ -180,37 +188,21 @@ class SatuSehatCarePlanProcessor
                 continue;
             }
 
-            $nikPasien = $p['no_ktp'];
-            $nikPraktisi = $p['ktppraktisi'];
+            // Build PATCH operations — confirm active status
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/description',
+                    'value' => str_replace(["\r\n", "\r", "\n", "\n\r"], '<br>', $p['rtl'] ?? '')
+                ]
+            ];
 
-            $idPasien = $this->db->getIhsPatient($nikPasien);
-            if (!$idPasien) {
-                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Patient. Skipped.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $idDokter = $this->db->getIhsPractitioner($nikPraktisi);
-            if (!$idDokter) {
-                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Practitioner. Skipped.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $payload = SatuSehatPayloadBuilder::carePlan(
-                $this->config->orgId,
-                $p,
-                $idPasien,
-                $idDokter,
-                $idCarePlan
-            );
-
-            $this->log->info("[PHASE 2] {$noRawat}: PUT /CarePlan/{$idCarePlan}");
-            $result = $this->api->put("/CarePlan/{$idCarePlan}", $payload);
+            $this->log->info("[PHASE 2] {$noRawat}: PATCH /CarePlan/{$idCarePlan} (" . count($ops) . " ops)");
+            $result = $this->api->patch("/CarePlan/{$idCarePlan}", $ops);
 
             if ($result['success']) {
                 $this->db->updateCarePlanLocalState($noRawat, $tglPerawatan, $jamRawat, $statusLanjut, 'updated');
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated CarePlan {$idCarePlan}");
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated CarePlan {$idCarePlan} via PATCH");
                 $this->successCount++;
             } else {
                 $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));

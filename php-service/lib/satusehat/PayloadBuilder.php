@@ -636,7 +636,7 @@ class SatuSehatPayloadBuilder
      * @param string $idCondition Existing Condition ID (if updating)
      * @return array|null Returns null if the ICD-10 code is invalid/empty (should be skipped).
      */
-    public static function condition(array $p, string $idPasien, string $idCondition = ''): ?array
+    public static function condition(array $p, string $idPasien, string $idCondition = '', ?string $idDokter = null, ?string $namaDokter = null): ?array
     {
         $startWaktu = self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
         $waktuPulang = $p['pulang'] ?? '';
@@ -686,8 +686,16 @@ class SatuSehatPayloadBuilder
             'encounter' => [
                 'reference' => 'Encounter/' . $p['id_encounter'],
                 'display'   => 'Diagnosa ' . $p['nm_pasien'] . ' selama kunjungan/dirawat dari tanggal ' . $startWaktu . ' sampai ' . $waktuPulang
-            ]
+            ],
+            'recordedDate' => $startWaktu,
         ];
+
+        if ($idDokter !== null) {
+            $payload['recorder'] = [
+                'reference' => 'Practitioner/' . $idDokter,
+                'display'   => $namaDokter ?? ''
+            ];
+        }
 
         if (!empty($idCondition)) {
             $payload['id'] = $idCondition;
@@ -839,7 +847,7 @@ class SatuSehatPayloadBuilder
      * @param string $idProcedure Existing Procedure ID (if updating)
      * @return array
      */
-    public static function procedure(array $p, string $idPasien, string $idProcedure = ''): array
+    public static function procedure(array $p, string $idPasien, string $idProcedure = '', ?string $idDokter = null, ?string $namaDokter = null): array
     {
         $startWaktu = self::sanitizeDateTime($p['waktu_registrasi'] ?? null, null, $p);
         $endWaktu = self::sanitizeDateTime($p['waktu_pulang'] ?? null, null, $p);
@@ -885,6 +893,18 @@ class SatuSehatPayloadBuilder
             ]
         ];
 
+        // Add performer (critical — 98% of Postman examples include it)
+        if ($idDokter !== null) {
+            $payload['performer'] = [
+                [
+                    'actor' => [
+                        'reference' => 'Practitioner/' . $idDokter,
+                        'display'   => $namaDokter ?? ''
+                    ]
+                ]
+            ];
+        }
+
         if (!empty($idProcedure)) {
             $payload['id'] = $idProcedure;
         }
@@ -900,6 +920,8 @@ class SatuSehatPayloadBuilder
      * @param string $idPasien     IHS Patient ID
      * @param string $idDokter     IHS Practitioner ID
      * @param string $idCarePlan   Existing CarePlan ID (if updating)
+     * @param string|null $title   CarePlan title (defaults to 'Instruksi Medik dan Keperawatan Pasien')
+     * @param array  $goalRefs     Array of Goal references (optional)
      * @return array
      */
     public static function carePlan(
@@ -907,7 +929,9 @@ class SatuSehatPayloadBuilder
         array $p,
         string $idPasien,
         string $idDokter,
-        string $idCarePlan = ''
+        string $idCarePlan = '',
+        ?string $title = null,
+        array $goalRefs = []
     ): array {
         $isRalan = ($p['status_lanjut'] === 'Ralan');
         $createdTime = self::sanitizeDateTime($p['tgl_perawatan'] ?? null, $p['jam_rawat'] ?? null, $p);
@@ -939,7 +963,7 @@ class SatuSehatPayloadBuilder
                     'value'  => $p['no_rawat']
                 ]
             ],
-            'title' => 'Instruksi Medik dan Keperawatan Pasien',
+            'title' => $title ?? 'Instruksi Medik dan Keperawatan Pasien',
             'status' => 'active',
             'intent' => 'plan',
             'category' => [
@@ -964,6 +988,24 @@ class SatuSehatPayloadBuilder
                 'display'   => $p['nama']
             ]
         ];
+
+        // Add period if available
+        $startWaktu = self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
+        $endWaktu = !empty($p['waktu_pulang']) ? self::sanitizeDateTime($p['waktu_pulang'], null, $p) : null;
+        $period = ['start' => $startWaktu];
+        if ($endWaktu) {
+            $period['end'] = $endWaktu;
+        }
+        $payload['period'] = $period;
+
+        // Add goal references if available
+        if (!empty($goalRefs)) {
+            $goals = [];
+            foreach ($goalRefs as $g) {
+                $goals[] = ['reference' => 'Goal/' . $g];
+            }
+            $payload['goal'] = $goals;
+        }
 
         if (!empty($idCarePlan)) {
             $payload['id'] = $idCarePlan;

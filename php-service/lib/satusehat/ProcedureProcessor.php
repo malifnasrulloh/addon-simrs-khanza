@@ -63,7 +63,7 @@ class SatuSehatProcedureProcessor
         if ($patients === null) {
             $patients = $this->db->fetchPendingProcedureActive($dateFrom, $dateTo);
         }
-        
+
         if (empty($patients)) {
             $this->log->info("[PHASE 1] No pending procedures to POST.");
             return;
@@ -87,6 +87,14 @@ class SatuSehatProcedureProcessor
                 continue;
             }
 
+            // Look up practitioner for performer field (optional — not required)
+            $idDokter = null;
+            $namaDokter = null;
+            if (!empty($p['ktp_dokter'])) {
+                $idDokter = $this->db->getIhsPractitioner($p['ktp_dokter']);
+                $namaDokter = $p['nama_dokter'] ?? '';
+            }
+
             // Preemptive Duplicate Check: Search if there is already a remote Procedure for this patient, encounter and code to avoid duplicate POSTs
             $idProcedure = $this->resolveDuplicateProcedure($idPasien, $idEncounter, $kode);
             if ($idProcedure) {
@@ -99,7 +107,10 @@ class SatuSehatProcedureProcessor
 
             $payload = SatuSehatPayloadBuilder::procedure(
                 $p,
-                $idPasien
+                $idPasien,
+                '',
+                $idDokter,
+                $namaDokter
             );
 
             $this->log->info("[PHASE 1] {$noRawat}: POST /Procedure (ICD-9: {$kode})");
@@ -126,16 +137,16 @@ class SatuSehatProcedureProcessor
         }
 
         if (empty($patients)) {
-            $this->log->info("[PHASE 2] No pending procedures to PUT.");
+            $this->log->info("[PHASE 2] No pending procedures to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($patients) . " procedure record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($patients) . " procedure record(s) to PATCH.");
 
         foreach ($patients as $p) {
             $noRawat = $p['no_rawat'];
             $kode = $p['kode'];
-            $statusRawat = $p['status'];
+            $idProcedure = $p['id_procedure'];
             $localState = $this->db->getProcedureLocalState($noRawat, $kode);
 
             if ($localState === 'updated') {
@@ -143,28 +154,21 @@ class SatuSehatProcedureProcessor
                 continue;
             }
 
-            $nik = $p['no_ktp'];
+            // Build PATCH operations — confirm status remains completed
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'completed'
+                ]
+            ];
 
-            $idPasien = $this->db->getIhsPatient($nik);
-
-            if (!$idPasien) {
-                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID. Skipped.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $payload = SatuSehatPayloadBuilder::procedure(
-                $p,
-                $idPasien,
-                $p['id_procedure']
-            );
-
-            $this->log->info("[PHASE 2] {$noRawat}: PUT /Procedure/{$p['id_procedure']} (ICD-9: {$kode})");
-            $result = $this->api->put("/Procedure/{$p['id_procedure']}", $payload);
+            $this->log->info("[PHASE 2] {$noRawat}: PATCH /Procedure/{$idProcedure} (" . count($ops) . " ops)");
+            $result = $this->api->patch("/Procedure/{$idProcedure}", $ops);
 
             if ($result['success']) {
                 $this->db->updateProcedureLocalState($noRawat, $kode, 'updated');
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Procedure {$p['id_procedure']}");
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Procedure {$idProcedure} via PATCH");
                 $this->successCount++;
             } else {
                 $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
