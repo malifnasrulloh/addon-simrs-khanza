@@ -312,21 +312,35 @@ class SatuSehatDatabase
     public function fetchPendingArrived(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter, 
-                rp.kd_poli, pol.nm_poli, smlr.id_lokasi_satusehat, rp.stts, rp.status_lanjut
+            SELECT
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
+                rp.kd_poli, pol.nm_poli,
+                COALESCE(smlranap.id_lokasi_satusehat, smlr.id_lokasi_satusehat) as id_lokasi_satusehat,
+                rp.stts, rp.status_lanjut,
+                ki.tgl_masuk, ki.jam_masuk, ki.stts_pulang, ki.lama
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
             INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
-            INNER JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
-            WHERE rp.status_bayar = 'Sudah Bayar' 
+            LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
+            LEFT JOIN (
+                SELECT ki1.*
+                FROM kamar_inap ki1
+                INNER JOIN (
+                    SELECT no_rawat, MAX(CONCAT(tgl_masuk, ' ', jam_masuk)) as max_datetime
+                    FROM kamar_inap
+                    GROUP BY no_rawat
+                ) ki2 ON ki1.no_rawat = ki2.no_rawat
+                     AND CONCAT(ki1.tgl_masuk, ' ', ki1.jam_masuk) = ki2.max_datetime
+            ) ki ON ki.no_rawat = rp.no_rawat AND rp.status_lanjut = 'Ranap'
+            LEFT JOIN satu_sehat_mapping_lokasi_ranap smlranap ON smlranap.kd_kamar = ki.kd_kamar
+            WHERE rp.status_bayar = 'Sudah Bayar'
               AND rp.tgl_registrasi BETWEEN :df AND :dt
               AND rp.no_rawat NOT IN (SELECT no_rawat FROM satu_sehat_encounter)
          ORDER BY no_rawat ASC
         ";
-        
+
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
         if ($limit !== null) {
             $sql .= " LIMIT :lim OFFSET :off";
@@ -345,24 +359,44 @@ class SatuSehatDatabase
     public function fetchPendingInProgress(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         // For simplicity, Java used tgl_registrasi for in-progress start, or tgl_perawatan from pemeriksaan_ralan
+        // For Ranap, use pemeriksaan_ranap instead
         $sql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter, 
-                rp.kd_poli, pol.nm_poli, smlr.id_lokasi_satusehat, rp.stts, rp.status_lanjut,
+            SELECT
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
+                rp.kd_poli, pol.nm_poli,
+                COALESCE(smlranap.id_lokasi_satusehat, smlr.id_lokasi_satusehat) as id_lokasi_satusehat,
+                rp.stts, rp.status_lanjut,
                 sse.id_encounter,
-                CONCAT(pr.tgl_perawatan, 'T', pr.jam_rawat, '+07:00') as waktu_perawatan
+                CASE
+                    WHEN rp.status_lanjut = 'Ranap' AND pranap.no_rawat IS NOT NULL
+                        THEN CONCAT(pranap.tgl_perawatan, 'T', pranap.jam_rawat, '+07:00')
+                    ELSE CONCAT(pr.tgl_perawatan, 'T', pr.jam_rawat, '+07:00')
+                END as waktu_perawatan,
+                ki.tgl_masuk, ki.jam_masuk, ki.stts_pulang, ki.lama
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
             INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
-            INNER JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
+            LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-            INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
+            LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
+            LEFT JOIN pemeriksaan_ranap pranap ON pranap.no_rawat = rp.no_rawat
+            LEFT JOIN (
+                SELECT ki1.*
+                FROM kamar_inap ki1
+                INNER JOIN (
+                    SELECT no_rawat, MAX(CONCAT(tgl_masuk, ' ', jam_masuk)) as max_datetime
+                    FROM kamar_inap
+                    GROUP BY no_rawat
+                ) ki2 ON ki1.no_rawat = ki2.no_rawat
+                     AND CONCAT(ki1.tgl_masuk, ' ', ki1.jam_masuk) = ki2.max_datetime
+            ) ki ON ki.no_rawat = rp.no_rawat AND rp.status_lanjut = 'Ranap'
+            LEFT JOIN satu_sehat_mapping_lokasi_ranap smlranap ON smlranap.kd_kamar = ki.kd_kamar
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
          ORDER BY no_rawat ASC
         ";
-        
+
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
         if ($limit !== null) {
             $sql .= " LIMIT :lim OFFSET :off";
@@ -381,14 +415,16 @@ class SatuSehatDatabase
     public function fetchPendingFinished(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter, 
-                rp.kd_poli, pol.nm_poli, smlr.id_lokasi_satusehat, rp.stts, rp.status_lanjut,
+            SELECT
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
+                rp.kd_poli, pol.nm_poli,
+                COALESCE(smlranap.id_lokasi_satusehat, smlr.id_lokasi_satusehat) as id_lokasi_satusehat,
+                rp.stts, rp.status_lanjut,
                 sse.id_encounter,
-                CASE 
-                    WHEN rp.status_lanjut = 'Ralan' THEN CONCAT(nj.tanggal, 'T', nj.jam, '+07:00') 
-                    WHEN rp.status_lanjut = 'Ranap' THEN CONCAT(ni.tanggal, 'T', ni.jam, '+07:00') 
+                CASE
+                    WHEN rp.status_lanjut = 'Ralan' THEN CONCAT(nj.tanggal, 'T', nj.jam, '+07:00')
+                    WHEN rp.status_lanjut = 'Ranap' THEN CONCAT(ni.tanggal, 'T', ni.jam, '+07:00')
                 END as waktu_pulang,
                 pr.tgl_perawatan, pr.jam_rawat,
                 ki.stts_pulang, ki.lama
@@ -396,13 +432,13 @@ class SatuSehatDatabase
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
             INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
-            INNER JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
+            LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
             LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
             LEFT JOIN (
-                SELECT ki1.no_rawat, ki1.stts_pulang, ki1.lama
+                SELECT ki1.no_rawat, ki1.stts_pulang, ki1.lama, ki1.kd_kamar
                 FROM kamar_inap ki1
                 INNER JOIN (
                     SELECT no_rawat, MAX(tgl_keluar) as max_tgl_keluar
@@ -411,11 +447,12 @@ class SatuSehatDatabase
                     GROUP BY no_rawat
                 ) ki2 ON ki1.no_rawat = ki2.no_rawat AND ki1.tgl_keluar = ki2.max_tgl_keluar
             ) ki ON ki.no_rawat = rp.no_rawat
+            LEFT JOIN satu_sehat_mapping_lokasi_ranap smlranap ON smlranap.kd_kamar = ki.kd_kamar
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
          ORDER BY no_rawat ASC
         ";
-        
+
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
         if ($limit !== null) {
             $sql .= " LIMIT :lim OFFSET :off";
@@ -613,11 +650,12 @@ class SatuSehatDatabase
     public function fetchPendingEocActive(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter, 
+            SELECT
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
                 dp.kd_penyakit, py.nm_penyakit, rp.stts, rp.status_lanjut, dp.status,
-                pr.tgl_perawatan, pr.jam_rawat, ki.tgl_keluar, ki.jam_keluar
+                pr.tgl_perawatan, pr.jam_rawat, ki.tgl_keluar, ki.jam_keluar,
+                ssc.id_condition
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
@@ -626,6 +664,7 @@ class SatuSehatDatabase
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
             LEFT JOIN kamar_inap ki ON ki.no_rawat = rp.no_rawat
+            LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.kd_penyakit = dp.kd_penyakit
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND rp.no_rawat NOT IN (SELECT no_rawat FROM satu_sehat_episode_of_care)
          ORDER BY no_rawat ASC
@@ -645,14 +684,15 @@ class SatuSehatDatabase
     public function fetchPendingEocFinished(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter, 
+            SELECT
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
                 dp.kd_penyakit, py.nm_penyakit, rp.stts, rp.status_lanjut, dp.status,
                 sseoc.id_episode_of_care,
-                CASE 
-                    WHEN rp.status_lanjut = 'Ralan' THEN CONCAT(nj.tanggal, 'T', nj.jam, '+07:00') 
-                    WHEN rp.status_lanjut = 'Ranap' THEN CONCAT(ni.tanggal, 'T', ni.jam, '+07:00') 
+                ssc.id_condition,
+                CASE
+                    WHEN rp.status_lanjut = 'Ralan' THEN CONCAT(nj.tanggal, 'T', nj.jam, '+07:00')
+                    WHEN rp.status_lanjut = 'Ranap' THEN CONCAT(ni.tanggal, 'T', ni.jam, '+07:00')
                 END as waktu_pulang
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
@@ -660,6 +700,7 @@ class SatuSehatDatabase
             INNER JOIN diagnosa_pasien dp ON dp.no_rawat = rp.no_rawat
             INNER JOIN penyakit py ON py.kd_penyakit = dp.kd_penyakit
             INNER JOIN satu_sehat_episode_of_care sseoc ON sseoc.no_rawat = rp.no_rawat
+            LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.kd_penyakit = dp.kd_penyakit
             LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
             LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt

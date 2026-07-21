@@ -10,6 +10,137 @@ declare(strict_types=1);
 
 class SatuSehatPayloadBuilder
 {
+    private static function getServiceType(string $kdPoli, string $statusLanjut): array
+    {
+        // Map kd_poli to service type based on known patterns
+        // If kd_poli starts with known prefixes, map to appropriate service type
+        $poli = strtoupper($kdPoli);
+
+        // IGD
+        if ($poli === 'IGDK') {
+            return [
+                'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
+                'code'   => '186',
+                'display' => 'Emergency'
+            ];
+        }
+
+        // Operating room
+        if (str_starts_with($poli, 'OK')) {
+            return [
+                'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
+                'code'   => '333',
+                'display' => 'Surgery'
+            ];
+        }
+
+        // ICU/NICU/PICU
+        if (in_array($poli, ['ICU', 'ICCU', 'NICU', 'PICU', 'PIICU'])) {
+            return [
+                'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
+                'code'   => '380',
+                'display' => 'Intensive care'
+            ];
+        }
+
+        // Inpatient wards
+        if ($statusLanjut === 'Ranap') {
+            return [
+                'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
+                'code'   => '110',
+                'display' => 'Inpatient care'
+            ];
+        }
+
+        // Default outpatient
+        return [
+            'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
+            'code'   => '108',
+            'display' => 'Outpatient care'
+        ];
+    }
+
+    private static function getLocationPeriodStart(array $p, string $status): ?string
+    {
+        // For Ranap, use admission time; for Ralan/IGD use registration time
+        if (($p['status_lanjut'] ?? '') === 'Ranap' && !empty($p['tgl_masuk'])) {
+            return self::sanitizeDateTime($p['tgl_masuk'] ?? null, $p['jam_masuk'] ?? null, $p);
+        }
+        return self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
+    }
+
+    private static function buildServiceClassExtension(array $p): array
+    {
+        $isRalan = ($p['status_lanjut'] ?? '') === 'Ralan';
+        $kdPoli = $p['kd_poli'] ?? '';
+
+        if ($kdPoli === 'IGDK') {
+            $serviceSystem = 'http://terminology.kemkes.go.id/CodeSystem/locationServiceClass-Outpatient';
+            $serviceCode = 'reguler';
+            $serviceDisplay = 'Kelas Reguler';
+        } elseif (!$isRalan) {
+            $serviceSystem = 'http://terminology.kemkes.go.id/CodeSystem/locationServiceClass-Inpatient';
+            // Infer bed class from kamar code if available, default to 3
+            $kdKamar = $p['kd_kamar'] ?? '';
+            if (str_starts_with($kdKamar, 'VIP')) {
+                $serviceCode = 'VIP';
+                $serviceDisplay = 'Kelas VIP';
+            } elseif (str_starts_with($kdKamar, 'K1')) {
+                $serviceCode = '1';
+                $serviceDisplay = 'Kelas 1';
+            } elseif (str_starts_with($kdKamar, 'K2')) {
+                $serviceCode = '2';
+                $serviceDisplay = 'Kelas 2';
+            } elseif (str_starts_with($kdKamar, 'K3') || str_starts_with($kdKamar, 'K3A')) {
+                $serviceCode = '3';
+                $serviceDisplay = 'Kelas 3';
+            } elseif (str_starts_with($kdKamar, 'ICU') || str_starts_with($kdKamar, 'ICCU') || str_starts_with($kdKamar, 'NICU') || str_starts_with($kdKamar, 'PICU')) {
+                $serviceCode = 'ICU';
+                $serviceDisplay = 'Kelas ICU';
+            } elseif (str_starts_with($kdKamar, 'ISO')) {
+                $serviceCode = 'isolasi';
+                $serviceDisplay = 'Kelas Isolasi';
+            } else {
+                $serviceCode = '3';
+                $serviceDisplay = 'Kelas 3';
+            }
+        } else {
+            $serviceSystem = 'http://terminology.kemkes.go.id/CodeSystem/locationServiceClass-Outpatient';
+            $serviceCode = 'reguler';
+            $serviceDisplay = 'Kelas Reguler';
+        }
+
+        return [
+            'url' => 'https://fhir.kemkes.go.id/r4/StructureDefinition/ServiceClass',
+            'extension' => [
+                [
+                    'url' => 'value',
+                    'valueCodeableConcept' => [
+                        'coding' => [
+                            [
+                                'system'  => $serviceSystem,
+                                'code'    => $serviceCode,
+                                'display' => $serviceDisplay
+                            ]
+                        ]
+                    ]
+                ],
+                [
+                    'url' => 'upgradeClassIndicator',
+                    'valueCodeableConcept' => [
+                        'coding' => [
+                            [
+                                'system' => 'http://terminology.kemkes.go.id/CodeSystem/locationUpgradeClass',
+                                'code'   => 'kelas-tetap',
+                                'display' => 'Kelas Tetap Perawatan'
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ];
+    }
+
     /**
      * Build Encounter payload.
      *
@@ -20,6 +151,7 @@ class SatuSehatPayloadBuilder
      * @param string $status   'arrived', 'in-progress', or 'finished'
      * @param array  $diagnoses Array of diagnoses (only used if status is finished)
      * @param string $idEncounter Existing Encounter ID (if updating)
+     * @param string|null $idEpisodeOfCare EpisodeOfCare ID to link (optional)
      * @return array
      */
     public static function encounter(
@@ -29,9 +161,11 @@ class SatuSehatPayloadBuilder
         string $idDokter,
         string $status,
         array $diagnoses = [],
-        string $idEncounter = ''
+        string $idEncounter = '',
+        ?string $idEpisodeOfCare = null
     ): array {
         $isRalan = ($p['status_lanjut'] === 'Ralan');
+        $isRanap = ($p['status_lanjut'] === 'Ranap');
         if (($p['kd_poli'] ?? '') === 'IGDK') {
             $classCode = 'EMER';
             $classDisplay = 'emergency';
@@ -39,58 +173,99 @@ class SatuSehatPayloadBuilder
             $classCode = $isRalan ? 'AMB' : 'IMP';
             $classDisplay = $isRalan ? 'ambulatory' : 'inpatient encounter';
         }
-        
-        $startWaktu = self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
+
+        // For Ranap, use admission time as start instead of registration time
+        $startWaktu = $isRanap && !empty($p['tgl_masuk'])
+            ? self::sanitizeDateTime($p['tgl_masuk'] ?? null, $p['jam_masuk'] ?? null, $p)
+            : self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
+
         $inProgressWaktu = self::sanitizeDateTime($p['waktu_perawatan'] ?? null, null, $p);
         $finishedWaktu = !empty($p['waktu_pulang']) ? self::sanitizeDateTime($p['waktu_pulang'], null, $p) : null;
 
         // Build history array
         $statusHistory = [];
-        
-        // 1. Arrived state
-        $statusHistory[] = [
-            'status' => 'arrived',
-            'period' => [
-                'start' => $startWaktu,
-                // if it goes past arrived, we set 'end' to the next state's start
-                // For arrived only, no 'end' yet. If updating, java sets end = inProgressWaktu.
-            ]
-        ];
 
-        if (in_array($status, ['in-progress', 'finished'])) {
-            $statusHistory[0]['period']['end'] = $inProgressWaktu;
-            
-            $historyInProgress = [
+        // For Ranap, the first status is 'in-progress' (not 'arrived')
+        if ($isRanap && $classCode === 'IMP') {
+            // Inpatient starts at in-progress
+            $statusHistory[] = [
                 'status' => 'in-progress',
                 'period' => [
-                    'start' => $inProgressWaktu,
+                    'start' => $startWaktu,
                 ]
             ];
-            
             if ($status === 'finished' && $finishedWaktu) {
-                $historyInProgress['period']['end'] = $finishedWaktu;
+                $statusHistory[0]['period']['end'] = $finishedWaktu;
+                $statusHistory[] = [
+                    'status' => 'finished',
+                    'period' => [
+                        'start' => $finishedWaktu,
+                        'end'   => $finishedWaktu
+                    ]
+                ];
             }
-            $statusHistory[] = $historyInProgress;
+        } else {
+            // Ralan/IGD: arrived -> in-progress -> finished
+            $statusHistory[] = [
+                'status' => 'arrived',
+                'period' => [
+                    'start' => $startWaktu,
+                ]
+            ];
+
+            if (in_array($status, ['in-progress', 'finished'])) {
+                $statusHistory[0]['period']['end'] = $inProgressWaktu;
+
+                $historyInProgress = [
+                    'status' => 'in-progress',
+                    'period' => [
+                        'start' => $inProgressWaktu,
+                    ]
+                ];
+
+                if ($status === 'finished' && $finishedWaktu) {
+                    $historyInProgress['period']['end'] = $finishedWaktu;
+                }
+                $statusHistory[] = $historyInProgress;
+            }
+
+            if ($status === 'finished' && $finishedWaktu) {
+                $statusHistory[] = [
+                    'status' => 'finished',
+                    'period' => [
+                        'start' => $finishedWaktu,
+                        'end'   => $finishedWaktu
+                    ]
+                ];
+            }
         }
 
+        // Build location entry with period and ServiceClass extension
+        $locationEntry = [
+            'location' => [
+                'reference' => 'Location/' . $p['id_lokasi_satusehat'],
+                'display'   => $p['nm_poli']
+            ],
+            'period' => [
+                'start' => self::getLocationPeriodStart($p, $status),
+            ],
+            'extension' => [
+                self::buildServiceClassExtension($p)
+            ]
+        ];
         if ($status === 'finished' && $finishedWaktu) {
-            $statusHistory[] = [
-                'status' => 'finished',
-                'period' => [
-                    'start' => $finishedWaktu,
-                    'end'   => $finishedWaktu
-                ]
-            ];
+            $locationEntry['period']['end'] = $finishedWaktu;
         }
 
         $payload = [
             'resourceType' => 'Encounter',
-            'status' => $status,
+            'status' => ($isRanap && $classCode === 'IMP') ? 'in-progress' : $status,
             'class' => [
                 'system'  => 'http://terminology.hl7.org/CodeSystem/v3-ActCode',
                 'code'    => $classCode,
                 'display' => $classDisplay
             ],
+            'serviceType' => self::getServiceType($p['kd_poli'] ?? '', $p['status_lanjut'] ?? ''),
             'subject' => [
                 'reference' => 'Patient/' . $idPasien,
                 'display'   => $p['nm_pasien']
@@ -117,14 +292,7 @@ class SatuSehatPayloadBuilder
             'period' => [
                 'start' => $startWaktu,
             ],
-            'location' => [
-                [
-                    'location' => [
-                        'reference' => 'Location/' . $p['id_lokasi_satusehat'],
-                        'display'   => $p['nm_poli']
-                    ]
-                ]
-            ],
+            'location' => [$locationEntry],
             'statusHistory' => $statusHistory,
             'serviceProvider' => [
                 'reference' => 'Organization/' . $orgId
@@ -141,8 +309,34 @@ class SatuSehatPayloadBuilder
             $payload['period']['end'] = $finishedWaktu;
         }
 
+        // Add episodeOfCare link if present
+        if ($idEpisodeOfCare !== null) {
+            $payload['episodeOfCare'] = [
+                ['reference' => 'EpisodeOfCare/' . $idEpisodeOfCare]
+            ];
+        }
+
         if (!empty($idEncounter)) {
             $payload['id'] = $idEncounter;
+        }
+
+        // Add length (duration) for finished encounters
+        if ($status === 'finished' && $finishedWaktu) {
+            $durationSeconds = strtotime($finishedWaktu) - strtotime($startWaktu);
+            if ($durationSeconds > 0) {
+                $unit = $isRalan ? 'min' : 'd';
+                $durationValue = $isRalan ? round($durationSeconds / 60) : round($durationSeconds / 86400, 1);
+                if ($durationValue < 1) {
+                    $durationValue = 1;
+                    $unit = 'min';
+                }
+                $payload['length'] = [
+                    'value'  => $durationValue,
+                    'unit'   => $unit,
+                    'system' => 'http://unitsofmeasure.org',
+                    'code'   => $unit
+                ];
+            }
         }
 
         // Add hospitalization discharge disposition mapping if status is finished
@@ -284,6 +478,7 @@ class SatuSehatPayloadBuilder
      * @param string $status   'active' or 'finished'
      * @param EpisodeOfCareType $type Type of episode (e.g., ANC, TB-SO)
      * @param string $idEpisode Existing EpisodeOfCare ID (if updating)
+     * @param array  $diagnoses Array of diagnoses (optional, with id_condition, nm_penyakit)
      * @return array
      */
     public static function episodeOfCare(
@@ -293,7 +488,8 @@ class SatuSehatPayloadBuilder
         string $idDokter,
         string $status,
         EpisodeOfCareType $type,
-        string $idEpisode = ''
+        string $idEpisode = '',
+        array $diagnoses = []
     ): array {
         $startWaktu = self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
         $finishedWaktu = !empty($p['waktu_pulang']) ? self::sanitizeDateTime($p['waktu_pulang'], null, $p) : null;
@@ -361,6 +557,39 @@ class SatuSehatPayloadBuilder
 
         if (!empty($idEpisode)) {
             $payload['id'] = $idEpisode;
+        }
+
+        // Add diagnosis array with Condition references
+        if (!empty($diagnoses)) {
+            $diagnosisArray = [];
+            $rank = 1;
+            foreach ($diagnoses as $diag) {
+                $idCond = $diag['id_condition'] ?? ($diag['id'] ?? null);
+                $nmPenyakit = $diag['nm_penyakit'] ?? ($diag['display'] ?? '');
+                if (empty($idCond)) {
+                    continue;
+                }
+                $diagnosisArray[] = [
+                    'condition' => [
+                        'reference' => 'Condition/' . $idCond,
+                        'display'   => $nmPenyakit
+                    ],
+                    'role' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://terminology.hl7.org/CodeSystem/diagnosis-role',
+                                'code'    => 'DD',
+                                'display' => 'Discharged Diagnosis'
+                            ]
+                        ]
+                    ],
+                    'rank' => $rank
+                ];
+                $rank++;
+            }
+            if (!empty($diagnosisArray)) {
+                $payload['diagnosis'] = $diagnosisArray;
+            }
         }
 
         return $payload;

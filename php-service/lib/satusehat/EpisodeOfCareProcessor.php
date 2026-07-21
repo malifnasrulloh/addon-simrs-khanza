@@ -121,7 +121,9 @@ class SatuSehatEpisodeOfCareProcessor
                 $idPasien,
                 $idDokter,
                 'active',
-                $type
+                $type,
+                '',
+                [] // diagnoses — no id_condition yet at POST time typically
             );
 
             $this->log->info("[PHASE 1] {$noRawat}: POST /EpisodeOfCare (active, type={$type->code})");
@@ -221,83 +223,117 @@ class SatuSehatEpisodeOfCareProcessor
 
             $eocId = $p['id_episode_of_care'];
 
-            // ── GET the existing EpisodeOfCare from SATUSEHAT ──────────────
-            $this->log->info("[PHASE 2] {$noRawat}: GET /EpisodeOfCare/{$eocId}");
-            $getResult = $this->api->get("/EpisodeOfCare/{$eocId}");
+            // ── Compute discharge time ──────────────────────────────────────
+            $startWaktu = SatuSehatPayloadBuilder::sanitizeDateTime(
+                $p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p
+            );
 
-            if (!$getResult['success'] || empty($getResult['data']['id'])) {
-                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed to GET EpisodeOfCare/{$eocId}. Skipped.");
-                $this->failCount++;
-                continue;
+            $dischargeWaktu = null;
+            if (!empty($p['waktu_pulang'])) {
+                $dischargeWaktu = SatuSehatPayloadBuilder::sanitizeDateTime($p['waktu_pulang'], null, $p);
             }
-
-            $resource = $getResult['data'];
-
-            // Already finished on server? Just update local state
-            if (($resource['status'] ?? '') === 'finished') {
-                $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $eocId);
-                $this->db->updateEocLocalState($noRawat, 'finished');
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Already finished on SATUSEHAT → synced locally");
-                $this->successCount++;
-                continue;
-            }
-
-            // ── Compute period.end ─────────────────────────────────────────
-            $finishedWaktu = $p['waktu_pulang'] ?? null;
-            $periodStart = $resource['period']['start'] ?? null;
-
-            if (!$finishedWaktu && $periodStart) {
-                // Fallback: period.start + 1 day (UTC)
+            if (!$dischargeWaktu) {
+                // Fallback: start + 1 day
                 try {
-                    $startDt = new \DateTime($periodStart);
+                    $startDt = new \DateTime($startWaktu);
                     $endDt = (clone $startDt)->modify('+1 day');
-                    $finishedWaktu = $endDt->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d\TH:i:s\Z');
-                    $this->log->info("[PHASE 2] {$noRawat}: No discharge time → fallback to start+1day ({$finishedWaktu})");
+                    $dischargeWaktu = $endDt->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d\TH:i:s\Z');
+                    $this->log->info("[PHASE 2] {$noRawat}: No discharge time → fallback to start+1day ({$dischargeWaktu})");
                 } catch (\Throwable $e) {
-                    $finishedWaktu = (new \DateTime('now', new \DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z');
-                    $this->log->warning("[PHASE 2] {$noRawat}: Cannot parse period.start → fallback to NOW ({$finishedWaktu})");
+                    $dischargeWaktu = (new \DateTime('now', new \DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z');
+                    $this->log->warning("[PHASE 2] {$noRawat}: Cannot parse start → fallback to NOW ({$dischargeWaktu})");
                 }
-            } elseif (!$finishedWaktu) {
-                $finishedWaktu = (new \DateTime('now', new \DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z');
-                $this->log->warning("[PHASE 2] {$noRawat}: No discharge time and no period.start → fallback to NOW ({$finishedWaktu})");
             }
 
-            // ── Mutate the resource ────────────────────────────────────────
-            $resource['status'] = 'finished';
-            $resource['period']['end'] = $finishedWaktu;
+            // ── Build PATCH operations (dynamic ─ only include what we have) ──
+            $ops = [];
 
-            // Add statusHistory entry for the finished transition
-            if (!isset($resource['statusHistory'])) {
-                $resource['statusHistory'] = [];
-            }
-            // Close the active period in the last statusHistory entry
-            $lastIdx = count($resource['statusHistory']) - 1;
-            if ($lastIdx >= 0 && ($resource['statusHistory'][$lastIdx]['status'] ?? '') === 'active') {
-                $resource['statusHistory'][$lastIdx]['period']['end'] = $finishedWaktu;
-            }
-            $resource['statusHistory'][] = [
-                'status' => 'finished',
-                'period' => [
-                    'start' => $finishedWaktu,
-                    'end'   => $finishedWaktu
+            // 1. Replace status
+            $ops[] = ['op' => 'replace', 'path' => '/status', 'value' => 'finished'];
+
+            // 2. Replace period (start + end)
+            $ops[] = [
+                'op' => 'replace',
+                'path' => '/period',
+                'value' => [
+                    'start' => $startWaktu,
+                    'end'   => $dischargeWaktu
                 ]
             ];
 
-            // Remove server-managed fields that can't be sent in PUT
-            unset($resource['meta']);
+            // 3. Replace statusHistory (full rebuild)
+            $ops[] = [
+                'op' => 'replace',
+                'path' => '/statusHistory',
+                'value' => [
+                    [
+                        'status' => 'active',
+                        'period' => [
+                            'start' => $startWaktu,
+                            'end'   => $dischargeWaktu
+                        ]
+                    ],
+                    [
+                        'status' => 'finished',
+                        'period' => [
+                            'start' => $dischargeWaktu,
+                            'end'   => $dischargeWaktu
+                        ]
+                    ]
+                ]
+            ];
 
-            // ── PUT the modified resource back ─────────────────────────────
-            $this->log->info("[PHASE 2] {$noRawat}: PUT /EpisodeOfCare/{$eocId} (finished)");
-            $result = $this->api->put("/EpisodeOfCare/{$eocId}", $resource);
+            // 4. Replace careManager if practitioner data is available
+            if ($idDokter && !empty($p['nama'])) {
+                $ops[] = [
+                    'op' => 'replace',
+                    'path' => '/careManager',
+                    'value' => [
+                        'reference' => 'Practitioner/' . $idDokter,
+                        'display'   => $p['nama']
+                    ]
+                ];
+            }
+
+            // 5. Add diagnosis array if id_condition is available
+            if (!empty($p['id_condition'])) {
+                $diagnosisPayload = [
+                    [
+                        'condition' => [
+                            'reference' => 'Condition/' . $p['id_condition'],
+                            'display'   => $p['nm_penyakit'] ?? ''
+                        ],
+                        'role' => [
+                            'coding' => [
+                                [
+                                    'system'  => 'http://terminology.hl7.org/CodeSystem/diagnosis-role',
+                                    'code'    => 'DD',
+                                    'display' => 'Discharged Diagnosis'
+                                ]
+                            ]
+                        ],
+                        'rank' => 1
+                    ]
+                ];
+                $ops[] = [
+                    'op' => 'replace',
+                    'path' => '/diagnosis',
+                    'value' => $diagnosisPayload
+                ];
+            }
+
+            // ── Execute PATCH ───────────────────────────────────────────────
+            $this->log->info("[PHASE 2] {$noRawat}: PATCH /EpisodeOfCare/{$eocId} (finished, " . count($ops) . " ops)");
+            $result = $this->api->patch("/EpisodeOfCare/{$eocId}", $ops);
 
             if ($result['success']) {
                 $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $eocId);
                 $this->db->updateEocLocalState($noRawat, 'finished');
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to finished");
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to finished via PATCH");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['details']['text'] 
-                    ?? $result['data']['issue'][0]['diagnostics'] 
+                $errorMessage = $result['data']['issue'][0]['details']['text']
+                    ?? $result['data']['issue'][0]['diagnostics']
                     ?? $result['message'];
 
                 if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {

@@ -67,7 +67,7 @@ class SatuSehatEncounterProcessor
         if ($patients === null) {
             $patients = $this->db->fetchPendingArrived($dateFrom, $dateTo);
         }
-        
+
         if (empty($patients)) {
             $this->log->info("[PHASE 1] No pending 'arrived' encounters.");
             return;
@@ -89,22 +89,28 @@ class SatuSehatEncounterProcessor
                 continue;
             }
 
+            // Determine target status:
+            // - Ranap: POST directly at 'in-progress' (admission time)
+            // - Ralan/IGD: POST at 'arrived' (registration time)
+            $isRanap = ($p['status_lanjut'] ?? '') === 'Ranap';
+            $targetStatus = $isRanap ? 'in-progress' : 'arrived';
+
             $payload = SatuSehatPayloadBuilder::encounter(
                 $this->config->orgId,
                 $p,
                 $idPasien,
                 $idDokter,
-                'arrived'
+                $targetStatus
             );
 
-            $this->log->info("[PHASE 1] {$noRawat}: POST /Encounter (arrived)");
+            $this->log->info("[PHASE 1] {$noRawat}: POST /Encounter ({$targetStatus})");
             $result = $this->api->post('/Encounter', $payload);
 
             if ($result['success'] && isset($result['data']['id'])) {
                 $idEncounter = $result['data']['id'];
                 $this->db->saveEncounter($noRawat, $idEncounter);
-                $this->db->updateLocalState($noRawat, 'arrived');
-                $this->log->info("[PHASE 1] {$noRawat}: ✓ Created Encounter {$idEncounter}");
+                $this->db->updateLocalState($noRawat, $targetStatus);
+                $this->log->info("[PHASE 1] {$noRawat}: ✓ Created Encounter {$idEncounter} ({$targetStatus})");
                 $this->successCount++;
             } else {
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
@@ -116,7 +122,7 @@ class SatuSehatEncounterProcessor
 
                     if ($idEncounter) {
                         $this->db->saveEncounter($noRawat, $idEncounter);
-                        $this->db->updateLocalState($noRawat, 'arrived');
+                        $this->db->updateLocalState($noRawat, $targetStatus);
                         $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered Encounter {$idEncounter} from Satu Sehat API");
                         $this->successCount++;
                     } else {
@@ -165,22 +171,54 @@ class SatuSehatEncounterProcessor
                 continue;
             }
 
-            $payload = SatuSehatPayloadBuilder::encounter(
-                $this->config->orgId,
-                $p,
-                $idPasien,
-                $idDokter,
-                'in-progress',
-                [],
-                $p['id_encounter']
-            );
+            $idEncounter = $p['id_encounter'];
 
-            $this->log->info("[PHASE 2] {$noRawat}: PUT /Encounter/{$p['id_encounter']} (in-progress)");
-            $result = $this->api->put("/Encounter/{$p['id_encounter']}", $payload);
+            // Build PATCH operations for in-progress transition
+            $startWaktu = SatuSehatPayloadBuilder::sanitizeDateTime(
+                $p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p
+            );
+            $inProgressWaktu = !empty($p['waktu_perawatan'])
+                ? SatuSehatPayloadBuilder::sanitizeDateTime($p['waktu_perawatan'], null, $p)
+                : $startWaktu;
+
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'in-progress'
+                ],
+                [
+                    'op' => 'replace',
+                    'path' => '/period/end',
+                    'value' => $inProgressWaktu
+                ],
+                [
+                    'op' => 'replace',
+                    'path' => '/statusHistory',
+                    'value' => [
+                        [
+                            'status' => 'arrived',
+                            'period' => [
+                                'start' => $startWaktu,
+                                'end'   => $inProgressWaktu
+                            ]
+                        ],
+                        [
+                            'status' => 'in-progress',
+                            'period' => [
+                                'start' => $inProgressWaktu
+                            ]
+                        ]
+                    ]
+                ]
+            ];
+
+            $this->log->info("[PHASE 2] {$noRawat}: PATCH /Encounter/{$idEncounter} (in-progress)");
+            $result = $this->api->patch("/Encounter/{$idEncounter}", $ops);
 
             if ($result['success']) {
                 $this->db->updateLocalState($noRawat, 'in-progress');
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to in-progress");
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to in-progress via PATCH");
                 $this->successCount++;
             } else {
                 $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
@@ -230,22 +268,166 @@ class SatuSehatEncounterProcessor
                 continue;
             }
 
-            $payload = SatuSehatPayloadBuilder::encounter(
-                $this->config->orgId,
-                $p,
-                $idPasien,
-                $idDokter,
-                'finished',
-                $diagnoses,
-                $p['id_encounter']
-            );
+            $idEncounter = $p['id_encounter'];
 
-            $this->log->info("[PHASE 3] {$noRawat}: PUT /Encounter/{$p['id_encounter']} (finished)");
-            $result = $this->api->put("/Encounter/{$p['id_encounter']}", $payload);
+            // Build PATCH operations dynamically for finished transition
+            $startWaktu = SatuSehatPayloadBuilder::sanitizeDateTime(
+                $p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p
+            );
+            $finishedWaktu = !empty($p['waktu_pulang'])
+                ? SatuSehatPayloadBuilder::sanitizeDateTime($p['waktu_pulang'], null, $p)
+                : null;
+
+            // Compute statusHistory based on encounter type
+            $isRanap = ($p['status_lanjut'] ?? '') === 'Ranap';
+            if ($isRanap) {
+                // Ranap: in-progress -> finished
+                $statusHistory = [
+                    [
+                        'status' => 'in-progress',
+                        'period' => [
+                            'start' => $startWaktu,
+                            'end'   => $finishedWaktu
+                        ]
+                    ]
+                ];
+                if ($finishedWaktu) {
+                    $statusHistory[] = [
+                        'status' => 'finished',
+                        'period' => [
+                            'start' => $finishedWaktu,
+                            'end'   => $finishedWaktu
+                        ]
+                    ];
+                }
+            } else {
+                // Ralan/IGD: arrived -> in-progress -> finished
+                $inProgressWaktu = SatuSehatPayloadBuilder::sanitizeDateTime(
+                    $p['waktu_perawatan'] ?? null, null, $p
+                );
+                if (!$inProgressWaktu) {
+                    $inProgressWaktu = $startWaktu;
+                }
+                $statusHistory = [
+                    [
+                        'status' => 'arrived',
+                        'period' => [
+                            'start' => $startWaktu,
+                            'end'   => $inProgressWaktu
+                        ]
+                    ],
+                    [
+                        'status' => 'in-progress',
+                        'period' => [
+                            'start' => $inProgressWaktu,
+                            'end'   => $finishedWaktu
+                        ]
+                    ]
+                ];
+                if ($finishedWaktu) {
+                    $statusHistory[] = [
+                        'status' => 'finished',
+                        'period' => [
+                            'start' => $finishedWaktu,
+                            'end'   => $finishedWaktu
+                        ]
+                    ];
+                }
+            }
+
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'finished'
+                ],
+                [
+                    'op' => 'replace',
+                    'path' => '/period/end',
+                    'value' => $finishedWaktu
+                ],
+                [
+                    'op' => 'replace',
+                    'path' => '/statusHistory',
+                    'value' => $statusHistory
+                ]
+            ];
+
+            // Add diagnosis if available
+            if (!empty($diagnoses)) {
+                $diagnosisPayload = [];
+                $rank = 1;
+                foreach ($diagnoses as $diag) {
+                    $diagnosisPayload[] = [
+                        'condition' => [
+                            'reference' => 'Condition/' . $diag['id_condition'],
+                            'display'   => $diag['nm_penyakit']
+                        ],
+                        'use' => [
+                            'coding' => [
+                                [
+                                    'system'  => 'http://terminology.hl7.org/CodeSystem/diagnosis-role',
+                                    'code'    => 'DD',
+                                    'display' => 'Discharge diagnosis'
+                                ]
+                            ]
+                        ],
+                        'rank' => $rank
+                    ];
+                    $rank++;
+                }
+                $ops[] = [
+                    'op' => 'replace',
+                    'path' => '/diagnosis',
+                    'value' => $diagnosisPayload
+                ];
+            }
+
+            // Add hospitalization with discharge disposition
+            $dischargeDisposition = $this->buildDischargeDisposition($p);
+            if ($dischargeDisposition !== null) {
+                $ops[] = [
+                    'op' => 'replace',
+                    'path' => '/hospitalization',
+                    'value' => [
+                        'dischargeDisposition' => [
+                            'coding' => [
+                                $dischargeDisposition
+                            ]
+                        ]
+                    ]
+                ];
+            }
+
+            // Add length (duration)
+            if ($finishedWaktu) {
+                $durationSeconds = strtotime($finishedWaktu) - strtotime($startWaktu);
+                if ($durationSeconds > 0) {
+                    $unit = $isRanap ? 'd' : 'min';
+                    $durationValue = $isRanap ? round($durationSeconds / 86400, 1) : round($durationSeconds / 60);
+                    if ($durationValue < 1) {
+                        $durationValue = 1;
+                        $unit = 'min';
+                    }
+                    $ops[] = [
+                        'op' => 'replace',
+                        'path' => '/length',
+                        'value' => [
+                            'value'  => $durationValue,
+                            'unit'   => $unit,
+                            'system' => 'http://unitsofmeasure.org',
+                            'code'   => $unit
+                        ]
+                    ];
+                }
+            }
+
+            $this->log->info("[PHASE 3] {$noRawat}: PATCH /Encounter/{$idEncounter} (finished, " . count($ops) . " ops)");
+            $result = $this->api->patch("/Encounter/{$idEncounter}", $ops);
 
             if ($result['success']) {
                 $this->db->updateLocalState($noRawat, 'finished');
-                $this->log->info("[PHASE 3] {$noRawat}: ✓ Updated to finished");
+                $this->log->info("[PHASE 3] {$noRawat}: ✓ Updated to finished via PATCH");
                 $this->successCount++;
             } else {
                 $this->log->warning("[PHASE 3] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
@@ -274,5 +456,92 @@ class SatuSehatEncounterProcessor
         }
 
         return null;
+    }
+
+    /**
+     * Build discharge disposition coding array from patient data.
+     * Mirrors the logic from PayloadBuilder::encounter().
+     */
+    private function buildDischargeDisposition(array $p): ?array
+    {
+        $isRalan = ($p['status_lanjut'] ?? '') === 'Ralan';
+
+        if ($isRalan) {
+            $stts = $p['stts'] ?? '';
+            if ($stts === 'Dirujuk') {
+                return [
+                    'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                    'code' => 'other-hcf',
+                    'display' => 'Other healthcare facility'
+                ];
+            } elseif ($stts === 'Meninggal') {
+                return [
+                    'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                    'code' => 'oth',
+                    'display' => 'Other'
+                ];
+            } elseif ($stts === 'Pulang Paksa') {
+                return [
+                    'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                    'code' => 'aadvice',
+                    'display' => 'Left against advice'
+                ];
+            } else {
+                return [
+                    'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                    'code' => 'home',
+                    'display' => 'Home'
+                ];
+            }
+        } else {
+            // Inpatient (Ranap)
+            $sttsPulang = $p['stts_pulang'] ?? '';
+            $lama = intval($p['lama'] ?? 0);
+            if (in_array($sttsPulang, ['Sehat', 'Sembuh', 'Membaik', 'Atas Persetujuan Dokter'])) {
+                return [
+                    'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                    'code' => 'home',
+                    'display' => 'Home'
+                ];
+            } elseif (in_array($sttsPulang, ['Atas Permintaan Sendiri', 'APS', 'Isoman'])) {
+                return [
+                    'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                    'code' => 'aadvice',
+                    'display' => 'Left against advice'
+                ];
+            } elseif ($sttsPulang === 'Pulang Paksa') {
+                return [
+                    'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                    'code' => 'aadvice',
+                    'display' => 'Left against advice'
+                ];
+            } elseif ($sttsPulang === 'Rujuk') {
+                return [
+                    'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                    'code' => 'other-hcf',
+                    'display' => 'Other healthcare facility'
+                ];
+            } elseif (in_array($sttsPulang, ['+', 'Meninggal'])) {
+                if ($lama <= 2) {
+                    return [
+                        'system' => 'http://terminology.kemkes.go.id/CodeSystem/discharge-disposition',
+                        'code' => 'exp-lt48h',
+                        'display' => 'Meninggal < 48 jam'
+                    ];
+                } else {
+                    return [
+                        'system' => 'http://terminology.kemkes.go.id/CodeSystem/discharge-disposition',
+                        'code' => 'exp-gt48h',
+                        'display' => 'Meninggal > 48 jam'
+                    ];
+                }
+            } else {
+                return [
+                    'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                    'code' => 'home',
+                    'display' => 'Home'
+                ];
+            }
+        }
     }
 }
