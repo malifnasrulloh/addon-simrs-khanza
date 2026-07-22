@@ -168,11 +168,11 @@ class SatuSehatMedicationRequestProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending MedicationRequest to PUT.");
+            $this->log->info("[PHASE 2] No pending MedicationRequest to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " medication request record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " medication request record(s) to PATCH.");
 
         foreach ($records as $medreq) {
             $noResep = $medreq['no_resep'];
@@ -187,34 +187,18 @@ class SatuSehatMedicationRequestProcessor
                 continue;
             }
 
-            $nikPasien = $medreq['no_ktp'];
-            $nikPraktisi = $medreq['ktppraktisi'];
-
-            $idPasien = $this->db->getIhsPatient($nikPasien);
-            if (!$idPasien) {
-                $this->log->warning("[PHASE 2] {$noResep}: Missing IHS ID for Patient (NIK: {$nikPasien}). Skipped.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $idDokter = $this->db->getIhsPractitioner($nikPraktisi);
-            if (!$idDokter) {
-                $this->log->warning("[PHASE 2] {$noResep}: Missing IHS ID for Practitioner (NIK: {$nikPraktisi}). Skipped.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $payload = SatuSehatPayloadBuilder::medicationRequest(
-                $this->config->orgId,
-                $medreq,
-                $idPasien,
-                $idDokter,
-                $idMedicationRequest
-            );
+            // Build PATCH operations — confirm completed status
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'completed'
+                ]
+            ];
 
             $label = $isRacikan ? "{$noResep}-{$noRacik}" : "{$noResep}";
-            $this->log->info("[PHASE 2] {$label}: PUT /MedicationRequest/{$idMedicationRequest} (Drug: {$medreq['obat_display']})");
-            $result = $this->api->put("/MedicationRequest/{$idMedicationRequest}", $payload);
+            $this->log->info("[PHASE 2] {$label}: PATCH /MedicationRequest/{$idMedicationRequest} (" . count($ops) . " ops)");
+            $result = $this->api->patch("/MedicationRequest/{$idMedicationRequest}", $ops);
 
             if ($result['success']) {
                 $this->db->updateMedicationRequestLocalState($noResep, $kodeBrng, $noRacik, 'updated');

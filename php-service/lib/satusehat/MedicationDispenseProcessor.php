@@ -181,11 +181,11 @@ class SatuSehatMedicationDispenseProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending MedicationDispense to PUT.");
+            $this->log->info("[PHASE 2] No pending MedicationDispense to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " MedicationDispense record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " MedicationDispense record(s) to PATCH.");
 
         foreach ($records as $p) {
             $noRawat = $p['no_rawat'];
@@ -204,48 +204,17 @@ class SatuSehatMedicationDispenseProcessor
                 continue;
             }
 
-            // Look up Patient ID
-            $idPasien = $this->db->getIhsPatient($p['no_ktp']);
-            if (!$idPasien) {
-                $this->log->warning("[PHASE 2] [SKIPPED] Patient No.RM: {$p['no_rkm_medis']} has no valid IHS ID.");
-                $this->failCount++;
-                continue;
-            }
+            // Build PATCH operations — confirm completed status
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'completed'
+                ]
+            ];
 
-            // Look up Practitioner ID
-            $idDokter = $this->db->getIhsPractitioner($p['ktppraktisi']);
-            if (!$idDokter) {
-                $this->log->warning("[PHASE 2] [SKIPPED] Practitioner Name: {$p['nama']} has no valid IHS ID.");
-                $this->failCount++;
-                continue;
-            }
-
-            // Authorizing prescription lookup (MedicationRequest)
-            $idMedicationRequest = $this->db->getMedicationRequestId($noResep, $kodeBrng);
-            if (empty($idMedicationRequest)) {
-                $reqState = $this->db->getMedicationRequestLocalState($noResep, $kodeBrng, '');
-                if (in_array($reqState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
-                    $this->log->warning("[PHASE 2] [SKIPPED] Authorizing MedicationRequest has terminal failure state '{$reqState}'. Marking MedicationDispense as failed_rule.");
-                    $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'failed_rule');
-                    $this->skipCount++;
-                    continue;
-                }
-                $this->log->warning("[PHASE 2] [SKIPPED] Authorizing MedicationRequest not found or not yet synced for Resep: {$noResep}, Kode Barang: {$kodeBrng}. MedicationDispense must wait.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $payload = SatuSehatPayloadBuilder::medicationDispense(
-                $this->config->orgId,
-                $p,
-                $idPasien,
-                $idDokter,
-                $idMedicationRequest,
-                $idDispense
-            );
-
-            $this->log->info("[PHASE 2] {$noRawat} [{$statusPemberian}]: PUT /MedicationDispense/{$idDispense} (Resep: {$noResep}, Kode Barang: {$kodeBrng})");
-            $result = $this->api->put("/MedicationDispense/{$idDispense}", $payload);
+            $this->log->info("[PHASE 2] {$noRawat} [{$statusPemberian}]: PATCH /MedicationDispense/{$idDispense} (" . count($ops) . " ops)");
+            $result = $this->api->patch("/MedicationDispense/{$idDispense}", $ops);
 
             if ($result['success']) {
                 $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'updated');

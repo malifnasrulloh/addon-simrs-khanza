@@ -162,53 +162,28 @@ class SatuSehatCompositionProcessor
         foreach ($records as $r) {
             $noRawat = $r['no_rawat'];
             $idComposition = $r['id_composition'];
-            
+
             $localState = $this->db->getCompositionLocalState($noRawat);
             if ($localState === 'updated') {
                 $this->skipCount++;
                 continue;
             }
 
-            $nik = $r['no_ktp'];
-            $idPasien = $this->db->getIhsPatient($nik);
-            if (!$idPasien) {
-                $this->log->warning("[PHASE 2] {$noRawat}: Missing Patient IHS. Skipped.");
-                $this->skipCount++;
-                continue;
-            }
+            // Build PATCH operations — confirm status final
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'final'
+                ]
+            ];
 
-            $nikDokter = $r['ktpdokter'];
-            $idDokter = $this->db->getIhsPractitioner($nikDokter);
-            if (!$idDokter) {
-                $this->log->warning("[PHASE 2] {$noRawat}: Missing Practitioner IHS. Skipped.");
-                $this->skipCount++;
-                continue;
-            }
+            $this->log->info("[PHASE 2] {$noRawat}: PATCH /Composition/{$idComposition}");
+            $response = $this->api->patch('/Composition/' . $idComposition, $ops);
 
-            $refs = $this->db->fetchSyncedResourceReferences($noRawat);
-            $idEncounter = $refs['Encounter'] ?? null;
-            if (!$idEncounter) {
-                $this->log->warning("[PHASE 2] {$noRawat}: Missing Encounter ID. Skipped.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $payload = SatuSehatPayloadBuilder::composition(
-                $this->config->orgId,
-                $r,
-                $idPasien,
-                $idDokter,
-                $idEncounter,
-                $refs,
-                $idComposition
-            );
-
-            $this->log->info("[PHASE 2] {$noRawat}: PUT /Composition/{$idComposition}");
-            $response = $this->api->put('/Composition/' . $idComposition, $payload);
-
-            if ($response && ($response['success'] ?? false) && isset($response['data']['id'])) {
+            if ($response && ($response['success'] ?? false)) {
                 $this->db->updateCompositionLocalState($noRawat, 'updated');
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Composition {$idComposition}");
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Composition {$idComposition} via PATCH");
                 $this->successCount++;
             } else {
                 $this->log->warning("[PHASE 2] {$noRawat}: ✗ Update failed -> " . json_encode($response['data']['issue'][0]['details']['text'] ?? $response['message'] ?? ''));

@@ -153,11 +153,11 @@ class SatuSehatMedicationStatementProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending MedicationStatement to PUT.");
+            $this->log->info("[PHASE 2] No pending MedicationStatement to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " MedicationStatement record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " MedicationStatement record(s) to PATCH.");
 
         foreach ($records as $p) {
             $noResep = $p['no_resep'];
@@ -172,24 +172,18 @@ class SatuSehatMedicationStatementProcessor
                 continue;
             }
 
-            // Look up Patient ID
-            $idPasien = $this->db->getIhsPatient($p['no_ktp']);
-            if (!$idPasien) {
-                $this->log->warning("[PHASE 2] [SKIPPED] Patient No.RM: {$p['no_rkm_medis']} has no valid IHS ID.");
-                $this->failCount++;
-                continue;
-            }
-
-            $payload = SatuSehatPayloadBuilder::medicationStatement(
-                $this->config->orgId,
-                $p,
-                $idPasien,
-                $idStatement
-            );
+            // Build PATCH operations — confirm completed status
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'completed'
+                ]
+            ];
 
             $label = $isRacikan ? "Racikan #{$noRacik}" : "Non-Racikan";
-            $this->log->info("[PHASE 2] [{$label}]: PUT /MedicationStatement/{$idStatement} (Resep: {$noResep}, Kode Barang: {$kodeBrng})");
-            $result = $this->api->put("/MedicationStatement/{$idStatement}", $payload);
+            $this->log->info("[PHASE 2] [{$label}]: PATCH /MedicationStatement/{$idStatement} (" . count($ops) . " ops)");
+            $result = $this->api->patch("/MedicationStatement/{$idStatement}", $ops);
 
             if ($result['success']) {
                 $this->db->updateMedicationStatementLocalState($noResep, $kodeBrng, $noRacik, 'updated');

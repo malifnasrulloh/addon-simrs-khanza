@@ -1357,6 +1357,7 @@ class SatuSehatPayloadBuilder
                     ]
                 ]
             ],
+            'priority' => 'routine',
             'medicationReference' => [
                 'reference' => 'Medication/' . $p['id_medication'],
                 'display'   => $p['obat_display']
@@ -1372,6 +1373,15 @@ class SatuSehatPayloadBuilder
             'requester' => [
                 'reference' => 'Practitioner/' . $idDokter,
                 'display'   => $p['nama']
+            ],
+            'courseOfTherapyType' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/CodeSystem/medicationrequest-course-of-therapy',
+                        'code'    => 'continuous',
+                        'display' => 'Continuing long term therapy'
+                    ]
+                ]
             ],
             'dosageInstruction' => [
                 [
@@ -1570,6 +1580,25 @@ class SatuSehatPayloadBuilder
                 [
                     'reference' => 'MedicationRequest/' . $idMedicationRequest
                 ]
+            ];
+        }
+
+        // Add daysSupply if available (from prescription or calculated)
+        $jml = floatval($p['jml'] ?? 0);
+        $supplyDays = 0;
+        if ($jml > 0 && $signa1 > 0) {
+            // Calculate days supply: total qty / dose per day
+            $dosePerDay = $signa1 * max((int)$signa2, 1);
+            if ($dosePerDay > 0) {
+                $supplyDays = (int)ceil($jml / $dosePerDay);
+            }
+        }
+        if ($supplyDays > 0) {
+            $payload['daysSupply'] = [
+                'value'  => $supplyDays,
+                'unit'   => 'Day',
+                'system' => 'http://unitsofmeasure.org',
+                'code'   => 'd'
             ];
         }
 
