@@ -182,11 +182,11 @@ class SatuSehatSpecimenLabMbProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending Specimens to PUT.");
+            $this->log->info("[PHASE 2] No pending to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PATCH.");
 
         foreach ($records as $p) {
             $noorder = $p['noorder'];
@@ -226,7 +226,7 @@ class SatuSehatSpecimenLabMbProcessor
             );
 
             $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: PUT /Specimen/{$idSpecimen} ({$pemeriksaan})");
-            $result = $this->api->put("/Specimen/{$idSpecimen}", $payload);
+            $result = $this->api->patch("/Specimen/{$idSpecimen}", $payload);
 
             if ($result['success']) {
                 $this->db->updateSpecimenLabMBLocalState($noorder, $kdJenisPrw, $idTemplate, 'updated');

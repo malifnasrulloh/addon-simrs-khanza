@@ -176,11 +176,11 @@ class SatuSehatSpecimenRadiologiProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending Specimens to PUT.");
+            $this->log->info("[PHASE 2] No pending to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PATCH.");
 
         foreach ($records as $p) {
             $noorder = $p['noorder'];
@@ -219,7 +219,7 @@ class SatuSehatSpecimenRadiologiProcessor
             );
 
             $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PUT /Specimen/{$idSpecimen} ({$nmPerawatan})");
-            $result = $this->api->put("/Specimen/{$idSpecimen}", $payload);
+            $result = $this->api->patch("/Specimen/{$idSpecimen}", $payload);
 
             if ($result['success']) {
                 $this->db->updateSpecimenRadiologiLocalState($noorder, $kdJenisPrw, 'updated');

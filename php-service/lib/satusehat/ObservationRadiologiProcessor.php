@@ -194,11 +194,11 @@ class SatuSehatObservationRadiologiProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending Observations to PUT.");
+            $this->log->info("[PHASE 2] No pending to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PATCH.");
 
         foreach ($records as $p) {
             $noorder = $p['noorder'];
@@ -255,7 +255,7 @@ class SatuSehatObservationRadiologiProcessor
             );
 
             $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PUT /Observation/{$idObservation} ({$nmPerawatan})");
-            $result = $this->api->put("/Observation/{$idObservation}", $payload);
+            $result = $this->api->patch("/Observation/{$idObservation}", $payload);
 
             if ($result['success']) {
                 $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, 'updated');

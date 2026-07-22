@@ -171,11 +171,11 @@ class SatuSehatServiceRequestRadiologiProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending ServiceRequests to PUT.");
+            $this->log->info("[PHASE 2] No pending to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PATCH.");
 
         foreach ($records as $p) {
             $noorder = $p['noorder'];
@@ -208,7 +208,7 @@ class SatuSehatServiceRequestRadiologiProcessor
             );
 
             $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PUT /ServiceRequest/{$idServiceRequest} ({$nmPerawatan})");
-            $result = $this->api->put("/ServiceRequest/{$idServiceRequest}", $payload);
+            $result = $this->api->patch("/ServiceRequest/{$idServiceRequest}", $payload);
 
             if ($result['success']) {
                 $this->db->updateServiceRequestRadiologiLocalState($noorder, $kdJenisPrw, 'updated');

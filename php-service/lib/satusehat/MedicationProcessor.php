@@ -42,7 +42,7 @@ class SatuSehatMedicationProcessor
         $this->processActive($activeRecords);
 
         $this->log->info("──────────────────────────────────────────────────────────────");
-        $this->log->info("[SYNC] Phase 2: PUT Update Medication Master");
+        $this->log->info("[SYNC] Phase 2: PATCH Update Medication Master");
         $this->processUpdate($updateRecords);
 
         return [
@@ -135,11 +135,11 @@ class SatuSehatMedicationProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending Medication to PUT.");
+            $this->log->info("[PHASE 2] No pending Medication to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " medication record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " medication record(s) to PATCH.");
 
         foreach ($records as $med) {
             $kodeBrng = $med['kode_brng'];
@@ -151,14 +151,16 @@ class SatuSehatMedicationProcessor
                 continue;
             }
 
-            $payload = SatuSehatPayloadBuilder::medication(
-                $this->config->orgId,
-                $med,
-                $idMedication
-            );
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => $med['status'] === '0' ? 'inactive' : 'active'
+                ]
+            ];
 
-            $this->log->info("[PHASE 2] {$kodeBrng}: PUT /Medication/{$idMedication} (KFA Code: {$med['obat_code']})");
-            $result = $this->api->put("/Medication/{$idMedication}", $payload);
+            $this->log->info("[PHASE 2] {$kodeBrng}: PATCH /Medication/{$idMedication} (KFA Code: {$med['obat_code']})");
+            $result = $this->api->patch("/Medication/{$idMedication}", $ops);
 
             if ($result['success']) {
                 $this->db->updateMedicationLocalState($kodeBrng, 'updated');

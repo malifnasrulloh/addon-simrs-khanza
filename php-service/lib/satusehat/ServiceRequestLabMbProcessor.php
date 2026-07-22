@@ -177,11 +177,11 @@ class SatuSehatServiceRequestLabMbProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending ServiceRequests to PUT.");
+            $this->log->info("[PHASE 2] No pending to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PATCH.");
 
         foreach ($records as $p) {
             $noorder = $p['noorder'];
@@ -215,7 +215,7 @@ class SatuSehatServiceRequestLabMbProcessor
             );
 
             $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: PUT /ServiceRequest/{$idServiceRequest} ({$pemeriksaan})");
-            $result = $this->api->put("/ServiceRequest/{$idServiceRequest}", $payload);
+            $result = $this->api->patch("/ServiceRequest/{$idServiceRequest}", $payload);
 
             if ($result['success']) {
                 $this->db->updateServiceRequestLabMBLocalState($noorder, $kdJenisPrw, $idTemplate, 'updated');

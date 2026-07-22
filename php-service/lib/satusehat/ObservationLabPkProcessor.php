@@ -159,11 +159,11 @@ class SatuSehatObservationLabPkProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending Observations to PUT.");
+            $this->log->info("[PHASE 2] No pending to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PATCH.");
 
         foreach ($records as $p) {
             $noorder = $p['noorder'];
@@ -203,7 +203,7 @@ class SatuSehatObservationLabPkProcessor
             );
 
             $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: PUT /Observation/{$idObservation} ({$pemeriksaan})");
-            $result = $this->api->put("/Observation/{$idObservation}", $payload);
+            $result = $this->api->patch("/Observation/{$idObservation}", $payload);
 
             if ($result['success']) {
                 $this->db->updateObservationLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'sent');

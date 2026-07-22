@@ -202,11 +202,11 @@ class SatuSehatDiagnosticReportRadiologiProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending DiagnosticReports to PUT.");
+            $this->log->info("[PHASE 2] No pending to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PATCH.");
 
         foreach ($records as $p) {
             $noorder = $p['noorder'];
@@ -271,7 +271,7 @@ class SatuSehatDiagnosticReportRadiologiProcessor
             );
 
             $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PUT /DiagnosticReport/{$idDiagnosticReport} ({$nmPerawatan})");
-            $result = $this->api->put("/DiagnosticReport/{$idDiagnosticReport}", $payload);
+            $result = $this->api->patch("/DiagnosticReport/{$idDiagnosticReport}", $payload);
 
             if ($result['success']) {
                 $this->db->updateDiagnosticReportRadiologiLocalState($noorder, $kdJenisPrw, 'updated');
