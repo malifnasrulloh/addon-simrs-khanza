@@ -16,6 +16,7 @@ class SatuSehatClient
     private string $baseUrl;
     private int    $tokenTimeout;
     private int    $delayMs;
+    private bool   $verbosePayload;
     private Logger $log;
     private string $tokenCacheFile;
     /**
@@ -29,13 +30,14 @@ class SatuSehatClient
 
     public function __construct(SatuSehatConfig $config, Logger $log)
     {
-        $this->clientId     = $config->clientId;
-        $this->secretKey    = $config->secretKey;
-        $this->authUrl      = $config->authUrl;
-        $this->baseUrl      = $config->baseUrl;
-        $this->tokenTimeout = $config->tokenTimeout;
-        $this->delayMs      = $config->delayMs;
-        $this->log          = $log;
+        $this->clientId        = $config->clientId;
+        $this->secretKey       = $config->secretKey;
+        $this->authUrl         = $config->authUrl;
+        $this->baseUrl         = $config->baseUrl;
+        $this->tokenTimeout    = $config->tokenTimeout;
+        $this->delayMs         = $config->delayMs;
+        $this->verbosePayload  = $config->verbosePayload;
+        $this->log             = $log;
 
         $this->tokenCacheFile  = $config->logDir . '/satusehat_token.json';
         $this->sourceTimezone  = new \DateTimeZone($config->timezone ?: 'Asia/Jakarta');
@@ -257,14 +259,27 @@ class SatuSehatClient
             ]);
 
             if ($payload !== null) {
-                $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
+                $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
                 if ($attempt === 1) {
-                    $this->log->debug("[API] {$method} {$url} | Body: " . substr($body, 0, 500));
+                    if ($this->verbosePayload) {
+                        $this->log->info("[API] {$method} {$url}");
+                        $this->log->info("[API] Request body:");
+                        foreach (explode("\n", $body) as $line) {
+                            $this->log->info("  " . $line);
+                        }
+                    } else {
+                        $this->log->debug("[API] {$method} {$url} | Body: " . substr($body, 0, 500));
+                    }
                 }
             } else {
                 if ($attempt === 1) {
-                    $this->log->debug("[API] {$method} {$url}");
+                    $msg = "[API] {$method} {$url}";
+                    if ($this->verbosePayload) {
+                        $this->log->info($msg);
+                    } else {
+                        $this->log->debug($msg);
+                    }
                 }
             }
 

@@ -25,6 +25,7 @@ class SatuSehatConfig
     public readonly string $dateTo;
     public readonly int    $batchSize;
     public readonly string $memoryLimit;
+    public readonly bool   $verbosePayload;
 
     // ─── Database ──────────────────────────────────────────────────────────
     public readonly string $dbHost;
@@ -96,8 +97,9 @@ class SatuSehatConfig
         $this->lookbackDays = (int) $this->get('SATUSEHAT_LOOKBACK_DAYS', '0');
         $this->dateFrom     = $this->get('SATUSEHAT_DATE_FROM', date('Y-m-d'));
         $this->dateTo       = $this->get('SATUSEHAT_DATE_TO', date('Y-m-d'));
-        $this->batchSize    = (int) $this->get('SATUSEHAT_BATCH_SIZE', '500');
-        $this->memoryLimit  = $this->get('SATUSEHAT_MEMORY_LIMIT', '512M');
+        $this->batchSize      = (int) $this->get('SATUSEHAT_BATCH_SIZE', '500');
+        $this->memoryLimit    = $this->get('SATUSEHAT_MEMORY_LIMIT', '512M');
+        $this->verbosePayload = $this->get('SATUSEHAT_VERBOSE_PAYLOAD', 'false') === 'true';
 
         $logDir = $this->get('LOG_DIR', 'logs');
         if (!str_starts_with($logDir, '/')) {
