@@ -210,8 +210,8 @@ class SatuSehatDiagnosticReportLabMbProcessor
                 $idDiagnosticReport
             );
 
-            $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: PUT /DiagnosticReport/{$idDiagnosticReport} ({$pemeriksaan})");
-            $result = $this->api->patch("/DiagnosticReport/{$idDiagnosticReport}", $payload);
+            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /DiagnosticReport/{$idDiagnosticReport} ({$nmPerawatan})");
+            $result = $this->api->patch("/DiagnosticReport/{$idDiagnosticReport}", $ops);
 
             if ($result['success']) {
                 $this->db->updateDiagnosticReportLabMbLocalState($noorder, $idTemplate, $code, 'updated');

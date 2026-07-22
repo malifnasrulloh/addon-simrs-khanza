@@ -254,8 +254,8 @@ class SatuSehatObservationRadiologiProcessor
                 $idObservation
             );
 
-            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PUT /Observation/{$idObservation} ({$nmPerawatan})");
-            $result = $this->api->patch("/Observation/{$idObservation}", $payload);
+            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Observation/{$idObservation} ({$nmPerawatan})");
+            $result = $this->api->patch("/Observation/{$idObservation}", $ops);
 
             if ($result['success']) {
                 $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, 'updated');

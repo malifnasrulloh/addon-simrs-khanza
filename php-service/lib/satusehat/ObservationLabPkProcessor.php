@@ -202,8 +202,8 @@ class SatuSehatObservationLabPkProcessor
                 $idObservation
             );
 
-            $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: PUT /Observation/{$idObservation} ({$pemeriksaan})");
-            $result = $this->api->patch("/Observation/{$idObservation}", $payload);
+            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Observation/{$idObservation} ({$nmPerawatan})");
+            $result = $this->api->patch("/Observation/{$idObservation}", $ops);
 
             if ($result['success']) {
                 $this->db->updateObservationLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'sent');

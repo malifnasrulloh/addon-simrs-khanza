@@ -124,7 +124,24 @@ class SatuSehatProcedureProcessor
                 $this->successCount++;
             } else {
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
-                $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $errorMessage);
+
+                // Cache permanent API failures
+                $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
+                $isRule = (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false);
+                $isCode = (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false);
+
+                if ($isPrivacy) {
+                    $this->db->updateProcedureLocalState($noRawat, $kode, 'privacy_error');
+                    $this->log->warning("[PHASE 1] {$noRawat}: ✗ Permanent Privacy Error -> {$errorMessage}");
+                } elseif ($isRule) {
+                    $this->db->updateProcedureLocalState($noRawat, $kode, 'failed_rule');
+                    $this->log->warning("[PHASE 1] {$noRawat}: ✗ Permanent Rule Error -> {$errorMessage}");
+                } elseif ($isCode) {
+                    $this->db->updateProcedureLocalState($noRawat, $kode, 'invalid_code');
+                    $this->log->warning("[PHASE 1] {$noRawat}: ✗ Permanent Code Error -> {$errorMessage}");
+                } else {
+                    $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $errorMessage);
+                }
                 $this->failCount++;
             }
         }

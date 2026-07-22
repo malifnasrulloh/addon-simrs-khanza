@@ -218,8 +218,8 @@ class SatuSehatSpecimenRadiologiProcessor
                 $idSpecimen
             );
 
-            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PUT /Specimen/{$idSpecimen} ({$nmPerawatan})");
-            $result = $this->api->patch("/Specimen/{$idSpecimen}", $payload);
+            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Specimen/{$idSpecimen} ({$nmPerawatan})");
+            $result = $this->api->patch("/Specimen/{$idSpecimen}", $ops);
 
             if ($result['success']) {
                 $this->db->updateSpecimenRadiologiLocalState($noorder, $kdJenisPrw, 'updated');

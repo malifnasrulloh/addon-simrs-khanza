@@ -270,8 +270,8 @@ class SatuSehatDiagnosticReportRadiologiProcessor
                 $idDiagnosticReport
             );
 
-            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PUT /DiagnosticReport/{$idDiagnosticReport} ({$nmPerawatan})");
-            $result = $this->api->patch("/DiagnosticReport/{$idDiagnosticReport}", $payload);
+            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /DiagnosticReport/{$idDiagnosticReport} ({$nmPerawatan})");
+            $result = $this->api->patch("/DiagnosticReport/{$idDiagnosticReport}", $ops);
 
             if ($result['success']) {
                 $this->db->updateDiagnosticReportRadiologiLocalState($noorder, $kdJenisPrw, 'updated');

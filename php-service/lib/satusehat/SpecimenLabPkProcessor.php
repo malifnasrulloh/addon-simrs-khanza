@@ -225,8 +225,8 @@ class SatuSehatSpecimenLabPkProcessor
                 $idSpecimen
             );
 
-            $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: PUT /Specimen/{$idSpecimen} ({$pemeriksaan})");
-            $result = $this->api->patch("/Specimen/{$idSpecimen}", $payload);
+            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Specimen/{$idSpecimen} ({$nmPerawatan})");
+            $result = $this->api->patch("/Specimen/{$idSpecimen}", $ops);
 
             if ($result['success']) {
                 $this->db->updateSpecimenLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'updated');

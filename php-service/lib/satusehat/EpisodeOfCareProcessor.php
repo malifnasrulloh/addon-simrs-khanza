@@ -50,7 +50,7 @@ class SatuSehatEpisodeOfCareProcessor
         $this->processActive($dateFrom, $dateTo, $activeRecords);
 
         $this->log->info("──────────────────────────────────────────────────────────────");
-        $this->log->info("[SYNC] Phase 2: PUT 'finished' Episode Of Care");
+        $this->log->info("[SYNC] Phase 2: PATCH 'finished' Episode Of Care");
         $this->processFinished($dateFrom, $dateTo, $finishedRecords);
 
         return [
