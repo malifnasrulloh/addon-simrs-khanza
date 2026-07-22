@@ -192,11 +192,11 @@ class SatuSehatQuestionnaireResponseProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending QuestionnaireResponse to PUT.");
+            $this->log->info("[PHASE 2] No pending QuestionnaireResponse to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " QuestionnaireResponse record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " QuestionnaireResponse record(s) to PATCH.");
 
         foreach ($records as $qr) {
             $noResep = $qr['no_resep'];
@@ -209,32 +209,17 @@ class SatuSehatQuestionnaireResponseProcessor
                 continue;
             }
 
-            $nikPasien = $qr['no_ktp'];
-            $nikPraktisi = $qr['ktppraktisi'];
+            // Build PATCH operations — confirm completed status
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'completed'
+                ]
+            ];
 
-            $idPasien = $this->db->getIhsPatient($nikPasien);
-            if (!$idPasien) {
-                $this->log->warning("[PHASE 2] {$noResep}: Missing IHS ID for Patient (NIK: {$nikPasien}). Skipped.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $idPraktisi = $this->db->getIhsPractitioner($nikPraktisi);
-            if (!$idPraktisi) {
-                $this->log->warning("[PHASE 2] {$noResep}: Missing IHS ID for Practitioner (NIK: {$nikPraktisi}). Skipped.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $payload = SatuSehatPayloadBuilder::questionnaireResponse(
-                $qr,
-                $idPasien,
-                $idPraktisi,
-                $idQR
-            );
-
-            $this->log->info("[PHASE 2] {$noResep}: PUT /QuestionnaireResponse/{$idQR}");
-            $result = $this->api->put("/QuestionnaireResponse/{$idQR}", $payload);
+            $this->log->info("[PHASE 2] {$noResep}: PATCH /QuestionnaireResponse/{$idQR} (" . count($ops) . " ops)");
+            $result = $this->api->patch("/QuestionnaireResponse/{$idQR}", $ops);
 
             if ($result['success']) {
                 $this->db->updateQuestionnaireResponseLocalState($noResep, 'updated');
