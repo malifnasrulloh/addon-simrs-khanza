@@ -262,13 +262,13 @@ class SatuSehatDiagnosticReportRadiologiProcessor
                 continue;
             }
 
-            $payload = SatuSehatPayloadBuilder::diagnosticReportRadiologi(
-                $p,
-                $idPasien,
-                $idDokter,
-                $this->config->orgId,
-                $idDiagnosticReport
-            );
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'final'
+                ]
+            ];
 
             $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /DiagnosticReport/{$idDiagnosticReport} ({$nmPerawatan})");
             $result = $this->api->patch("/DiagnosticReport/{$idDiagnosticReport}", $ops);

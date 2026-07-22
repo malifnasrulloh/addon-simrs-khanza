@@ -218,12 +218,13 @@ class SatuSehatSpecimenLabPkProcessor
                 continue;
             }
 
-            $payload = SatuSehatPayloadBuilder::specimenLab(
-                $p,
-                $idPasien,
-                $this->config->orgId,
-                $idSpecimen
-            );
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'available'
+                ]
+            ];
 
             $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Specimen/{$idSpecimen} ({$nmPerawatan})");
             $result = $this->api->patch("/Specimen/{$idSpecimen}", $ops);

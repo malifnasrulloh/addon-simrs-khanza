@@ -206,13 +206,13 @@ class SatuSehatServiceRequestLabPkProcessor
                 continue;
             }
 
-            $payload = SatuSehatPayloadBuilder::serviceRequestLab(
-                $p,
-                $idPasien,
-                $idDokter,
-                $this->config->orgId,
-                $idServiceRequest
-            );
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'active'
+                ]
+            ];
 
             $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /ServiceRequest/{$idServiceRequest} ({$nmPerawatan})");
             $result = $this->api->patch("/ServiceRequest/{$idServiceRequest}", $ops);
