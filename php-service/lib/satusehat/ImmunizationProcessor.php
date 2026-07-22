@@ -170,11 +170,11 @@ class SatuSehatImmunizationProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending Immunization to PUT.");
+            $this->log->info("[PHASE 2] No pending Immunization to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " immunization record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " immunization record(s) to PATCH.");
 
         foreach ($records as $imm) {
             $noRawat = $imm['no_rawat'];
@@ -192,36 +192,21 @@ class SatuSehatImmunizationProcessor
                 continue;
             }
 
-            $nikPasien = $imm['no_ktp'];
-            $nikPraktisi = $imm['ktppraktisi'];
+            // Build PATCH operations — confirm completed status
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'completed'
+                ]
+            ];
 
-            $idPasien = $this->db->getIhsPatient($nikPasien);
-            if (!$idPasien) {
-                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Patient (NIK: {$nikPasien}). Skipped.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $idDokter = $this->db->getIhsPractitioner($nikPraktisi);
-            if (!$idDokter) {
-                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Practitioner (NIK: {$nikPraktisi}). Skipped.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $payload = SatuSehatPayloadBuilder::immunization(
-                $imm,
-                $idPasien,
-                $idDokter,
-                $idImmunization
-            );
-
-            $this->log->info("[PHASE 2] {$noRawat}: PUT /Immunization/{$idImmunization} (Vaccine Code: {$imm['vaksin_code']})");
-            $result = $this->api->put("/Immunization/{$idImmunization}", $payload);
+            $this->log->info("[PHASE 2] {$noRawat}: PATCH /Immunization/{$idImmunization} (" . count($ops) . " ops)");
+            $result = $this->api->patch("/Immunization/{$idImmunization}", $ops);
 
             if ($result['success']) {
                 $this->db->updateImmunizationLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'updated');
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Immunization {$idImmunization}");
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Immunization {$idImmunization} via PATCH");
                 $this->successCount++;
             } else {
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];

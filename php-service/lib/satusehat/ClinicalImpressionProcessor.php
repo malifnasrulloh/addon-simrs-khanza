@@ -133,7 +133,18 @@ class SatuSehatClinicalImpressionProcessor
                         $this->failCount++;
                     }
                 } else {
-                    $this->log->warning("[PHASE 1] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✗ Failed -> " . $errorMessage);
+                    $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
+                    $isRule = (stripos($errorMessage, 'Rule Number') !== false || stripos($errorMessage, 'rule violation') !== false);
+
+                    if ($isPrivacy) {
+                        $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'privacy_error', $kdPenyakit);
+                        $this->log->warning("[PHASE 1] {$noRawat}: ✗ Skipped permanently due to consent/privacy restrictions.");
+                    } elseif ($isRule) {
+                        $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'failed_rule', $kdPenyakit);
+                        $this->log->warning("[PHASE 1] {$noRawat}: ✗ Skipped permanently due to Satu Sehat business rules.");
+                    } else {
+                        $this->log->warning("[PHASE 1] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✗ Failed -> " . $errorMessage);
+                    }
                     $this->failCount++;
                 }
             }
@@ -147,11 +158,11 @@ class SatuSehatClinicalImpressionProcessor
         }
 
         if (empty($records)) {
-            $this->log->info("[PHASE 2] No pending clinical impressions to PUT.");
+            $this->log->info("[PHASE 2] No pending clinical impressions to PATCH.");
             return;
         }
 
-        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PUT.");
+        $this->log->info("[PHASE 2] Found " . count($records) . " record(s) to PATCH.");
 
         foreach ($records as $p) {
             $noRawat = $p['no_rawat'];
@@ -159,6 +170,7 @@ class SatuSehatClinicalImpressionProcessor
             $jamRawat = $p['jam_rawat'];
             $status = $p['status_lanjut'];
             $kdPenyakit = $p['kd_penyakit'];
+            $idClinImp = $p['id_clinicalimpression'];
 
             $localState = $this->db->getClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, $kdPenyakit);
 
@@ -167,39 +179,42 @@ class SatuSehatClinicalImpressionProcessor
                 continue;
             }
 
-            $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
-            $idDokter = $this->db->getIhsPractitioner($p['nik_praktisi']);
+            // Build PATCH operations — confirm completed status
+            $ops = [
+                [
+                    'op' => 'replace',
+                    'path' => '/status',
+                    'value' => 'completed'
+                ]
+            ];
 
-            if (!$idPasien || !$idDokter) {
-                $this->log->warning("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: Missing IHS ID. Skipped.");
-                $this->skipCount++;
-                continue;
-            }
-
-            $payload = SatuSehatPayloadBuilder::clinicalImpression(
-                $p,
-                $idPasien,
-                $idDokter,
-                $p['id_clinicalimpression']
-            );
-
-            $this->log->info("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: PUT /ClinicalImpression/{$p['id_clinicalimpression']} (ICD-10: {$kdPenyakit})");
-            $result = $this->api->put("/ClinicalImpression/{$p['id_clinicalimpression']}", $payload);
+            $this->log->info("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: PATCH /ClinicalImpression/{$idClinImp} (" . count($ops) . " ops)");
+            $result = $this->api->patch("/ClinicalImpression/{$idClinImp}", $ops);
 
             if ($result['success']) {
                 $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'updated', $kdPenyakit);
-                $this->log->info("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✓ Updated ClinicalImpression {$p['id_clinicalimpression']}");
+                $this->log->info("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✓ Updated ClinicalImpression {$idClinImp} via PATCH");
                 $this->successCount++;
             } else {
                 $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
-                
-                $isValidationError = (stripos($errorMessage, 'Code not found') !== false || 
-                                       stripos($errorMessage, 'invalid') !== false || 
+
+                $isValidationError = (stripos($errorMessage, 'Code not found') !== false ||
+                                       stripos($errorMessage, 'invalid') !== false ||
                                        stripos($errorMessage, 'incorrect') !== false);
-                
+                $isPrivacy = (!$isValidationError && (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false));
+                $isRule = (!$isValidationError && (stripos($errorMessage, 'Rule Number') !== false || stripos($errorMessage, 'rule violation') !== false));
+
                 if ($isValidationError) {
                     $this->log->warning("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✗ Skipped -> Invalid ICD-10 Code '{$kdPenyakit}' (Satu Sehat Terminology rejected it on update)");
                     $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'invalid_code', $kdPenyakit);
+                    $this->skipCount++;
+                } elseif ($isPrivacy) {
+                    $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'privacy_error', $kdPenyakit);
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Skipped permanently due to consent/privacy restrictions.");
+                    $this->skipCount++;
+                } elseif ($isRule) {
+                    $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'failed_rule', $kdPenyakit);
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Skipped permanently due to Satu Sehat business rules.");
                     $this->skipCount++;
                 } else {
                     $this->log->warning("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✗ Failed -> " . $errorMessage);
