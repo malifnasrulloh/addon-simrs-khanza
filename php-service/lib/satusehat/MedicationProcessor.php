@@ -151,13 +151,12 @@ class SatuSehatMedicationProcessor
                 continue;
             }
 
-            $ops = [
-                [
-                    'op' => 'replace',
-                    'path' => '/status',
-                    'value' => $med['status'] === '0' ? 'inactive' : 'active'
-                ]
-            ];
+            $payload = SatuSehatPayloadBuilder::medication(
+                $this->config->orgId,
+                $med,
+                $idMedication
+            );
+            $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$kodeBrng}: PATCH /Medication/{$idMedication} (KFA Code: {$med['obat_code']})");
             $result = $this->api->patch("/Medication/{$idMedication}", $ops);

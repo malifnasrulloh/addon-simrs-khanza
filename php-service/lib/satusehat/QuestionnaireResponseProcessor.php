@@ -210,13 +210,13 @@ class SatuSehatQuestionnaireResponseProcessor
             }
 
             // Build PATCH operations — confirm completed status
-            $ops = [
-                [
-                    'op' => 'replace',
-                    'path' => '/status',
-                    'value' => 'completed'
-                ]
-            ];
+            $payload = SatuSehatPayloadBuilder::questionnaireResponse(
+                $qr,
+                $idPasien,
+                $idPraktisi,
+                $idQR
+            );
+            $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noResep}: PATCH /QuestionnaireResponse/{$idQR} (" . count($ops) . " ops)");
             $result = $this->api->patch("/QuestionnaireResponse/{$idQR}", $ops);

@@ -179,14 +179,21 @@ class SatuSehatClinicalImpressionProcessor
                 continue;
             }
 
-            // Build PATCH operations — confirm completed status
-            $ops = [
-                [
-                    'op' => 'replace',
-                    'path' => '/status',
-                    'value' => 'completed'
-                ]
-            ];
+            $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
+            $idDokter = $this->db->getIhsPractitioner($p['nik_praktisi']);
+            if (!$idPasien || !$idDokter) {
+                $this->log->warning("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: Missing IHS ID. Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+
+            $payload = SatuSehatPayloadBuilder::clinicalImpression(
+                $p,
+                $idPasien,
+                $idDokter,
+                $idClinImp
+            );
+            $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: PATCH /ClinicalImpression/{$idClinImp} (" . count($ops) . " ops)");
             $result = $this->api->patch("/ClinicalImpression/{$idClinImp}", $ops);

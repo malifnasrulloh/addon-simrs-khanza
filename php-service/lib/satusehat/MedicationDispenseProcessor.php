@@ -205,13 +205,15 @@ class SatuSehatMedicationDispenseProcessor
             }
 
             // Build PATCH operations — confirm completed status
-            $ops = [
-                [
-                    'op' => 'replace',
-                    'path' => '/status',
-                    'value' => 'completed'
-                ]
-            ];
+            $payload = SatuSehatPayloadBuilder::medicationDispense(
+                $this->config->orgId,
+                $p,
+                $idPasien,
+                $idDokter,
+                $idMedicationRequest,
+                $idDispense
+            );
+            $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noRawat} [{$statusPemberian}]: PATCH /MedicationDispense/{$idDispense} (" . count($ops) . " ops)");
             $result = $this->api->patch("/MedicationDispense/{$idDispense}", $ops);

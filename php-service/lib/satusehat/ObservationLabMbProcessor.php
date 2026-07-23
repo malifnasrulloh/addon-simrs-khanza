@@ -194,13 +194,13 @@ class SatuSehatObservationLabMbProcessor
                 continue;
             }
 
-            $ops = [
-                [
-                    'op' => 'replace',
-                    'path' => '/status',
-                    'value' => 'final'
-                ]
-            ];
+            $payload = SatuSehatPayloadBuilder::observationLab(
+                $p,
+                $idPasien,
+                $idDokter,
+                $this->config->orgId
+            );
+            $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Observation/{$idObservation} ({$nmPerawatan})");
             $result = $this->api->patch("/Observation/{$idObservation}", $ops);

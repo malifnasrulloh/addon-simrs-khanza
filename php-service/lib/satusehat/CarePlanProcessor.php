@@ -188,14 +188,29 @@ class SatuSehatCarePlanProcessor
                 continue;
             }
 
-            // Build PATCH operations — confirm active status
-            $ops = [
-                [
-                    'op' => 'replace',
-                    'path' => '/description',
-                    'value' => str_replace(["\r\n", "\r", "\n", "\n\r"], '<br>', $p['rtl'] ?? '')
-                ]
-            ];
+            $nikPasien = $p['no_ktp'];
+            $nikPraktisi = $p['ktppraktisi'];
+            $idPasien = $this->db->getIhsPatient($nikPasien);
+            if (!$idPasien) {
+                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Patient. Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+            $idDokter = $this->db->getIhsPractitioner($nikPraktisi);
+            if (!$idDokter) {
+                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Practitioner. Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+
+            $payload = SatuSehatPayloadBuilder::carePlan(
+                $this->config->orgId,
+                $p,
+                $idPasien,
+                $idDokter,
+                $idCarePlan
+            );
+            $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noRawat}: PATCH /CarePlan/{$idCarePlan} (" . count($ops) . " ops)");
             $result = $this->api->patch("/CarePlan/{$idCarePlan}", $ops);

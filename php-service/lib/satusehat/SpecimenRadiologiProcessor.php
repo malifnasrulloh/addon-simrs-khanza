@@ -211,13 +211,12 @@ class SatuSehatSpecimenRadiologiProcessor
                 continue;
             }
 
-            $ops = [
-                [
-                    'op' => 'replace',
-                    'path' => '/status',
-                    'value' => 'available'
-                ]
-            ];
+            $payload = SatuSehatPayloadBuilder::specimenRadiologi(
+                $p,
+                $idPasien,
+                $this->config->orgId
+            );
+            $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Specimen/{$idSpecimen} ({$nmPerawatan})");
             $result = $this->api->patch("/Specimen/{$idSpecimen}", $ops);

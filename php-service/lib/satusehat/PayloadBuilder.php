@@ -2859,6 +2859,33 @@ class SatuSehatPayloadBuilder
         return $payload;
     }
 
+    /**
+     * Convert a full FHIR payload array into JSON Patch replace operations.
+     * Skips server-managed fields (resourceType, id, meta) that cannot be PATCHed.
+     * Each field becomes a separate {op: replace, path: /key, value: ...} operation.
+     *
+     * @param array $payload Full FHIR resource payload from a ::build*() method
+     * @return array Array of JSON Patch operations
+     */
+    public static function payloadToPatchOps(array $payload): array
+    {
+        $ops = [];
+        $skipKeys = ['resourceType', 'id', 'meta'];
+
+        foreach ($payload as $key => $value) {
+            if (in_array($key, $skipKeys, true)) {
+                continue;
+            }
+            $ops[] = [
+                'op'    => 'replace',
+                'path'  => '/' . $key,
+                'value' => $value
+            ];
+        }
+
+        return $ops;
+    }
+
     public static function convertLocalToUtc(string $localDateTime): string
     {
         try {

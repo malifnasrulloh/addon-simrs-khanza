@@ -188,13 +188,14 @@ class SatuSehatMedicationRequestProcessor
             }
 
             // Build PATCH operations — confirm completed status
-            $ops = [
-                [
-                    'op' => 'replace',
-                    'path' => '/status',
-                    'value' => 'completed'
-                ]
-            ];
+            $payload = SatuSehatPayloadBuilder::medicationRequest(
+                $this->config->orgId,
+                $medreq,
+                $idPasien,
+                $idDokter,
+                $idMedicationRequest
+            );
+            $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $label = $isRacikan ? "{$noResep}-{$noRacik}" : "{$noResep}";
             $this->log->info("[PHASE 2] {$label}: PATCH /MedicationRequest/{$idMedicationRequest} (" . count($ops) . " ops)");

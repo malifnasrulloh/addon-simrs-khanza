@@ -318,7 +318,7 @@ class SatuSehatDatabase
                 rp.kd_poli, pol.nm_poli,
                 COALESCE(smlranap.id_lokasi_satusehat, smlr.id_lokasi_satusehat) as id_lokasi_satusehat,
                 rp.stts, rp.status_lanjut,
-                ki.tgl_masuk, ki.jam_masuk, ki.stts_pulang, ki.lama
+                ki.tgl_masuk, ki.jam_masuk, ki.stts_pulang, ki.lama, ki.kd_kamar
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
@@ -373,7 +373,7 @@ class SatuSehatDatabase
                         THEN CONCAT(pranap.tgl_perawatan, 'T', pranap.jam_rawat, '+07:00')
                     ELSE CONCAT(pr.tgl_perawatan, 'T', pr.jam_rawat, '+07:00')
                 END as waktu_perawatan,
-                ki.tgl_masuk, ki.jam_masuk, ki.stts_pulang, ki.lama
+                ki.tgl_masuk, ki.jam_masuk, ki.stts_pulang, ki.lama, ki.kd_kamar
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
@@ -427,7 +427,7 @@ class SatuSehatDatabase
                     WHEN rp.status_lanjut = 'Ranap' THEN CONCAT(ni.tanggal, 'T', ni.jam, '+07:00')
                 END as waktu_pulang,
                 pr.tgl_perawatan, pr.jam_rawat,
-                ki.stts_pulang, ki.lama
+                ki.stts_pulang, ki.lama, ki.kd_kamar
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
@@ -805,20 +805,22 @@ class SatuSehatDatabase
     public function fetchPendingConditionUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                p.nm_pasien, p.no_ktp, rp.stts, rp.status_lanjut, 
-                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang, 
+            SELECT
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp, rp.stts, rp.status_lanjut,
+                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
                 sse.id_encounter, dp.kd_penyakit, py.nm_penyakit, dp.status,
-                ssc.id_condition
+                ssc.id_condition,
+                pg.nama as nama_dokter, pg.no_ktp as ktp_dokter
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             INNER JOIN diagnosa_pasien dp ON dp.no_rawat = rp.no_rawat
             INNER JOIN penyakit py ON dp.kd_penyakit = py.kd_penyakit
-            INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = dp.no_rawat 
-                AND ssc.kd_penyakit = dp.kd_penyakit 
+            INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = dp.no_rawat
+                AND ssc.kd_penyakit = dp.kd_penyakit
                 AND ssc.status = dp.status
+            INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
          ORDER BY no_rawat ASC
         ";
@@ -1133,10 +1135,10 @@ class SatuSehatDatabase
         $ralanQuery = "
             SELECT 
                 rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter, 
-                rp.stts, 'Ralan' as status, 
-                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang, 
-                sse.id_encounter, 
+                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
+                rp.stts, 'Ralan' as status,
+                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
+                sse.id_encounter, pol.nm_poli,
                 pr.{$dbCol} as value, pr.tgl_perawatan as tgl_observasi, pr.jam_rawat as jam_observasi,
                 st.{$idCol} as synced_id
             FROM reg_periksa rp
@@ -1144,6 +1146,7 @@ class SatuSehatDatabase
             INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
             INNER JOIN pegawai pg ON pg.nik = pr.nip
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            INNER JOIN poliklinik pol ON pol.kd_poli = rp.kd_poli
             LEFT JOIN {$stTable} st ON st.no_rawat = pr.no_rawat AND st.tgl_perawatan = pr.tgl_perawatan AND st.jam_rawat = pr.jam_rawat AND st.status = 'Ralan'
             WHERE pr.tgl_perawatan BETWEEN :df AND :dt
               AND pr.{$dbCol} IS NOT NULL AND pr.{$dbCol} != '' AND pr.{$dbCol} != '-'
@@ -1164,12 +1167,12 @@ class SatuSehatDatabase
                 SELECT * FROM (
                     {$ralanQuery}
                     UNION ALL
-                    SELECT 
-                        rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                        p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter, 
-                        rp.stts, 'Ranap' as status, 
-                        CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang, 
-                        sse.id_encounter, 
+                    SELECT
+                        rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                        p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
+                        rp.stts, 'Ranap' as status,
+                        CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
+                        sse.id_encounter, pol.nm_poli,
                         pi.{$dbCol} as value, pi.tgl_perawatan as tgl_observasi, pi.jam_rawat as jam_observasi,
                         st.{$idCol} as synced_id
                     FROM reg_periksa rp
@@ -1177,6 +1180,7 @@ class SatuSehatDatabase
                     INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat
                     INNER JOIN pegawai pg ON pg.nik = pi.nip
                     INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                    INNER JOIN poliklinik pol ON pol.kd_poli = rp.kd_poli
                     LEFT JOIN {$stTable} st ON st.no_rawat = pi.no_rawat AND st.tgl_perawatan = pi.tgl_perawatan AND st.jam_rawat = pi.jam_rawat AND st.status = 'Ranap'
                     WHERE pi.tgl_perawatan BETWEEN :df2 AND :dt2
                       AND pi.{$dbCol} IS NOT NULL AND pi.{$dbCol} != '' AND pi.{$dbCol} != '-'
@@ -1277,24 +1281,26 @@ class SatuSehatDatabase
     public function fetchPendingProcedureUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int $offset = 0): array
     {
         $sql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                p.nm_pasien, p.no_ktp, rp.stts, rp.status_lanjut, 
-                CONCAT(rp.tgl_registrasi, 'T', rp.jam_reg, '+07:00') as waktu_registrasi, 
+            SELECT
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp, rp.stts, rp.status_lanjut,
+                CONCAT(rp.tgl_registrasi, 'T', rp.jam_reg, '+07:00') as waktu_registrasi,
                 sse.id_encounter, pp.kode, py.deskripsi_panjang, pp.status,
                 ssp.id_procedure,
-                CASE 
+                CASE
                     WHEN rp.status_lanjut = 'Ralan' THEN (SELECT CONCAT(tanggal, 'T', jam, '+07:00') FROM nota_jalan WHERE no_rawat = rp.no_rawat LIMIT 1)
                     WHEN rp.status_lanjut = 'Ranap' THEN (SELECT CONCAT(tanggal, 'T', jam, '+07:00') FROM nota_inap WHERE no_rawat = rp.no_rawat LIMIT 1)
-                END as waktu_pulang
+                END as waktu_pulang,
+                pg.nama as nama_dokter, pg.no_ktp as ktp_dokter
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             INNER JOIN prosedur_pasien pp ON pp.no_rawat = rp.no_rawat
             INNER JOIN icd9 py ON pp.kode = py.kode
-            INNER JOIN satu_sehat_procedure ssp ON ssp.no_rawat = pp.no_rawat 
-                AND ssp.kode = pp.kode 
+            INNER JOIN satu_sehat_procedure ssp ON ssp.no_rawat = pp.no_rawat
+                AND ssp.kode = pp.kode
                 AND ssp.status = pp.status
+            INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
          ORDER BY no_rawat ASC
         ";
@@ -1409,40 +1415,44 @@ $stmt = $this->mysql->prepare($sql);
     {
         $sql = "
             SELECT * FROM (
-                SELECT 
-                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                    p.nm_pasien, p.no_ktp, sse.id_encounter, pr.rtl, 
-                    pg.nama, pg.no_ktp as ktppraktisi, pr.tgl_perawatan, pr.jam_rawat, 
+                SELECT
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                    p.nm_pasien, p.no_ktp, sse.id_encounter, pr.rtl,
+                    pg.nama, pg.no_ktp as ktppraktisi, pr.tgl_perawatan, pr.jam_rawat,
+                    CONCAT(nj.tanggal, 'T', nj.jam, '+07:00') as waktu_pulang,
                     ssc.id_careplan, 'Ralan' as status_lanjut, rp.kd_poli
-                FROM reg_periksa rp 
-                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
-                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
-                INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat 
-                INNER JOIN pegawai pg ON pr.nip = pg.nik 
-                INNER JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pr.no_rawat 
-                    AND ssc.tgl_perawatan = pr.tgl_perawatan 
-                    AND ssc.jam_rawat = pr.jam_rawat 
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
+                INNER JOIN pegawai pg ON pr.nip = pg.nik
+                INNER JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pr.no_rawat
+                    AND ssc.tgl_perawatan = pr.tgl_perawatan
+                    AND ssc.jam_rawat = pr.jam_rawat
                     AND ssc.status = 'Ralan'
-                WHERE pr.rtl <> '' 
+                INNER JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
+                WHERE pr.rtl &lt;&gt; ''
                   AND rp.tgl_registrasi BETWEEN :df AND :dt
 
                 UNION ALL
 
-                SELECT 
-                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
-                    p.nm_pasien, p.no_ktp, sse.id_encounter, pi.rtl, 
-                    pg.nama, pg.no_ktp as ktppraktisi, pi.tgl_perawatan, pi.jam_rawat, 
+                SELECT
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                    p.nm_pasien, p.no_ktp, sse.id_encounter, pi.rtl,
+                    pg.nama, pg.no_ktp as ktppraktisi, pi.tgl_perawatan, pi.jam_rawat,
+                    CONCAT(ni.tanggal, 'T', ni.jam, '+07:00') as waktu_pulang,
                     ssc.id_careplan, 'Ranap' as status_lanjut, rp.kd_poli
-                FROM reg_periksa rp 
-                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
-                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
-                INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat 
-                INNER JOIN pegawai pg ON pi.nip = pg.nik 
-                INNER JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pi.no_rawat 
-                    AND ssc.tgl_perawatan = pi.tgl_perawatan 
-                    AND ssc.jam_rawat = pi.jam_rawat 
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat
+                INNER JOIN pegawai pg ON pi.nip = pg.nik
+                INNER JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pi.no_rawat
+                    AND ssc.tgl_perawatan = pi.tgl_perawatan
+                    AND ssc.jam_rawat = pi.jam_rawat
                     AND ssc.status = 'Ranap'
-                WHERE pi.rtl <> '' 
+                INNER JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
+                WHERE pi.rtl &lt;&gt; ''
                   AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
             ) AS combined
          ORDER BY no_rawat ASC

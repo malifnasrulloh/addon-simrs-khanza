@@ -183,15 +183,31 @@ class SatuSehatCompositionProcessor
             }
 
             // Build PATCH operations — confirm status final
-            $ops = [
-                [
-                    'op' => 'replace',
-                    'path' => '/status',
-                    'value' => 'final'
-                ]
-            ];
+            $idPasien = $this->db->getIhsPatient($r['no_ktp']);
+            if (!$idPasien) {
+                $this->log->warning("[PHASE 2] {$noRawat}: Missing Patient IHS. Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+            $idDokter = $this->db->getIhsPractitioner($r['ktpdokter']);
+            if (!$idDokter) {
+                $this->log->warning("[PHASE 2] {$noRawat}: Missing Practitioner IHS. Skipped.");
+                $this->skipCount++;
+                continue;
+            }
 
-            $this->log->info("[PHASE 2] {$noRawat}: PATCH /Composition/{$idComposition}");
+            $refs = $this->db->fetchSyncedResourceReferences($noRawat);
+
+            $payload = SatuSehatPayloadBuilder::composition(
+                $this->config->orgId,
+                $r,
+                $idPasien,
+                $idDokter,
+                $r['id_encounter'],
+                $refs,
+                $idComposition
+            );
+            $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
             $response = $this->api->patch('/Composition/' . $idComposition, $ops);
 
             if ($response && ($response['success'] ?? false)) {

@@ -199,13 +199,13 @@ class SatuSehatServiceRequestRadiologiProcessor
                 continue;
             }
 
-            $ops = [
-                [
-                    'op' => 'replace',
-                    'path' => '/status',
-                    'value' => 'active'
-                ]
-            ];
+            $payload = SatuSehatPayloadBuilder::serviceRequestRadiologi(
+                $p,
+                $idPasien,
+                $idDokter,
+                $this->config->orgId
+            );
+            $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /ServiceRequest/{$idServiceRequest} ({$nmPerawatan})");
             $result = $this->api->patch("/ServiceRequest/{$idServiceRequest}", $ops);

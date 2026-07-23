@@ -171,14 +171,27 @@ class SatuSehatProcedureProcessor
                 continue;
             }
 
-            // Build PATCH operations — confirm status remains completed
-            $ops = [
-                [
-                    'op' => 'replace',
-                    'path' => '/status',
-                    'value' => 'completed'
-                ]
-            ];
+            $nik = $p['no_ktp'];
+            $idPasien = $this->db->getIhsPatient($nik);
+            if (!$idPasien) {
+                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Patient. Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+
+            $idDokter = null;
+            if (!empty($p['ktp_dokter'])) {
+                $idDokter = $this->db->getIhsPractitioner($p['ktp_dokter']);
+            }
+
+            $payload = SatuSehatPayloadBuilder::procedure(
+                $p,
+                $idPasien,
+                $idProcedure,
+                $idDokter,
+                $p['nama_dokter'] ?? ''
+            );
+            $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noRawat}: PATCH /Procedure/{$idProcedure} (" . count($ops) . " ops)");
             $result = $this->api->patch("/Procedure/{$idProcedure}", $ops);

@@ -193,13 +193,8 @@ class SatuSehatImmunizationProcessor
             }
 
             // Build PATCH operations — confirm completed status
-            $ops = [
-                [
-                    'op' => 'replace',
-                    'path' => '/status',
-                    'value' => 'completed'
-                ]
-            ];
+            $payload = SatuSehatPayloadBuilder::immunization($imm, $idPasien, $idDokter, $idImmunization);
+            $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noRawat}: PATCH /Immunization/{$idImmunization} (" . count($ops) . " ops)");
             $result = $this->api->patch("/Immunization/{$idImmunization}", $ops);
