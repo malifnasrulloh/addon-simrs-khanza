@@ -209,6 +209,21 @@ class SatuSehatQuestionnaireResponseProcessor
                 continue;
             }
 
+            $nikPasien = $qr['no_ktp'];
+            $nikPraktisi = $qr['ktppraktisi'];
+            $idPasien = $this->db->getIhsPatient($nikPasien);
+            if (!$idPasien) {
+                $this->log->warning("[PHASE 2] {$noResep}: Missing IHS ID for Patient (NIK: {$nikPasien}). Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+            $idPraktisi = $this->db->getIhsPractitioner($nikPraktisi);
+            if (!$idPraktisi) {
+                $this->log->warning("[PHASE 2] {$noResep}: Missing IHS ID for Practitioner (NIK: {$nikPraktisi}). Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+
             // Build PATCH operations — confirm completed status
             $payload = SatuSehatPayloadBuilder::questionnaireResponse(
                 $qr,

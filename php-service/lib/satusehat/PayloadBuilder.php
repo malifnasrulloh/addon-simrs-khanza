@@ -2356,7 +2356,7 @@ class SatuSehatPayloadBuilder
             ],
             'encounter' => [
                 'reference' => 'Encounter/' . $p['id_encounter'],
-                'display'   => 'Permintaan ' . $p['Pemeriksaan'] . ' atas nama pasien ' . $p['nm_pasien'] . ' No.RM ' . $p['no_rkm_medis'] . ' No.Rawat ' . $p['no_rawat'] . ', pada tanggal ' . $p['tgl_permintaan'] . ' ' . $time
+                'display'   => 'Permintaan ' . $p['Pemeriksaan'] . ' atas nama pasien ' . $p['nm_pasien'] . ' No.RM ' . $p['no_rkm_medis'] . ' No.Rawat ' . $p['no_rawat'] . ', pada tanggal ' . $p['tgl_permintaan']
             ],
             'authoredOn' => $dateTimeStr,
             'requester' => [
@@ -2504,7 +2504,7 @@ class SatuSehatPayloadBuilder
             ],
             'encounter' => [
                 'reference' => 'Encounter/' . $p['id_encounter'],
-                'display'   => 'Hasil Pemeriksaan Lab ' . $p['Pemeriksaan'] . ' No.Rawat ' . $p['no_rawat'] . ', Atas Nama Pasien ' . $p['nm_pasien'] . ', No.RM ' . $p['no_rkm_medis'] . ', Pada Tanggal ' . $p['tgl_hasil'] . ' ' . $time
+                'display'   => 'Hasil Pemeriksaan Lab ' . $p['Pemeriksaan'] . ' No.Rawat ' . $p['no_rawat'] . ', Atas Nama Pasien ' . $p['nm_pasien'] . ', No.RM ' . $p['no_rkm_medis'] . ', Pada Tanggal ' . $p['tgl_hasil']
             ],
             'specimen' => [
                 'reference' => 'Specimen/' . $p['id_specimen']

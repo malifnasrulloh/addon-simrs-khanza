@@ -202,7 +202,8 @@ class SatuSehatObservationLabMbProcessor
             );
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
-            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Observation/{$idObservation} ({$nmPerawatan})");
+            $nmPerawatan = $p['Pemeriksaan'] ?? $p['nm_perawatan'] ?? '';
+$this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Observation/{$idObservation} ({$nmPerawatan})");
             $result = $this->api->patch("/Observation/{$idObservation}", $ops);
 
             if ($result['success']) {

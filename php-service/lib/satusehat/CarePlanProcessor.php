@@ -220,7 +220,25 @@ class SatuSehatCarePlanProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated CarePlan {$idCarePlan} via PATCH");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $errorMessage = ($result['data']['issue'][0]['diagnostics'] ?? $result['message']);
+
+                // Cache permanent API failures
+                $isPerm = (stripos($errorMessage, 'permission') !== false || stripos($errorMessage, 'forbidden') !== false || stripos($errorMessage, 'not authorized') !== false);
+                $isPrivacy = (!$isPerm && (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false));
+                $isRule = (!$isPerm && !$isPrivacy && (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false));
+
+                if ($isPerm) {
+                    $this->db->updateCarePlanLocalState($noRawat, $tglPerawatan, $jamRawat, $statusLanjut, 'failed_rule');
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Permanent permission error, marked as failed_rule.");
+                } elseif ($isPrivacy) {
+                    $this->db->updateCarePlanLocalState($noRawat, $tglPerawatan, $jamRawat, $statusLanjut, 'privacy_error');
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Permanent privacy error.");
+                } elseif ($isRule) {
+                    $this->db->updateCarePlanLocalState($noRawat, $tglPerawatan, $jamRawat, $statusLanjut, 'failed_rule');
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Permanent rule error.");
+                } else {
+                    $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . $errorMessage);
+                }
                 $this->failCount++;
             }
         }

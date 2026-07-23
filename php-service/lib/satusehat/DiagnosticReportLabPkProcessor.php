@@ -210,7 +210,8 @@ class SatuSehatDiagnosticReportLabPkProcessor
             );
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
-            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /DiagnosticReport/{$idDiagnosticReport} ({$nmPerawatan})");
+            $nmPerawatan = $p['Pemeriksaan'] ?? $p['nm_perawatan'] ?? '';
+$this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /DiagnosticReport/{$idDiagnosticReport} ({$nmPerawatan})");
             $result = $this->api->patch("/DiagnosticReport/{$idDiagnosticReport}", $ops);
 
             if ($result['success']) {

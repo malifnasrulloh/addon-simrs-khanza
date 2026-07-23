@@ -187,6 +187,21 @@ class SatuSehatMedicationRequestProcessor
                 continue;
             }
 
+            $nikPasien = $medreq['no_ktp'];
+            $nikPraktisi = $medreq['ktppraktisi'];
+            $idPasien = $this->db->getIhsPatient($nikPasien);
+            if (!$idPasien) {
+                $this->log->warning("[PHASE 2] {$noResep}: Missing IHS ID for Patient (NIK: {$nikPasien}). Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+            $idDokter = $this->db->getIhsPractitioner($nikPraktisi);
+            if (!$idDokter) {
+                $this->log->warning("[PHASE 2] {$noResep}: Missing IHS ID for Practitioner (NIK: {$nikPraktisi}). Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+
             // Build PATCH operations — confirm completed status
             $payload = SatuSehatPayloadBuilder::medicationRequest(
                 $this->config->orgId,

@@ -225,7 +225,8 @@ class SatuSehatSpecimenLabMbProcessor
             );
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
-            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Specimen/{$idSpecimen} ({$nmPerawatan})");
+            $nmPerawatan = $p['Pemeriksaan'] ?? $p['nm_perawatan'] ?? '';
+$this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Specimen/{$idSpecimen} ({$nmPerawatan})");
             $result = $this->api->patch("/Specimen/{$idSpecimen}", $ops);
 
             if ($result['success']) {

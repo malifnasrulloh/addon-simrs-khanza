@@ -172,6 +172,20 @@ class SatuSehatMedicationStatementProcessor
                 continue;
             }
 
+            $idPasien = $this->db->getIhsPatient($p['no_ktp']);
+            if (!$idPasien) {
+                $this->log->warning("[PHASE 2] [SKIPPED] Patient {$p['no_rkm_medis']} has no valid IHS ID.");
+                $this->failCount++;
+                continue;
+            }
+
+            $idPasien = $this->db->getIhsPatient($p['no_ktp']);
+            if (!$idPasien) {
+                $this->log->warning("[PHASE 2] [SKIPPED] Patient {$p['no_rkm_medis']} has no valid IHS ID.");
+                $this->skipCount++;
+                continue;
+            }
+
             // Build PATCH operations — confirm completed status
             $payload = SatuSehatPayloadBuilder::medicationStatement(
                 $this->config->orgId,

@@ -1431,7 +1431,7 @@ $stmt = $this->mysql->prepare($sql);
                     AND ssc.jam_rawat = pr.jam_rawat
                     AND ssc.status = 'Ralan'
                 INNER JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
-                WHERE pr.rtl &lt;&gt; ''
+                WHERE pr.rtl <> ''
                   AND rp.tgl_registrasi BETWEEN :df AND :dt
 
                 UNION ALL
@@ -1452,7 +1452,7 @@ $stmt = $this->mysql->prepare($sql);
                     AND ssc.jam_rawat = pi.jam_rawat
                     AND ssc.status = 'Ranap'
                 INNER JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
-                WHERE pi.rtl &lt;&gt; ''
+                WHERE pi.rtl <> ''
                   AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
             ) AS combined
          ORDER BY no_rawat ASC

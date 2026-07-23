@@ -214,7 +214,8 @@ class SatuSehatServiceRequestLabMbProcessor
             );
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
-            $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /ServiceRequest/{$idServiceRequest} ({$nmPerawatan})");
+            $nmPerawatan = $p['Pemeriksaan'] ?? $p['nm_perawatan'] ?? '';
+$this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /ServiceRequest/{$idServiceRequest} ({$nmPerawatan})");
             $result = $this->api->patch("/ServiceRequest/{$idServiceRequest}", $ops);
 
             if ($result['success']) {

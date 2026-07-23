@@ -11,9 +11,9 @@ declare(strict_types=1);
 class OrthancClient
 {
     private SatuSehatConfig $config;
-    private SatuSehatLog $log;
+    private Logger $log;
 
-    public function __construct(SatuSehatConfig $config, SatuSehatLog $log)
+    public function __construct(SatuSehatConfig $config, Logger $log)
     {
         $this->config = $config;
         $this->log = $log;

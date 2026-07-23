@@ -210,11 +210,88 @@ class SatuSehatClient
 
     /**
      * Send PATCH request (JSON Patch format).
+     *
+     * Fast path: attempts all operations in a single PATCH batch.
+     * Fallback: if the batch fails and there are multiple operations, retries
+     * each operation individually so a single rejected op doesn't doom the rest.
+     *
      * @param array $operations JSON Patch operations, e.g. [['op'=>'replace','path'=>'/status','value'=>'finished']]
      */
     public function patch(string $endpoint, array $operations): array
     {
-        return $this->request('PATCH', $endpoint, $operations, 'application/json-patch+json');
+        // ── Fast path: try all operations in a single PATCH ──────────────
+        $result = $this->request('PATCH', $endpoint, $operations, 'application/json-patch+json');
+
+        // Batch succeeded, or only one op — nothing to decompose
+        if ($result['success'] || count($operations) <= 1) {
+            return $result;
+        }
+
+        // ── Fallback: send operations one at a time ─────────────────────
+        $opCount = count($operations);
+        $this->log->warning(
+            "[PATCH] Batch PATCH failed (HTTP {$result['code']}), " .
+            "falling back to sequential per-op PATCH ({$opCount} ops)"
+        );
+
+        $successCount = 0;
+        $failCount    = 0;
+        $failedOps    = [];
+        $lastResult   = $result;
+
+        foreach ($operations as $i => $op) {
+            $opPath = $op['path'] ?? '?';
+            $opDesc = "op=" . ($op['op'] ?? '?') . " path={$opPath}";
+
+            $this->log->info("[PATCH] Sequential op " . ($i + 1) . "/{$opCount}: {$opDesc}");
+            $opResult = $this->request('PATCH', $endpoint, [$op], 'application/json-patch+json');
+            $lastResult = $opResult;
+
+            if ($opResult['success']) {
+                $successCount++;
+                $this->log->info("[PATCH]  ✓ Op {$i}: {$opDesc}");
+            } else {
+                $failCount++;
+                $failedOps[] = [
+                    'index' => $i,
+                    'op'    => $op,
+                    'error' => $opResult['data']['issue'][0]['diagnostics']
+                        ?? $opResult['message']
+                        ?? 'Unknown error',
+                ];
+                $this->log->warning(
+                    "[PATCH]  ✗ Op {$i}: {$opDesc} failed → " .
+                    ($opResult['data']['issue'][0]['diagnostics'] ?? $opResult['message'])
+                );
+            }
+        }
+
+        // ── Compose the final result ────────────────────────────────────
+        if ($failCount === 0) {
+            return [
+                'success'  => true,
+                'code'     => 200,
+                'message'  => "Sequential PATCH: all {$successCount} ops succeeded",
+                'data'     => $lastResult['data'] ?? [],
+                'response' => $lastResult['response'] ?? '',
+            ];
+        }
+
+        $errorMsg = "Sequential PATCH: {$successCount} ok, {$failCount} failed";
+        $this->log->error("[PATCH] {$errorMsg}");
+        foreach ($failedOps as $fo) {
+            $this->log->error("[PATCH]   Failed op #{$fo['index']}: {$fo['error']}");
+        }
+
+        return [
+            'success'  => false,
+            'code'     => 0,
+            'message'  => $errorMsg,
+            'data'     => [
+                'issue'              => [['diagnostics' => $errorMsg]],
+                'individual_results' => $failedOps,
+            ],
+        ];
     }
 
     /**
