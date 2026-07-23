@@ -68,6 +68,11 @@ services:
       DB_USER: ${SIMRS_DB_USER}
       DB_PASS: ${SIMRS_DB_PASS}
       DB_NAME: ${SIMRS_DB_NAME}
+
+      # --- Webapps Upload Credentials ---
+      SIMRS_WEBAPPS_URL: ${SIMRS_WEBAPPS_URL:-http://host.docker.internal/webapps/radiologi/pages/upload/service.php}
+      SIMRS_WEBAPPS_USER: ${SIMRS_WEBAPPS_USER:-yanghack}
+      SIMRS_WEBAPPS_PASS: ${SIMRS_WEBAPPS_PASS:-sialselamanya}
     depends_on:
       orthanc-db:
         condition: service_healthy
