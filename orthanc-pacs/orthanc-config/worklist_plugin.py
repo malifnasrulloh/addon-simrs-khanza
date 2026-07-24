@@ -6,6 +6,7 @@ import datetime
 import logging
 import time
 import base64
+import threading
 import urllib.request
 import urllib.parse
 
@@ -574,51 +575,256 @@ def build_mwl_study_tags(matched_exam, inst_name="SIMRS KHANZA"):
     return replace_tags
 
 
+def call_orthanc_local_api(path, data=None, method="GET"):
+    """
+    Executes a local HTTP REST call to Orthanc on 127.0.0.1:8042.
+    Tries environment credentials first; falls back to default admin:changeme if 401 is received.
+    """
+    orthanc_port = os.environ.get("ORTHANC_HTTP_PORT", "8042").strip().strip('"').strip("'")
+    orthanc_user = os.environ.get("ORTHANC_WEB_USER", "admin").strip().strip('"').strip("'")
+    orthanc_pass = os.environ.get("ORTHANC_WEB_PASS", "changeme").strip().strip('"').strip("'")
+
+    url = f"http://127.0.0.1:{orthanc_port}{path}"
+
+    auth_pairs = [
+        (orthanc_user, orthanc_pass),
+        ("admin", "changeme")
+    ]
+
+    # Deduplicate auth pairs while maintaining order
+    seen = set()
+    unique_pairs = []
+    for pair in auth_pairs:
+        if pair not in seen:
+            seen.add(pair)
+            unique_pairs.append(pair)
+
+    last_error = None
+    for user, pwd in unique_pairs:
+        auth_str = f"{user}:{pwd}"
+        basic_auth = base64.b64encode(auth_str.encode('utf-8')).decode('utf-8')
+        
+        headers = {"Authorization": f"Basic {basic_auth}"}
+        req_data = None
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+            req_data = json.dumps(data).encode('utf-8') if isinstance(data, (dict, list)) else data
+
+        req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = resp.read()
+                return resp.status, body
+        except urllib.error.HTTPError as http_err:
+            if http_err.code == 401:
+                logger.debug(f"[AutoSync] Local Orthanc HTTP 401 for user '{user}'. Retrying next auth pair...")
+                last_error = http_err
+                continue
+            raise http_err
+        except Exception as err:
+            raise err
+
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"Failed to connect to Orthanc API at {url}")
+
+
+ALIGNED_STUDIES = set()
+
 def align_orthanc_study_tags(parent_study_id, matched_exam, inst_name="SIMRS KHANZA"):
     """
     Aligns/normalizes DICOM tags on the parent Study in Orthanc using SIMRS metadata,
     matching the exact schema of Modality Worklist (MWL) answers.
+    Uses HTTP REST socket on localhost:8042 to prevent Python C-extension GIL/GlobalLock deadlocks.
+    Uses KeepSource: False to modify the study in-place and remove the raw unaligned original.
     """
     try:
         if not parent_study_id:
             return
             
+        ALIGNED_STUDIES.add(parent_study_id)
         replace_study_tags = build_mwl_study_tags(matched_exam, inst_name)
         if not replace_study_tags:
             return
 
         modify_payload = {
             "Replace": replace_study_tags,
-            "KeepSource": True,
+            "KeepSource": False,
             "Force": True
         }
         
-        logger.info(f"[AutoSync] Aligning DICOM study tags for StudyID={parent_study_id} matching MWL schema: {replace_study_tags}")
-        orthanc.RestApiPost(f'/studies/{parent_study_id}/modify', json.dumps(modify_payload))
+        logger.info(f"[AutoSync] Aligning DICOM study tags via HTTP REST for StudyID={parent_study_id} (KeepSource=False). Payload: {replace_study_tags}")
+        status, body = call_orthanc_local_api(f"/studies/{parent_study_id}/modify", data=modify_payload, method="POST")
+        resp_str = body.decode('utf-8', errors='replace')
+        logger.info(f"[AutoSync] Orthanc HTTP Modify Response (Status {status}): {resp_str}")
+
+        try:
+            resp_json = json.loads(resp_str)
+            if isinstance(resp_json, dict) and resp_json.get("ID"):
+                ALIGNED_STUDIES.add(resp_json["ID"])
+        except Exception:
+            pass
+            
+    except urllib.error.HTTPError as http_err:
+        err_body = http_err.read().decode('utf-8', errors='replace') if http_err.fp else ""
+        logger.error(f"[AutoSync] Orthanc HTTP Modify Error {http_err.code} ({http_err.reason}): '{err_body}'")
     except Exception as err:
-        logger.error(f"[AutoSync] Failed to align DICOM study tags: {err}")
+        logger.error(f"[AutoSync] Failed to align DICOM study tags for StudyID={parent_study_id}: {err}", exc_info=True)
+
+
+def process_auto_sync_background(instance_id_str, parent_study_id, matched_exam, inst_name, sop_instance_uid):
+    """
+    Background worker thread executed asynchronously after OnStoredInstance returns.
+    Renders JPEG preview FIRST (before raw instance is modified/deleted), then aligns DICOM study tags
+    in-place via HTTP REST, and uploads preview image to SIMRS webapps (with direct DB/disk fallback).
+    """
+    try:
+        # Give Orthanc 0.5s to finish committing the C-STORE transaction
+        time.sleep(0.5)
+
+        # Step A: Get rendered JPEG preview bytes from raw instance BEFORE modifying/deleting raw study
+        jpeg_bytes = None
+        if instance_id_str:
+            try:
+                status_prev, jpeg_bytes = call_orthanc_local_api(f"/instances/{instance_id_str}/preview", method="GET")
+                logger.info(f"[AutoSync] Rendered JPEG preview via HTTP for instance {instance_id_str} ({len(jpeg_bytes)} bytes)")
+            except Exception as e:
+                logger.error(f"[AutoSync] Failed to render JPEG preview for instance {instance_id_str}: {e}")
+
+        if not jpeg_bytes:
+            logger.error(f"[AutoSync] Failed to render JPEG preview for instance {instance_id_str}. Aborting upload.")
+            return
+
+        # Step B: Align DICOM tags on parent Study in Orthanc (matching MWL schema, in-place via HTTP REST)
+        if parent_study_id:
+            align_orthanc_study_tags(parent_study_id, matched_exam, inst_name)
+
+        # Encode JPEG bytes to base64 string
+        base64_jpg = base64.b64encode(jpeg_bytes).decode('utf-8')
+
+        # Unique filename using SOPInstanceUID or instance_id_str
+        clean_uid = sop_instance_uid.replace('.', '_') if sop_instance_uid else (instance_id_str[:12] if instance_id_str else "img")
+        filename = f"CR_{clean_uid}.jpg"
+
+        no_rawat = matched_exam['no_rawat']
+        tgl_periksa = str(matched_exam['tgl_periksa'])
+        jam_periksa = str(matched_exam['jam'])
+
+        # Webapps upload config from env or defaults (strip quotes & whitespace)
+        raw_webapps_url = os.environ.get("SIMRS_WEBAPPS_URL", "http://host.docker.internal/webapps/radiologi/pages/upload/service.php")
+        raw_user = os.environ.get("SIMRS_WEBAPPS_USER", "yanghack")
+        raw_pass = os.environ.get("SIMRS_WEBAPPS_PASS", "sialselamanya")
+
+        webapps_url = raw_webapps_url.strip().strip('"').strip("'")
+        web_user = raw_user.strip().strip('"').strip("'")
+        web_pass = raw_pass.strip().strip('"').strip("'")
+
+        payload = {
+            "norawat": no_rawat,
+            "tanggal": tgl_periksa,
+            "jam": jam_periksa,
+            "namafile": filename,
+            "file": base64_jpg
+        }
+
+        webapps_success = False
+        logger.info(f"[AutoSync] Posting image to Webapps service.php | URL='{webapps_url}' | User='{web_user}' | Payload: norawat='{no_rawat}', tgl='{tgl_periksa}', jam='{jam_periksa}', filename='{filename}', base64_len={len(base64_jpg)}")
+
+        req = urllib.request.Request(
+            webapps_url,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={
+                "Content-Type": "application/json",
+                "Username": web_user,
+                "Password": web_pass
+            },
+            method="POST"
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                status_code = resp.status
+                resp_body = resp.read().decode('utf-8', errors='replace')
+                logger.info(f"[AutoSync] Webapps Upload Response (HTTP {status_code}): {resp_body}")
+                webapps_success = True
+        except urllib.error.HTTPError as http_err:
+            err_body = http_err.read().decode('utf-8', errors='replace') if http_err.fp else ""
+            logger.warn(f"[AutoSync] Webapps Upload HTTP Error {http_err.code} ({http_err.reason}) for URL '{webapps_url}' -> Error Response Body: '{err_body}'. Initiating fallback...")
+        except Exception as http_err:
+            logger.warn(f"[AutoSync] Webapps Upload Network/Connection Exception for URL '{webapps_url}': {http_err}. Initiating fallback...")
+
+        # Direct DB/disk fallback if HTTP POST fails
+        if not webapps_success:
+            webapps_dir = os.environ.get("SIMRS_WEBAPPS_DIR", "/var/www/html/webapps/radiologi/pages/upload").strip().strip('"').strip("'")
+            if not os.path.exists(webapps_dir):
+                alt_dir = "/home/malifnasrulloh/Downloads/SIMRS-Khanza-fork/webapps/radiologi/pages/upload"
+                if os.path.exists(alt_dir):
+                    webapps_dir = alt_dir
+
+            if os.path.exists(webapps_dir):
+                target_path = os.path.join(webapps_dir, filename)
+                with open(target_path, 'wb') as f:
+                    f.write(jpeg_bytes)
+                logger.info(f"[AutoSync] Direct Fallback: Wrote JPEG image to disk: {target_path}")
+
+                rel_lokasi = f"pages/upload/{filename}"
+                pool = get_db_pool()
+                conn = pool.connection()
+                try:
+                    with conn.cursor() as cursor:
+                        sql_insert = """
+                            INSERT INTO gambar_radiologi (no_rawat, tgl_periksa, jam, lokasi_gambar)
+                            VALUES (%s, %s, %s, %s)
+                            ON DUPLICATE KEY UPDATE lokasi_gambar = VALUES(lokasi_gambar)
+                        """
+                        cursor.execute(sql_insert, (no_rawat, tgl_periksa, jam_periksa, rel_lokasi))
+                        conn.commit()
+                        logger.info(f"[AutoSync] Direct Fallback: Successfully registered {rel_lokasi} in gambar_radiologi table for no_rawat={no_rawat}")
+                except Exception as db_err:
+                    logger.error(f"[AutoSync] Direct Fallback DB insert failed: {db_err}")
+                finally:
+                    conn.close()
+            else:
+                logger.error(f"[AutoSync] Direct Fallback failed: target upload directory '{webapps_dir}' does not exist on disk/container.")
+
+    except Exception as e:
+        logger.error(f"[AutoSync] Exception in process_auto_sync_background worker thread: {e}", exc_info=True)
 
 
 def OnStoredInstance(instanceId, instance=None):
     """
-    Triggered whenever Orthanc receives a DICOM instance (e.g. from Fuji CR machine).
-    1. Extracts PatientID (no_rkm_medis) and StudyDate.
-    2. Queries SIMRS MariaDB for matching no_rawat, tgl_periksa, jam, and patient demographics.
-    3. Aligns/enriches DICOM tags in Orthanc PACS matching MWL schema.
-    4. Renders full-resolution JPEG preview via Orthanc API.
-    5. Posts to SIMRS webapps service.php to insert into `gambar_radiologi` and save JPEG file (with direct disk/DB fallback).
+    Triggered whenever Orthanc receives a DICOM instance (e.g. from Fuji CR machine or internal modify).
+    1. Extracts PatientID (no_rkm_medis) and StudyDate directly from instance memory object.
+    2. Checks if study is in ALIGNED_STUDIES set or instance tags match AccessionNumber to break recursive loops.
+    3. Queries SIMRS MariaDB for matching no_rawat, tgl_periksa, jam, and patient demographics.
+    4. Spawns asynchronous background thread to render preview & align DICOM tags without deadlocking C-STORE.
     """
     try:
-        # Resolve clean instance_id_str if possible
-        instance_id_str = extract_instance_id(instanceId)
+        instance_obj = instance if instance is not None else instanceId
+        instance_id_str = extract_instance_id(instance_obj)
         
-        # Extract metadata from multi-source tag inspection
-        patient_id, study_date_raw, sop_instance_uid, study_instance_uid = extract_dicom_metadata(instanceId, instance_id_str)
+        # Extract metadata directly from instance C++ object in memory
+        tag_dicts = get_all_tags_dicts(instance_obj, instance_id_str)
+        patient_id, study_date_raw, sop_instance_uid, study_instance_uid = extract_dicom_metadata(instance_obj, instance_id_str)
         
         # Resolve clean string IDs for instance and study
-        instance_id_str, parent_study_id = resolve_orthanc_ids(instanceId, sop_instance_uid, study_instance_uid)
+        instance_id_str, parent_study_id = resolve_orthanc_ids(instance_obj, sop_instance_uid, study_instance_uid)
         log_id = instance_id_str if instance_id_str else (sop_instance_uid if sop_instance_uid else "instance")
         
+        if parent_study_id and parent_study_id in ALIGNED_STUDIES:
+            logger.debug(f"[AutoSync] StudyID={parent_study_id} is in ALIGNED_STUDIES set. Skipping loop.")
+            return
+
+        inst_name_tag = extract_tag_val(tag_dicts, "InstitutionName", "0008,0080", "00080080")
+        acsn_tag = extract_tag_val(tag_dicts, "AccessionNumber", "0008,0050", "00080050")
+        db_inst_name = os.environ.get("MWL_INSTITUTION_NAME", "").strip()
+
+        if inst_name_tag and ((db_inst_name and inst_name_tag.upper() == db_inst_name.upper()) or ("SURYA DHARMA" in inst_name_tag.upper()) or ("KHANZA" in inst_name_tag.upper())):
+            logger.debug(f"[AutoSync] Instance {log_id} is ALREADY aligned with InstitutionName='{inst_name_tag}' (AccessionNumber='{acsn_tag}'). Skipping loop.")
+            if parent_study_id:
+                ALIGNED_STUDIES.add(parent_study_id)
+            return
+
         if not patient_id or not study_date_raw:
             logger.debug(f"[AutoSync] Missing PatientID ('{patient_id}') or StudyDate ('{study_date_raw}') for instance {log_id}. Skipping auto-sync.")
             return
@@ -709,108 +915,28 @@ def OnStoredInstance(instanceId, instance=None):
         if not matched_exam:
             logger.info(f"[AutoSync] No active periksa/permintaan_radiologi found for PatientID={patient_id} on {study_date}. Skipping.")
             return
-            
-        no_rawat = matched_exam['no_rawat']
-        tgl_periksa = str(matched_exam['tgl_periksa'])
-        jam_periksa = str(matched_exam['jam'])
-        
-        logger.info(f"[AutoSync] Matched SIMRS Exam: no_rawat={no_rawat}, tgl={tgl_periksa}, jam={jam_periksa}")
-        
-        # Step A: Align DICOM tags on parent Study in Orthanc (matching MWL schema)
-        if parent_study_id:
-            align_orthanc_study_tags(parent_study_id, matched_exam, inst_name)
-        
-        # Step B: Get rendered JPEG preview bytes from Orthanc REST API
-        jpeg_bytes = None
-        if instance_id_str:
-            jpeg_bytes = orthanc.RestApiGet(f'/instances/{instance_id_str}/preview')
-            
-        if not jpeg_bytes:
-            logger.error(f"[AutoSync] Failed to render JPEG preview for instance {log_id}")
+
+        # Check if incoming DICOM instance tags already match the expected SIMRS exam AccessionNumber
+        existing_acsn = extract_tag_val(tag_dicts, "AccessionNumber", "0008,0050", "00080050")
+        noorder = matched_exam.get('noorder', '')
+        kd_jenis_prw = matched_exam.get('kd_jenis_prw', '')
+        expected_acsn = build_acsn(noorder, kd_jenis_prw) if (noorder or kd_jenis_prw) else noorder
+
+        if expected_acsn and existing_acsn and existing_acsn.strip().upper() == expected_acsn.strip().upper():
+            logger.info(f"[AutoSync] Instance {log_id} is ALREADY aligned with AccessionNumber='{existing_acsn}'. Skipping loop.")
+            if parent_study_id:
+                ALIGNED_STUDIES.add(parent_study_id)
             return
-            
-        # Encode JPEG bytes to base64 string
-        base64_jpg = base64.b64encode(jpeg_bytes).decode('utf-8')
-        
-        # Unique filename using SOPInstanceUID or instance_id_str
-        clean_uid = sop_instance_uid.replace('.', '_') if sop_instance_uid else (instance_id_str[:12] if instance_id_str else "img")
-        filename = f"CR_{clean_uid}.jpg"
-        
-        # Webapps upload config from env or defaults (strip quotes & whitespace)
-        raw_webapps_url = os.environ.get("SIMRS_WEBAPPS_URL", "http://host.docker.internal/webapps/radiologi/pages/upload/service.php")
-        raw_user = os.environ.get("SIMRS_WEBAPPS_USER", "yanghack")
-        raw_pass = os.environ.get("SIMRS_WEBAPPS_PASS", "sialselamanya")
 
-        webapps_url = raw_webapps_url.strip().strip('"').strip("'")
-        web_user = raw_user.strip().strip('"').strip("'")
-        web_pass = raw_pass.strip().strip('"').strip("'")
-        
-        payload = {
-            "norawat": no_rawat,
-            "tanggal": tgl_periksa,
-            "jam": jam_periksa,
-            "namafile": filename,
-            "file": base64_jpg
-        }
-        
-        webapps_success = False
-        logger.info(f"[AutoSync] Posting image to webapps URL: '{webapps_url}' (User: '{web_user}')")
+        logger.info(f"[AutoSync] Matched SIMRS Exam: no_rawat={matched_exam['no_rawat']}. Spawning background worker thread...")
 
-        req = urllib.request.Request(
-            webapps_url,
-            data=json.dumps(payload).encode('utf-8'),
-            headers={
-                "Content-Type": "application/json",
-                "Username": web_user,
-                "Password": web_pass
-            },
-            method="POST"
+        # Spawn asynchronous daemon thread to run preview rendering & tag alignment without deadlocking C-STORE!
+        t = threading.Thread(
+            target=process_auto_sync_background,
+            args=(instance_id_str, parent_study_id, matched_exam, inst_name, sop_instance_uid),
+            daemon=True
         )
-        
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                resp_data = json.loads(resp.read().decode('utf-8'))
-                logger.info(f"[AutoSync] Webapps Upload Response: {resp_data}")
-                if resp.status == 200:
-                    webapps_success = True
-        except urllib.error.HTTPError as http_err:
-            logger.warn(f"[AutoSync] HTTP post to '{webapps_url}' returned HTTP {http_err.code}: {http_err.reason}. Attempting direct DB/disk fallback...")
-        except Exception as http_err:
-            logger.warn(f"[AutoSync] HTTP post to '{webapps_url}' failed ({http_err}). Attempting direct DB/disk fallback...")
-            
-        # Direct DB/disk fallback if HTTP POST fails
-        if not webapps_success:
-            webapps_dir = os.environ.get("SIMRS_WEBAPPS_DIR", "/var/www/html/webapps/radiologi/pages/upload").strip().strip('"').strip("'")
-            if not os.path.exists(webapps_dir):
-                alt_dir = "/home/malifnasrulloh/Downloads/SIMRS-Khanza-fork/webapps/radiologi/pages/upload"
-                if os.path.exists(alt_dir):
-                    webapps_dir = alt_dir
-
-            if os.path.exists(webapps_dir):
-                target_path = os.path.join(webapps_dir, filename)
-                with open(target_path, 'wb') as f:
-                    f.write(jpeg_bytes)
-                logger.info(f"[AutoSync] Direct Fallback: Wrote JPEG image to {target_path}")
-
-                rel_lokasi = f"pages/upload/{filename}"
-                pool = get_db_pool()
-                conn = pool.connection()
-                try:
-                    with conn.cursor() as cursor:
-                        sql_insert = """
-                            INSERT INTO gambar_radiologi (no_rawat, tgl_periksa, jam, lokasi_gambar)
-                            VALUES (%s, %s, %s, %s)
-                            ON DUPLICATE KEY UPDATE lokasi_gambar = VALUES(lokasi_gambar)
-                        """
-                        cursor.execute(sql_insert, (no_rawat, tgl_periksa, jam_periksa, rel_lokasi))
-                        conn.commit()
-                        logger.info(f"[AutoSync] Direct Fallback: Successfully registered {rel_lokasi} in gambar_radiologi")
-                except Exception as db_err:
-                    logger.error(f"[AutoSync] Direct Fallback DB insert failed: {db_err}")
-                finally:
-                    conn.close()
-            else:
-                logger.error(f"[AutoSync] Direct Fallback failed: upload directory {webapps_dir} does not exist.")
+        t.start()
 
     except Exception as e:
         logger.error(f"[AutoSync] Exception in OnStoredInstance callback: {e}")
