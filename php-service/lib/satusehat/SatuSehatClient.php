@@ -19,6 +19,7 @@ class SatuSehatClient
     private bool   $verbosePayload;
     private Logger $log;
     private string $tokenCacheFile;
+    private string $permissionCacheFile;
     /**
      * Source timezone used when a payload string has no explicit offset.
      * Configurable via SatuSehatConfig::$timezone (defaults to Asia/Jakarta).
@@ -39,8 +40,9 @@ class SatuSehatClient
         $this->verbosePayload  = $config->verbosePayload;
         $this->log             = $log;
 
-        $this->tokenCacheFile  = $config->logDir . '/satusehat_token.json';
-        $this->sourceTimezone  = new \DateTimeZone($config->timezone ?: 'Asia/Jakarta');
+        $this->tokenCacheFile     = $config->logDir . '/satusehat_token.json';
+        $this->permissionCacheFile = $config->logDir . '/satusehat_permission_denied.json';
+        $this->sourceTimezone     = new \DateTimeZone($config->timezone ?: 'Asia/Jakarta');
     }
 
     /**
@@ -209,8 +211,11 @@ class SatuSehatClient
     }
 
     /**
-     * 3-layer update flow: PUT → PATCH(batch) → PATCH(per-op).
+     * 3-layer update flow: PUT → PATCH(batch) → PATCH(per-op), with
+     * permanent permission-denied caching.
      *
+     * Layer 0 — Permission cache: if this resource was previously rejected
+     *           with "You don't have permission to edit resource", skip it.
      * Layer 1 — PUT: full resource replacement (most permissive).
      * Layer 2 — PATCH batch: all operations in one call.
      * Layer 3 — PATCH per-op: each operation individually.
@@ -218,17 +223,44 @@ class SatuSehatClient
      * If $payload is provided, Layer 1 (PUT) is attempted first. This is useful
      * when the FHIR server rejects PATCH on certain resources but accepts PUT.
      *
+     * When ALL layers fail with a permission error, the resource endpoint is
+     * cached to disk so it is never retried on future runs.
+     *
      * @param array  $operations JSON Patch operations, e.g. [['op'=>'replace','path'=>'/status','value'=>'finished']]
      * @param array|null $putPayload Full FHIR resource for PUT fallback, or null to skip PUT layer
      */
     public function patch(string $endpoint, array $operations, ?array $putPayload = null): array
     {
+        // ── Layer 0: Permission cache — skip if previously denied ─────
+        if ($this->isPermissionDenied($endpoint)) {
+            $this->log->info("[UPDATE] {$endpoint}: Skipped (cached permission denied)");
+            return [
+                'success'          => true,
+                'code'             => 200,
+                'message'          => 'Permission denied (cached)',
+                'data'             => [],
+                'permission_skip'  => true,
+            ];
+        }
+
         // ── Layer 1: PUT (full resource replacement) ───────────────────
         if ($putPayload !== null) {
             $putResult = $this->request('PUT', $endpoint, $putPayload);
             if ($putResult['success']) {
                 $this->log->info("[UPDATE] {$endpoint}: PUT succeeded (Layer 1/3)");
                 return $putResult;
+            }
+            // Permission denied on PUT → cache immediately, no point trying PATCH
+            if (self::isPermissionMessage(self::extractErrorMsg($putResult))) {
+                $this->log->warning("[UPDATE] {$endpoint}: PUT permission denied — caching as permanent");
+                $this->markPermissionDenied($endpoint);
+                return [
+                    'success'          => true,
+                    'code'             => 200,
+                    'message'          => 'Permission denied (cached)',
+                    'data'             => [],
+                    'permission_skip'  => true,
+                ];
             }
             $this->log->warning(
                 "[UPDATE] {$endpoint}: PUT failed (HTTP {$putResult['code']}), " .
@@ -239,7 +271,25 @@ class SatuSehatClient
         // ── Layer 2: PATCH batch (all ops at once) ─────────────────────
         $result = $this->request('PATCH', $endpoint, $operations, 'application/json-patch+json');
 
-        if ($result['success'] || count($operations) <= 1) {
+        if ($result['success']) {
+            return $result;
+        }
+
+        // Permission denied on batch PATCH → cache immediately
+        if (self::isPermissionMessage(self::extractErrorMsg($result))) {
+            $this->log->warning("[UPDATE] {$endpoint}: Batch PATCH permission denied — caching as permanent");
+            $this->markPermissionDenied($endpoint);
+            return [
+                'success'          => true,
+                'code'             => 200,
+                'message'          => 'Permission denied (cached)',
+                'data'             => [],
+                'permission_skip'  => true,
+            ];
+        }
+
+        // Single-op PATCH failed too → no point decomposing further
+        if (count($operations) <= 1) {
             return $result;
         }
 
@@ -291,8 +341,19 @@ class SatuSehatClient
 
         $errorMsg = "Per-op PATCH: {$successCount} ok, {$failCount} failed";
         $this->log->error("[UPDATE] {$errorMsg}");
+
+        // ── Permission cache: if ALL failures are permission-denied, cache it ──
+        $allPermission = ($failCount > 0);
         foreach ($failedOps as $fo) {
             $this->log->error("[UPDATE]   Failed op #{$fo['index']}: {$fo['error']}");
+            if (!self::isPermissionMessage($fo['error'])) {
+                $allPermission = false;
+            }
+        }
+
+        if ($allPermission) {
+            $this->log->warning("[UPDATE] {$endpoint}: All ops failed with 'permission denied' — caching as permanent");
+            $this->markPermissionDenied($endpoint);
         }
 
         return [
@@ -322,6 +383,65 @@ class SatuSehatClient
         }
         // Generic message
         return $result['message'] ?? 'Unknown error';
+    }
+
+    /**
+     * Check if an error message indicates a permanent permission denial.
+     */
+    private static function isPermissionMessage(string $msg): bool
+    {
+        $needles = ['permission', "don't have permission", 'do not have permission', 'forbidden', 'not authorized'];
+        foreach ($needles as $needle) {
+            if (stripos($msg, $needle) !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Load the permission-denied cache (persistent across runs).
+     * @return array<string, int> endpoint => timestamp
+     */
+    private function getPermissionCache(): array
+    {
+        if (!file_exists($this->permissionCacheFile)) {
+            return [];
+        }
+        $raw = @file_get_contents($this->permissionCacheFile);
+        if (!$raw) {
+            return [];
+        }
+        $data = json_decode($raw, true);
+        return is_array($data) ? $data : [];
+    }
+
+    /**
+     * Save the permission-denied cache to disk.
+     */
+    private function savePermissionCache(array $cache): void
+    {
+        file_put_contents($this->permissionCacheFile, json_encode($cache));
+    }
+
+    /**
+     * Check if an endpoint is permanently permission-denied.
+     */
+    private function isPermissionDenied(string $endpoint): bool
+    {
+        $cache = $this->getPermissionCache();
+        return isset($cache[$endpoint]);
+    }
+
+    /**
+     * Mark an endpoint as permanently permission-denied (persisted to disk).
+     */
+    private function markPermissionDenied(string $endpoint): void
+    {
+        $cache = $this->getPermissionCache();
+        $cache[$endpoint] = time();
+        $this->savePermissionCache($cache);
+        $this->log->warning("[PERMISSION] Cached {$endpoint} — will not retry on future runs");
     }
 
     /**
