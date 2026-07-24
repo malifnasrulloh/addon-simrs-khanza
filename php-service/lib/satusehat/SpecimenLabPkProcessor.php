@@ -227,7 +227,7 @@ class SatuSehatSpecimenLabPkProcessor
 
             $nmPerawatan = $p['Pemeriksaan'] ?? $p['nm_perawatan'] ?? '';
 $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Specimen/{$idSpecimen} ({$nmPerawatan})");
-            $result = $this->api->patch("/Specimen/{$idSpecimen}", $ops);
+            $result = $this->api->patch("/Specimen/{$idSpecimen}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateSpecimenLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'updated');

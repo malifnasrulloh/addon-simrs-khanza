@@ -213,7 +213,7 @@ class SatuSehatCarePlanProcessor
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noRawat}: PATCH /CarePlan/{$idCarePlan} (" . count($ops) . " ops)");
-            $result = $this->api->patch("/CarePlan/{$idCarePlan}", $ops);
+            $result = $this->api->patch("/CarePlan/{$idCarePlan}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateCarePlanLocalState($noRawat, $tglPerawatan, $jamRawat, $statusLanjut, 'updated');

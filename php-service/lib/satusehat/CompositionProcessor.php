@@ -208,7 +208,7 @@ class SatuSehatCompositionProcessor
                 $idComposition
             );
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
-            $response = $this->api->patch('/Composition/' . $idComposition, $ops);
+            $response = $this->api->patch('/Composition/' . $idComposition, $ops, $payload);
 
             if ($response && ($response['success'] ?? false)) {
                 $this->db->updateCompositionLocalState($noRawat, 'updated');

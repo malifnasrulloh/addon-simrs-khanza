@@ -242,7 +242,7 @@ class SatuSehatMedicationDispenseProcessor
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noRawat} [{$statusPemberian}]: PATCH /MedicationDispense/{$idDispense} (" . count($ops) . " ops)");
-            $result = $this->api->patch("/MedicationDispense/{$idDispense}", $ops);
+            $result = $this->api->patch("/MedicationDispense/{$idDispense}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'updated');

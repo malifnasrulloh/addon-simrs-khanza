@@ -197,7 +197,7 @@ class SatuSehatImmunizationProcessor
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noRawat}: PATCH /Immunization/{$idImmunization} (" . count($ops) . " ops)");
-            $result = $this->api->patch("/Immunization/{$idImmunization}", $ops);
+            $result = $this->api->patch("/Immunization/{$idImmunization}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateImmunizationLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'updated');

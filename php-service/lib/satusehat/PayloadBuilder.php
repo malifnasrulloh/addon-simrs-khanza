@@ -623,6 +623,10 @@ class SatuSehatPayloadBuilder
             // Other preventive/screening
             'Z00.11' => 'Z00.1', // Health examination for newborns (not in 2010) -> Health examination
             'Z00.12' => 'Z00.1',
+            // Atherosclerosis (I70.xx) — WHO ICD-10 uses I70.9 not I70.90 (5-char is US CM extension)
+            'I70.90' => 'I70.9',  // Unspecified atherosclerosis -> Atherosclerosis, unspecified
+            // Benign neoplasm of mandible (D16.5x)
+            'D16.50' => 'D16.5',  // Benign neoplasm of mandible (unspecified part) -> D16.5 4-char WHO form
         ];
 
         return $map[$code] ?? $code; // Return mapped code, or original if not in map
@@ -1708,7 +1712,9 @@ class SatuSehatPayloadBuilder
                             'doseQuantity' => self::sanitizeUcum([
                                 'value'  => $signa1,
                                 'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
-                                'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
+                                // system intentionally null — SATUSEHAT rejects http://unitsofmeasure.org
+                                // on MedicationStatement doseQuantity (RuleNumber 10480)
+                                'system' => null,
                                 'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
                             ])
                         ]

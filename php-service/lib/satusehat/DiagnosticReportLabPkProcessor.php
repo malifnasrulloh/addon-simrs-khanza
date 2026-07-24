@@ -212,7 +212,7 @@ class SatuSehatDiagnosticReportLabPkProcessor
 
             $nmPerawatan = $p['Pemeriksaan'] ?? $p['nm_perawatan'] ?? '';
 $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /DiagnosticReport/{$idDiagnosticReport} ({$nmPerawatan})");
-            $result = $this->api->patch("/DiagnosticReport/{$idDiagnosticReport}", $ops);
+            $result = $this->api->patch("/DiagnosticReport/{$idDiagnosticReport}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateDiagnosticReportLabPkLocalState($noorder, $idTemplate, $code, 'updated');

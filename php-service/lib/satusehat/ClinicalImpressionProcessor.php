@@ -196,7 +196,7 @@ class SatuSehatClinicalImpressionProcessor
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: PATCH /ClinicalImpression/{$idClinImp} (" . count($ops) . " ops)");
-            $result = $this->api->patch("/ClinicalImpression/{$idClinImp}", $ops);
+            $result = $this->api->patch("/ClinicalImpression/{$idClinImp}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'updated', $kdPenyakit);

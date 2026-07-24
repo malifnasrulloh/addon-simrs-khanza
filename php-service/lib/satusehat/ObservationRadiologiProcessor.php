@@ -255,7 +255,7 @@ class SatuSehatObservationRadiologiProcessor
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Observation/{$idObservation} ({$nmPerawatan})");
-            $result = $this->api->patch("/Observation/{$idObservation}", $ops);
+            $result = $this->api->patch("/Observation/{$idObservation}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateObservationRadiologiLocalState($noorder, $kdJenisPrw, 'updated');

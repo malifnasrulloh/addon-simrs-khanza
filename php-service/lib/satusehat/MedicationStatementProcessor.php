@@ -197,7 +197,7 @@ class SatuSehatMedicationStatementProcessor
 
             $label = $isRacikan ? "Racikan #{$noRacik}" : "Non-Racikan";
             $this->log->info("[PHASE 2] [{$label}]: PATCH /MedicationStatement/{$idStatement} (" . count($ops) . " ops)");
-            $result = $this->api->patch("/MedicationStatement/{$idStatement}", $ops);
+            $result = $this->api->patch("/MedicationStatement/{$idStatement}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateMedicationStatementLocalState($noResep, $kodeBrng, $noRacik, 'updated');

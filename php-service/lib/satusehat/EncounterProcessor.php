@@ -341,17 +341,32 @@ class SatuSehatEncounterProcessor
                     'path' => '/status',
                     'value' => 'finished'
                 ],
-                [
+            ];
+
+            // Only set period/end if discharge time is available (SATUSEHAT requires valid datetime)
+            if ($finishedWaktu !== null) {
+                $ops[] = [
                     'op' => 'replace',
                     'path' => '/period/end',
                     'value' => $finishedWaktu
-                ],
-                [
+                ];
+            }
+
+            // statusHistory: only set entries with non-null end times
+            // Skip entries where end would be null (Rule Number 10122)
+            $validHistory = [];
+            foreach ($statusHistory as $entry) {
+                if ($entry['period']['start'] !== null && $entry['period']['end'] !== null) {
+                    $validHistory[] = $entry;
+                }
+            }
+            if (!empty($validHistory)) {
+                $ops[] = [
                     'op' => 'replace',
                     'path' => '/statusHistory',
-                    'value' => $statusHistory
-                ]
-            ];
+                    'value' => $validHistory
+                ];
+            }
 
             // Add diagnosis if available
             if (!empty($diagnoses)) {

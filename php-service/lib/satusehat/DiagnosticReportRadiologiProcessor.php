@@ -271,7 +271,7 @@ class SatuSehatDiagnosticReportRadiologiProcessor
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /DiagnosticReport/{$idDiagnosticReport} ({$nmPerawatan})");
-            $result = $this->api->patch("/DiagnosticReport/{$idDiagnosticReport}", $ops);
+            $result = $this->api->patch("/DiagnosticReport/{$idDiagnosticReport}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateDiagnosticReportRadiologiLocalState($noorder, $kdJenisPrw, 'updated');

@@ -194,7 +194,7 @@ class SatuSehatProcedureProcessor
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noRawat}: PATCH /Procedure/{$idProcedure} (" . count($ops) . " ops)");
-            $result = $this->api->patch("/Procedure/{$idProcedure}", $ops);
+            $result = $this->api->patch("/Procedure/{$idProcedure}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateProcedureLocalState($noRawat, $kode, 'updated');

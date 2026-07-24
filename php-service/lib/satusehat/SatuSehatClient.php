@@ -209,29 +209,45 @@ class SatuSehatClient
     }
 
     /**
-     * Send PATCH request (JSON Patch format).
+     * 3-layer update flow: PUT → PATCH(batch) → PATCH(per-op).
      *
-     * Fast path: attempts all operations in a single PATCH batch.
-     * Fallback: if the batch fails and there are multiple operations, retries
-     * each operation individually so a single rejected op doesn't doom the rest.
+     * Layer 1 — PUT: full resource replacement (most permissive).
+     * Layer 2 — PATCH batch: all operations in one call.
+     * Layer 3 — PATCH per-op: each operation individually.
      *
-     * @param array $operations JSON Patch operations, e.g. [['op'=>'replace','path'=>'/status','value'=>'finished']]
+     * If $payload is provided, Layer 1 (PUT) is attempted first. This is useful
+     * when the FHIR server rejects PATCH on certain resources but accepts PUT.
+     *
+     * @param array  $operations JSON Patch operations, e.g. [['op'=>'replace','path'=>'/status','value'=>'finished']]
+     * @param array|null $putPayload Full FHIR resource for PUT fallback, or null to skip PUT layer
      */
-    public function patch(string $endpoint, array $operations): array
+    public function patch(string $endpoint, array $operations, ?array $putPayload = null): array
     {
-        // ── Fast path: try all operations in a single PATCH ──────────────
+        // ── Layer 1: PUT (full resource replacement) ───────────────────
+        if ($putPayload !== null) {
+            $putResult = $this->request('PUT', $endpoint, $putPayload);
+            if ($putResult['success']) {
+                $this->log->info("[UPDATE] {$endpoint}: PUT succeeded (Layer 1/3)");
+                return $putResult;
+            }
+            $this->log->warning(
+                "[UPDATE] {$endpoint}: PUT failed (HTTP {$putResult['code']}), " .
+                "falling back to PATCH (Layer 2/3)"
+            );
+        }
+
+        // ── Layer 2: PATCH batch (all ops at once) ─────────────────────
         $result = $this->request('PATCH', $endpoint, $operations, 'application/json-patch+json');
 
-        // Batch succeeded, or only one op — nothing to decompose
         if ($result['success'] || count($operations) <= 1) {
             return $result;
         }
 
-        // ── Fallback: send operations one at a time ─────────────────────
+        // ── Layer 3: PATCH per-op (one at a time) ──────────────────────
         $opCount = count($operations);
         $this->log->warning(
-            "[PATCH] Batch PATCH failed (HTTP {$result['code']}), " .
-            "falling back to sequential per-op PATCH ({$opCount} ops)"
+            "[UPDATE] {$endpoint}: Batch PATCH failed (HTTP {$result['code']}), " .
+            "falling back to per-op PATCH ({$opCount} ops — Layer 3/3)"
         );
 
         $successCount = 0;
@@ -243,26 +259,22 @@ class SatuSehatClient
             $opPath = $op['path'] ?? '?';
             $opDesc = "op=" . ($op['op'] ?? '?') . " path={$opPath}";
 
-            $this->log->info("[PATCH] Sequential op " . ($i + 1) . "/{$opCount}: {$opDesc}");
+            $this->log->info("[UPDATE] Per-op " . ($i + 1) . "/{$opCount}: {$opDesc}");
             $opResult = $this->request('PATCH', $endpoint, [$op], 'application/json-patch+json');
             $lastResult = $opResult;
 
             if ($opResult['success']) {
                 $successCount++;
-                $this->log->info("[PATCH]  ✓ Op {$i}: {$opDesc}");
+                $this->log->info("[UPDATE]  ✓ Op {$i}: {$opDesc}");
             } else {
+                $errMsg = self::extractErrorMsg($opResult);
                 $failCount++;
                 $failedOps[] = [
                     'index' => $i,
                     'op'    => $op,
-                    'error' => $opResult['data']['issue'][0]['diagnostics']
-                        ?? $opResult['message']
-                        ?? 'Unknown error',
+                    'error' => $errMsg,
                 ];
-                $this->log->warning(
-                    "[PATCH]  ✗ Op {$i}: {$opDesc} failed → " .
-                    ($opResult['data']['issue'][0]['diagnostics'] ?? $opResult['message'])
-                );
+                $this->log->warning("[UPDATE]  ✗ Op {$i}: {$opDesc} failed → {$errMsg}");
             }
         }
 
@@ -271,16 +283,16 @@ class SatuSehatClient
             return [
                 'success'  => true,
                 'code'     => 200,
-                'message'  => "Sequential PATCH: all {$successCount} ops succeeded",
+                'message'  => "Per-op PATCH: all {$successCount} ops succeeded",
                 'data'     => $lastResult['data'] ?? [],
                 'response' => $lastResult['response'] ?? '',
             ];
         }
 
-        $errorMsg = "Sequential PATCH: {$successCount} ok, {$failCount} failed";
-        $this->log->error("[PATCH] {$errorMsg}");
+        $errorMsg = "Per-op PATCH: {$successCount} ok, {$failCount} failed";
+        $this->log->error("[UPDATE] {$errorMsg}");
         foreach ($failedOps as $fo) {
-            $this->log->error("[PATCH]   Failed op #{$fo['index']}: {$fo['error']}");
+            $this->log->error("[UPDATE]   Failed op #{$fo['index']}: {$fo['error']}");
         }
 
         return [
@@ -292,6 +304,24 @@ class SatuSehatClient
                 'individual_results' => $failedOps,
             ],
         ];
+    }
+
+    /**
+     * Extract the best human-readable error message from an API response.
+     * Prefers details.text (used by SATUSEHAT), then diagnostics, then message.
+     */
+    private static function extractErrorMsg(array $result): string
+    {
+        // SATUSEHAT typically wraps the message in issue[0].details.text
+        if (isset($result['data']['issue'][0]['details']['text'])) {
+            return $result['data']['issue'][0]['details']['text'];
+        }
+        // FHIR standard diagnostics fallback
+        if (isset($result['data']['issue'][0]['diagnostics'])) {
+            return $result['data']['issue'][0]['diagnostics'];
+        }
+        // Generic message
+        return $result['message'] ?? 'Unknown error';
     }
 
     /**

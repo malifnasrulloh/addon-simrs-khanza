@@ -234,7 +234,7 @@ class SatuSehatQuestionnaireResponseProcessor
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$noResep}: PATCH /QuestionnaireResponse/{$idQR} (" . count($ops) . " ops)");
-            $result = $this->api->patch("/QuestionnaireResponse/{$idQR}", $ops);
+            $result = $this->api->patch("/QuestionnaireResponse/{$idQR}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateQuestionnaireResponseLocalState($noResep, 'updated');

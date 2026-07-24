@@ -214,7 +214,7 @@ class SatuSehatMedicationRequestProcessor
 
             $label = $isRacikan ? "{$noResep}-{$noRacik}" : "{$noResep}";
             $this->log->info("[PHASE 2] {$label}: PATCH /MedicationRequest/{$idMedicationRequest} (" . count($ops) . " ops)");
-            $result = $this->api->patch("/MedicationRequest/{$idMedicationRequest}", $ops);
+            $result = $this->api->patch("/MedicationRequest/{$idMedicationRequest}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateMedicationRequestLocalState($noResep, $kodeBrng, $noRacik, 'updated');

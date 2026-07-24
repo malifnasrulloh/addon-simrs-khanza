@@ -159,7 +159,7 @@ class SatuSehatMedicationProcessor
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
             $this->log->info("[PHASE 2] {$kodeBrng}: PATCH /Medication/{$idMedication} (KFA Code: {$med['obat_code']})");
-            $result = $this->api->patch("/Medication/{$idMedication}", $ops);
+            $result = $this->api->patch("/Medication/{$idMedication}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateMedicationLocalState($kodeBrng, 'updated');

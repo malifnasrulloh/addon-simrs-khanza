@@ -216,7 +216,7 @@ class SatuSehatServiceRequestLabPkProcessor
 
             $nmPerawatan = $p['Pemeriksaan'] ?? $p['nm_perawatan'] ?? '';
 $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /ServiceRequest/{$idServiceRequest} ({$nmPerawatan})");
-            $result = $this->api->patch("/ServiceRequest/{$idServiceRequest}", $ops);
+            $result = $this->api->patch("/ServiceRequest/{$idServiceRequest}", $ops, $payload);
 
             if ($result['success']) {
                 $this->db->updateServiceRequestLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'updated');
