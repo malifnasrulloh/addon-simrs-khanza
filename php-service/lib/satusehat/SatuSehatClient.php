@@ -250,22 +250,15 @@ class SatuSehatClient
                 $this->log->info("[UPDATE] {$endpoint}: PUT succeeded (Layer 1/3)");
                 return $putResult;
             }
-            // Permission denied on PUT → cache immediately, no point trying PATCH
+            // Permission denied on PUT — don't cache yet, PATCH might work (SATUSEHAT
+            // often grants PATCH access even without PUT access). Fall through to Layer 2.
             if (self::isPermissionMessage(self::extractErrorMsg($putResult))) {
-                $this->log->warning("[UPDATE] {$endpoint}: PUT permission denied — caching as permanent");
-                $this->markPermissionDenied($endpoint);
-                return [
-                    'success'          => true,
-                    'code'             => 200,
-                    'message'          => 'Permission denied (cached)',
-                    'data'             => [],
-                    'permission_skip'  => true,
-                ];
+                $this->log->warning("[UPDATE] {$endpoint}: PUT permission denied (Layer 1/3) — falling back to PATCH");
+            } else {
+                $this->log->warning(
+                    "[UPDATE] {$endpoint}: PUT failed (HTTP {$putResult['code']}) — falling back to PATCH (Layer 2/3)"
+                );
             }
-            $this->log->warning(
-                "[UPDATE] {$endpoint}: PUT failed (HTTP {$putResult['code']}), " .
-                "falling back to PATCH (Layer 2/3)"
-            );
         }
 
         // ── Layer 2: PATCH batch (all ops at once) ─────────────────────
@@ -275,20 +268,13 @@ class SatuSehatClient
             return $result;
         }
 
-        // Permission denied on batch PATCH → cache immediately
+        // Permission denied on batch PATCH — don't cache yet, per-op might work.
+        // Only cache at Layer 3 after all individual ops also fail.
         if (self::isPermissionMessage(self::extractErrorMsg($result))) {
-            $this->log->warning("[UPDATE] {$endpoint}: Batch PATCH permission denied — caching as permanent");
-            $this->markPermissionDenied($endpoint);
-            return [
-                'success'          => true,
-                'code'             => 200,
-                'message'          => 'Permission denied (cached)',
-                'data'             => [],
-                'permission_skip'  => true,
-            ];
+            $this->log->warning("[UPDATE] {$endpoint}: Batch PATCH permission denied (Layer 2/3) — falling back to per-op");
         }
 
-        // Single-op PATCH failed too → no point decomposing further
+        // Single-op PATCH failed → no point decomposing further
         if (count($operations) <= 1) {
             return $result;
         }
