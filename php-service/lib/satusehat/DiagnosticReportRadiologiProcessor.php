@@ -266,7 +266,8 @@ class SatuSehatDiagnosticReportRadiologiProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->orgId
+                $this->config->orgId,
+                $idDiagnosticReport
             );
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 

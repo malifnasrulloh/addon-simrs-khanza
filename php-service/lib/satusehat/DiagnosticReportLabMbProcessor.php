@@ -104,7 +104,8 @@ class SatuSehatDiagnosticReportLabMbProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->orgId
+                $this->config->orgId,
+                $idDiagnosticReport
             );
 
             $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: POST /DiagnosticReport ({$pemeriksaan})");
@@ -206,7 +207,8 @@ class SatuSehatDiagnosticReportLabMbProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->orgId
+                $this->config->orgId,
+                $idDiagnosticReport
             );
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 

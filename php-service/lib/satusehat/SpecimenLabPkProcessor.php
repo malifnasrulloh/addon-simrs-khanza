@@ -221,7 +221,8 @@ class SatuSehatSpecimenLabPkProcessor
             $payload = SatuSehatPayloadBuilder::specimenLab(
                 $p,
                 $idPasien,
-                $this->config->orgId
+                $this->config->orgId,
+                $idSpecimen
             );
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 

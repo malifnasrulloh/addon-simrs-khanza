@@ -214,7 +214,8 @@ class SatuSehatSpecimenRadiologiProcessor
             $payload = SatuSehatPayloadBuilder::specimenRadiologi(
                 $p,
                 $idPasien,
-                $this->config->orgId
+                $this->config->orgId,
+                $idSpecimen
             );
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 

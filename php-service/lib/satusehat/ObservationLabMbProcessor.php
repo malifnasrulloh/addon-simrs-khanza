@@ -103,7 +103,8 @@ class SatuSehatObservationLabMbProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->orgId
+                $this->config->orgId,
+                $idObservation
             );
 
             $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: POST /Observation ({$pemeriksaan})");
@@ -198,7 +199,8 @@ class SatuSehatObservationLabMbProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->orgId
+                $this->config->orgId,
+                $idObservation
             );
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 

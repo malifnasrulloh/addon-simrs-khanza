@@ -250,7 +250,8 @@ class SatuSehatObservationRadiologiProcessor
                 $p,
                 $idPasien,
                 $idDokter,
-                $this->config->orgId
+                $this->config->orgId,
+                $idObservation
             );
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
 
