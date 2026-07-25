@@ -76,7 +76,7 @@ def get_db_pool():
         user = _env("DB_USER", "root")
         password = _env("DB_PASS", "")
         db = _env("DB_NAME", "sik")
-        logger.info(f"Initialising MariaDB pool → {user}@{host}:{port}/{db}")
+        logger.info(f"Initialising MariaDB pool -> {user}@{host}:{port}/{db}")
         DB_POOL = PooledDB(
             creator=pymysql,
             mincached=2, maxcached=5, maxconnections=10, blocking=True,
@@ -611,7 +611,7 @@ if HAS_PYDICOM:
     logger.info("Pre-store tag alignment callback (ReceivedInstanceCallback) registered.")
 else:
     logger.warning(
-        "pydicom not installed — pre-store tag alignment disabled.  "
+        "pydicom not installed -- pre-store tag alignment disabled. "
         "Install pydicom in the Docker image for best results."
     )
 
@@ -626,26 +626,30 @@ def _upload_jpeg_background(instance_id, exam):
     try:
         time.sleep(0.5)  # Let Orthanc commit the C-STORE transaction
 
-        # Fetch JPEG preview
+        # Fetch rendered preview image (Orthanc returns PNG for most DICOM images)
         try:
-            _, jpeg_bytes = call_orthanc_http(
-                f"/instances/{instance_id}/preview", method="GET"
+            _, img_bytes = call_orthanc_http(
+                f"/instances/{instance_id}/rendered", method="GET"
             )
-            logger.info(f"[AutoSync] Rendered JPEG for instance {instance_id} ({len(jpeg_bytes)} bytes)")
+            logger.info(f"[AutoSync] Rendered preview for instance {instance_id} ({len(img_bytes)} bytes)")
         except Exception as e:
-            logger.error(f"[AutoSync] Failed to render JPEG for {instance_id}: {e}")
+            logger.error(f"[AutoSync] Failed to render preview for {instance_id}: {e}")
             return
 
-        if not jpeg_bytes:
-            logger.error(f"[AutoSync] Empty JPEG for {instance_id}. Aborting upload.")
+        if not img_bytes:
+            logger.error(f"[AutoSync] Empty preview for {instance_id}. Aborting upload.")
             return
 
-        b64_jpg = base64.b64encode(jpeg_bytes).decode()
+        # Detect format from magic bytes: JPEG (ff d8 ff) or PNG (89 50 4e 47)
+        magic = img_bytes[:4].hex()
+        ext = ".jpg" if magic[:6] == "ffd8ff" else ".png"
+
+        b64_img = base64.b64encode(img_bytes).decode()
         no_rawat = exam["no_rawat"]
         tgl = str(exam["tgl_periksa"])
         jam = str(exam["jam"])
         sop_uid = exam.get("_sop_uid", instance_id[:12])
-        filename = f"CR_{sop_uid.replace('.', '_')}.jpg"
+        filename = f"CR_{sop_uid.replace('.', '_')}{ext}"
 
         # POST to webapps service.php
         webapps_url = _env("SIMRS_WEBAPPS_URL",
@@ -658,12 +662,12 @@ def _upload_jpeg_background(instance_id, exam):
             "tanggal": tgl,
             "jam": jam,
             "namafile": filename,
-            "file": b64_jpg,
+            "file": b64_img,
         }).encode()
 
         logger.info(
-            f"[AutoSync] Posting JPEG → {webapps_url} | "
-            f"norawat={no_rawat}, tgl={tgl}, jam={jam}, filename={filename}, b64_len={len(b64_jpg)}"
+            f"[AutoSync] Posting image -> {webapps_url} | "
+            f"norawat={no_rawat}, tgl={tgl}, jam={jam}, filename={filename}, b64_len={len(b64_img)}"
         )
 
         req = urllib.request.Request(
@@ -697,7 +701,7 @@ def _upload_jpeg_background(instance_id, exam):
 
         target = os.path.join(webapps_dir, filename)
         with open(target, "wb") as f:
-            f.write(jpeg_bytes)
+            f.write(img_bytes)
         logger.info(f"[AutoSync] Wrote JPEG to disk: {target}")
 
         rel_path = f"pages/upload/{filename}"

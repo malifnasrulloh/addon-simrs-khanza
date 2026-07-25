@@ -211,27 +211,32 @@ class SatuSehatClient
     }
 
     /**
-     * 3-layer update flow: PUT → PATCH(batch) → PATCH(per-op), with
-     * permanent permission-denied caching.
+     * Two-mode update flow:
      *
-     * Layer 0 — Permission cache: if this resource was previously rejected
-     *           with "You don't have permission to edit resource", skip it.
-     * Layer 1 — PUT: full resource replacement (most permissive).
-     * Layer 2 — PATCH batch: all operations in one call.
-     * Layer 3 — PATCH per-op: each operation individually.
+     * Mode A — PUT (full resource): Used when $putPayload is provided (the
+     *           3-arg call from payloadToPatchOps processors). Only PUT is
+     *           attempted — PATCH is NEVER used as fallback because it
+     *           triggers permanent resource locks on SATUSEHAT by trying
+     *           to replace org-scoped immutable fields (identifier, etc.).
      *
-     * If $payload is provided, Layer 1 (PUT) is attempted first. This is useful
-     * when the FHIR server rejects PATCH on certain resources but accepts PUT.
+     * Mode B — PATCH (targeted ops): Used when $putPayload is null (the
+     *           2-arg call from hand-crafted ops like Encounter, Condition).
+     *           These only touch status/period fields, never org-scoped
+     *           data, so PATCH is safe here.
      *
-     * When ALL layers fail with a permission error, the resource endpoint is
-     * cached to disk so it is never retried on future runs.
-     *
-     * @param array  $operations JSON Patch operations, e.g. [['op'=>'replace','path'=>'/status','value'=>'finished']]
-     * @param array|null $putPayload Full FHIR resource for PUT fallback, or null to skip PUT layer
+     * @param array  $operations JSON Patch operations
+     * @param array|null $putPayload Full FHIR resource for PUT, or null for
+     *                               hand-crafted PATCH-only mode
      */
     public function patch(string $endpoint, array $operations, ?array $putPayload = null): array
     {
-        // ── Layer 0: Permission cache — skip if previously denied ─────
+        // ── Mode B: Hand-crafted PATCH (no PUT payload) ──────────────
+        if ($putPayload === null) {
+            return $this->request('PATCH', $endpoint, $operations, 'application/json-patch+json');
+        }
+
+        // ── Mode A: PUT-only (no PATCH fallback) ──────────────────────
+        // Permission cache — skip if previously denied
         if ($this->isPermissionDenied($endpoint)) {
             $this->log->info("[UPDATE] {$endpoint}: Skipped (cached permission denied)");
             return [
@@ -243,41 +248,16 @@ class SatuSehatClient
             ];
         }
 
-        // ── Layer 1: PUT (full resource replacement) ───────────────────
-        if ($putPayload !== null) {
-            $putResult = $this->request('PUT', $endpoint, $putPayload);
-            if ($putResult['success']) {
-                $this->log->info("[UPDATE] {$endpoint}: PUT succeeded (Layer 1/3)");
-                return $putResult;
-            }
-            // Permission denied on PUT → cache immediately, no point trying PATCH
-            if (self::isPermissionMessage(self::extractErrorMsg($putResult))) {
-                $this->log->warning("[UPDATE] {$endpoint}: PUT permission denied — caching as permanent");
-                $this->markPermissionDenied($endpoint);
-                return [
-                    'success'          => true,
-                    'code'             => 200,
-                    'message'          => 'Permission denied (cached)',
-                    'data'             => [],
-                    'permission_skip'  => true,
-                ];
-            }
-            $this->log->warning(
-                "[UPDATE] {$endpoint}: PUT failed (HTTP {$putResult['code']}), " .
-                "falling back to PATCH (Layer 2/3)"
-            );
-        }
-
-        // ── Layer 2: PATCH batch (all ops at once) ─────────────────────
-        $result = $this->request('PATCH', $endpoint, $operations, 'application/json-patch+json');
-
+        // PUT: full resource replacement
+        $result = $this->request('PUT', $endpoint, $putPayload);
         if ($result['success']) {
+            $this->log->info("[UPDATE] {$endpoint}: PUT succeeded");
             return $result;
         }
 
-        // Permission denied on batch PATCH → cache immediately
+        // Permission denied → cache permanently (never retry)
         if (self::isPermissionMessage(self::extractErrorMsg($result))) {
-            $this->log->warning("[UPDATE] {$endpoint}: Batch PATCH permission denied — caching as permanent");
+            $this->log->warning("[UPDATE] {$endpoint}: PUT permission denied — caching as permanent");
             $this->markPermissionDenied($endpoint);
             return [
                 'success'          => true,
@@ -288,83 +268,7 @@ class SatuSehatClient
             ];
         }
 
-        // Single-op PATCH failed too → no point decomposing further
-        if (count($operations) <= 1) {
-            return $result;
-        }
-
-        // ── Layer 3: PATCH per-op (one at a time) ──────────────────────
-        $opCount = count($operations);
-        $this->log->warning(
-            "[UPDATE] {$endpoint}: Batch PATCH failed (HTTP {$result['code']}), " .
-            "falling back to per-op PATCH ({$opCount} ops — Layer 3/3)"
-        );
-
-        $successCount = 0;
-        $failCount    = 0;
-        $failedOps    = [];
-        $lastResult   = $result;
-
-        foreach ($operations as $i => $op) {
-            $opPath = $op['path'] ?? '?';
-            $opDesc = "op=" . ($op['op'] ?? '?') . " path={$opPath}";
-
-            $this->log->info("[UPDATE] Per-op " . ($i + 1) . "/{$opCount}: {$opDesc}");
-            $opResult = $this->request('PATCH', $endpoint, [$op], 'application/json-patch+json');
-            $lastResult = $opResult;
-
-            if ($opResult['success']) {
-                $successCount++;
-                $this->log->info("[UPDATE]  ✓ Op {$i}: {$opDesc}");
-            } else {
-                $errMsg = self::extractErrorMsg($opResult);
-                $failCount++;
-                $failedOps[] = [
-                    'index' => $i,
-                    'op'    => $op,
-                    'error' => $errMsg,
-                ];
-                $this->log->warning("[UPDATE]  ✗ Op {$i}: {$opDesc} failed → {$errMsg}");
-            }
-        }
-
-        // ── Compose the final result ────────────────────────────────────
-        if ($failCount === 0) {
-            return [
-                'success'  => true,
-                'code'     => 200,
-                'message'  => "Per-op PATCH: all {$successCount} ops succeeded",
-                'data'     => $lastResult['data'] ?? [],
-                'response' => $lastResult['response'] ?? '',
-            ];
-        }
-
-        $errorMsg = "Per-op PATCH: {$successCount} ok, {$failCount} failed";
-        $this->log->error("[UPDATE] {$errorMsg}");
-
-        // ── Permission cache: if ALL failures are permission-denied, cache it ──
-        $allPermission = ($failCount > 0);
-        foreach ($failedOps as $fo) {
-            $this->log->error("[UPDATE]   Failed op #{$fo['index']}: {$fo['error']}");
-            if (!self::isPermissionMessage($fo['error'])) {
-                $allPermission = false;
-            }
-        }
-
-        if ($allPermission) {
-            $this->log->warning("[UPDATE] {$endpoint}: All ops failed with 'permission denied' — caching as permanent");
-            $this->markPermissionDenied($endpoint);
-        }
-
-        return [
-            'success'  => false,
-            'code'     => 0,
-            'message'  => $errorMsg,
-            'data'     => [
-                'issue'              => [['diagnostics' => $errorMsg]],
-                'individual_results' => $failedOps,
-            ],
-        ];
+        return $result;
     }
 
     /**
