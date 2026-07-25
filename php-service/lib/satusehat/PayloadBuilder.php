@@ -2621,7 +2621,8 @@ class SatuSehatPayloadBuilder
         string $idDokter,
         string $idEncounter,
         array $refs,
-        string $idComposition = ''
+        string $idComposition = '',
+        string $status = 'preliminary'
     ): array {
         $finishedWaktu = self::sanitizeDateTime($p['waktu_pulang'] ?? null, null, $p);
 
@@ -2816,7 +2817,7 @@ class SatuSehatPayloadBuilder
 
         $payload = [
             'resourceType' => 'Composition',
-            'status' => 'preliminary',
+            'status' => $status,
             'type' => [
                 'coding' => [
                     [

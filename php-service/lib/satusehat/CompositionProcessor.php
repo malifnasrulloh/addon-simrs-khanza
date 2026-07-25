@@ -198,6 +198,19 @@ class SatuSehatCompositionProcessor
 
             $refs = $this->db->fetchSyncedResourceReferences($noRawat);
 
+            // Determine the correct Composition status:
+            // - If already 'final' on SATUSEHAT, use 'amended' to reopen it
+            //   (final → amended is the only valid transition per FHIR spec)
+            // - Newer Compositions already use 'preliminary' from POST phase
+            $currentStatus = 'preliminary';
+            $statusCheck = $this->api->get('/Composition/' . $idComposition);
+            if ($statusCheck['success'] ?? false) {
+                $currentStatus = $statusCheck['data']['status'] ?? 'preliminary';
+            }
+            $compositionStatus = ($currentStatus === 'final' || $currentStatus === 'amended')
+                ? 'amended'
+                : 'preliminary';
+
             $payload = SatuSehatPayloadBuilder::composition(
                 $this->config->orgId,
                 $r,
@@ -205,7 +218,8 @@ class SatuSehatCompositionProcessor
                 $idDokter,
                 $r['id_encounter'],
                 $refs,
-                $idComposition
+                $idComposition,
+                $compositionStatus
             );
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);
             $response = $this->api->patch('/Composition/' . $idComposition, $ops, $payload);
