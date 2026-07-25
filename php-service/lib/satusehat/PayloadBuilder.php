@@ -2816,7 +2816,7 @@ class SatuSehatPayloadBuilder
 
         $payload = [
             'resourceType' => 'Composition',
-            'status' => 'final',
+            'status' => 'preliminary',
             'type' => [
                 'coding' => [
                     [
@@ -2876,7 +2876,26 @@ class SatuSehatPayloadBuilder
     public static function payloadToPatchOps(array $payload): array
     {
         $ops = [];
-        $skipKeys = ['resourceType', 'id', 'meta'];
+        // Fields that are immutable after resource creation — PATCHing them triggers
+        // SATUSEHAT's "You don't have permission to edit resource" because they
+        // create an organization-binding scope.
+        $skipKeys = [
+            'resourceType', 'id', 'meta',
+            'identifier',             // org-scoped: cannot be changed after creation
+            'subject',                // patient reference: immutable
+            'encounter',              // visit reference: immutable
+            'context',                // encounter alias (MedicationDispense, MedicationStatement)
+            'requester',              // who ordered the service: immutable
+            'author',                 // who authored (Composition, CarePlan): immutable
+            'recorder',               // who recorded (Condition): immutable
+            'assessor',               // who assessed (ClinicalImpression): immutable
+            'informationSource',      // who provided info (MedicationStatement): immutable
+            'authoredOn',             // creation timestamp: immutable
+            'dateAsserted',           // assertion timestamp: immutable
+            'recordedDate',           // recording timestamp: immutable
+            'serviceProvider',        // organization reference: immutable
+            'managingOrganization',   // managing org: immutable
+        ];
 
         foreach ($payload as $key => $value) {
             if (in_array($key, $skipKeys, true)) {
