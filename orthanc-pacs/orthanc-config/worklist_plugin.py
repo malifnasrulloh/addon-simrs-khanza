@@ -373,8 +373,8 @@ def OnWorklist(answers, query, issuerAet, calledAet):
         SELECT p.noorder, p.no_rawat, r.no_rkm_medis, ps.nm_pasien,
                ps.tgl_lahir, ps.jk,
                j.kd_jenis_prw, j.nm_perawatan,
-               p.tgl_permintaan,
-               IF(p.jam_permintaan='00:00:00', '', p.jam_permintaan) AS jam_permintaan,
+               COALESCE(px.tgl_periksa, p.tgl_permintaan) AS tgl_periksa,
+               IF(COALESCE(px.jam, p.jam_permintaan)='00:00:00', '', COALESCE(px.jam, p.jam_permintaan)) AS jam_periksa,
                p.dokter_perujuk, d.nm_dokter,
                pl.nm_poli, p.diagnosa_klinis
         FROM permintaan_radiologi p
@@ -384,6 +384,7 @@ def OnWorklist(answers, query, issuerAet, calledAet):
         INNER JOIN jns_perawatan_radiologi j ON j.kd_jenis_prw = pr.kd_jenis_prw
         INNER JOIN dokter d ON p.dokter_perujuk = d.kd_dokter
         INNER JOIN poliklinik pl ON r.kd_poli = pl.kd_poli
+        LEFT JOIN periksa_radiologi px ON p.no_rawat = px.no_rawat AND j.kd_jenis_prw = px.kd_jenis_prw AND p.tgl_hasil = px.tgl_periksa
         WHERE p.tgl_permintaan >= CURDATE() - INTERVAL 1 DAY
     """
 
@@ -436,8 +437,8 @@ def OnWorklist(answers, query, issuerAet, calledAet):
                 ).strip()
                 ae_title = get_ae_title(kd_jenis_prw, modality, calledAet)
                 study_uid = generate_dicom_uid(patient_id, acsn)
-                study_date = format_study_date(row["tgl_permintaan"])
-                study_time = format_study_time(row["jam_permintaan"])
+                study_date = format_study_date(row["tgl_periksa"])
+                study_time = format_study_time(row["jam_periksa"])
                 physician = dicom_sanitize(row["nm_dokter"])
                 procedure_desc = dicom_sanitize(row["nm_perawatan"])
                 clinical_diag = dicom_sanitize(row["diagnosa_klinis"])
@@ -516,6 +517,11 @@ def _apply_tags_pydicom(ds, exam, inst_name):
     ds.RequestedProcedureDescription = proc_desc
     ds.ReasonForTheRequestedProcedure = clinical
     ds.RequestedProcedurePriority = "ROUTINE"
+
+    if study_date:
+        ds.StudyDate = study_date
+    if study_time:
+        ds.StudyTime = study_time
 
     if acsn:
         ds.AccessionNumber = acsn
@@ -650,6 +656,27 @@ def _upload_jpeg_background(instance_id, exam):
         jam = str(exam["jam"])
         sop_uid = exam.get("_sop_uid", instance_id[:12])
         filename = f"CR_{sop_uid.replace('.', '_')}{ext}"
+        rel_path = f"pages/upload/{filename}"
+
+        # Pre-check: Skip if image for this exam (no_rawat, tgl_periksa, jam) already exists in SIMRS gambar_radiologi
+        try:
+            pool = get_db_pool()
+            conn = pool.connection()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) AS cnt FROM gambar_radiologi WHERE no_rawat = %s AND tgl_periksa = %s AND jam = %s",
+                    (no_rawat, tgl, jam)
+                )
+                chk = cur.fetchone()
+                if chk and chk.get("cnt", 0) > 0:
+                    logger.info(
+                        f"[AutoSync] Image for no_rawat={no_rawat}, tgl={tgl}, jam={jam} already exists in SIMRS. "
+                        f"Skipping duplicate upload."
+                    )
+                    return
+            conn.close()
+        except Exception as chk_err:
+            logger.debug(f"[AutoSync] Pre-check query error (proceeding with post): {chk_err}")
 
         # POST to webapps service.php
         webapps_url = _env("SIMRS_WEBAPPS_URL",
