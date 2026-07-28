@@ -157,28 +157,35 @@ def format_birth_date(tgl_lahir):
 
 # --- Modality Mapping ---------------------------------------------------------
 
-def load_modality_mapping():
-    """Load procedure→modality mapping from JSON file (cached after first call)."""
-    global _mapping_cache
-    if _mapping_cache is None:
-        try:
-            if os.path.exists(MAPPING_PATH):
-                with open(MAPPING_PATH, "r") as f:
-                    _mapping_cache = json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading modality mapping: {e}")
-        if _mapping_cache is None:
-            _mapping_cache = {"default_aet": {}, "mapping": []}
-    return _mapping_cache
-
+_modality_db_cache = {}
 
 def resolve_modality(kd_jenis_prw):
-    """Resolve DICOM Modality code for a given procedure code."""
-    mapping = load_modality_mapping()
-    for item in mapping.get("mapping", []):
-        if item.get("kd_jenis_prw") == kd_jenis_prw:
-            return item.get("modality", "XR")
-    return "XR"
+    """Resolve DICOM Modality code for a given procedure code from database table satu_sehat_mapping_radiologi."""
+    if not kd_jenis_prw:
+        return "CR"
+    
+    if kd_jenis_prw in _modality_db_cache:
+        return _modality_db_cache[kd_jenis_prw]
+
+    try:
+        pool = get_db_pool()
+        conn = pool.connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT modality FROM satu_sehat_mapping_radiologi WHERE kd_jenis_prw = %s AND modality IS NOT NULL AND modality != ''",
+                (kd_jenis_prw,)
+            )
+            row = cur.fetchone()
+            if row and row.get("modality"):
+                mod = str(row["modality"]).strip().upper()
+                _modality_db_cache[kd_jenis_prw] = mod
+                conn.close()
+                return mod
+        conn.close()
+    except Exception as e:
+        logger.debug(f"DB modality resolve error for {kd_jenis_prw}: {e}")
+
+    return "CR"
 
 
 def get_ae_title(kd_jenis_prw, modality, fallback_aet):

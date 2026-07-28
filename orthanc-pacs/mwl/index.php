@@ -176,31 +176,21 @@ function dicomTime(?string $time): string {
  *   - 'procedures'  : kd_jenis_prw => ['modality' => 'XR', 'aet' => 'CR_STATION' (optional)]
  *   - 'default_aet'  : modality_code => AE Title (e.g., 'CR' => 'CR_STATION')
  */
-function loadModalityConfig(): array {
+function loadModalityConfig(?PDO $pdo = null): array {
     $config = ['procedures' => [], 'default_aet' => []];
 
-    if (!file_exists(MODALITY_MAP_JSON)) {
-        return $config;
-    }
-    $data = json_decode(file_get_contents(MODALITY_MAP_JSON), true);
-    if (!is_array($data)) {
-        return $config;
-    }
-
-    // Load default AET per modality
-    if (!empty($data['default_aet']) && is_array($data['default_aet'])) {
-        $config['default_aet'] = $data['default_aet'];
-    }
-
-    // Load procedure-to-modality mapping
-    if (!empty($data['mapping']) && is_array($data['mapping'])) {
-        foreach ($data['mapping'] as $entry) {
-            if (!empty($entry['kd_jenis_prw']) && !empty($entry['modality'])) {
-                $config['procedures'][$entry['kd_jenis_prw']] = [
-                    'modality' => strtoupper($entry['modality']),
-                    'aet'      => $entry['aet'] ?? null,
-                ];
+    if ($pdo !== null) {
+        try {
+            $stmt = $pdo->query("SELECT kd_jenis_prw, modality FROM satu_sehat_mapping_radiologi WHERE modality IS NOT NULL AND modality != ''");
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                if (!empty($row['kd_jenis_prw']) && !empty($row['modality'])) {
+                    $config['procedures'][$row['kd_jenis_prw']] = [
+                        'modality' => strtoupper($row['modality']),
+                    ];
+                }
             }
+        } catch (Exception $e) {
+            // Table or column unpopulated
         }
     }
 
@@ -366,7 +356,7 @@ function generate_mwl(string $dbHost, string $dbPort, string $dbUser, string $db
     }
 
     // --- Load Modality Configuration ---
-    $modalityConfig = loadModalityConfig();
+    $modalityConfig = loadModalityConfig($pdo);
 
     // --- Query Institution Name Dynamically ---
     $instName = '';
