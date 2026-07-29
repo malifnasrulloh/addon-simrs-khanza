@@ -115,6 +115,16 @@ class BpjsAntreanClient
         return $this->post('/antrean/farmasi/add', $payload);
     }
 
+    /**
+     * GET /antrean/pendaftaran/tanggal/{tanggal} — View queue registrations for a given date.
+     *
+     * @return array{success: bool, code: string, message: string, data: array}
+     */
+    public function getAntreanPendaftaranTanggal(string $tanggal): array
+    {
+        return $this->get("/antrean/pendaftaran/tanggal/{$tanggal}");
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Batch execution via curl_multi_*
     // ═══════════════════════════════════════════════════════════════════════
@@ -340,6 +350,74 @@ class BpjsAntreanClient
     }
 
     /**
+     * Internal: Single GET (for queries like /antrean/pendaftaran/tanggal/{tanggal})
+     */
+    private function get(string $endpoint): array
+    {
+        $url       = $this->baseUrl . $endpoint;
+        $maxTries  = 5;
+        $attempt   = 0;
+
+        while ($attempt < $maxTries) {
+            $attempt++;
+            $timestamp = time();
+            $headers   = $this->generateHeaders($timestamp);
+
+            $this->log->debug("[HTTP] GET {$url} (Attempt {$attempt}/{$maxTries})");
+
+            if ($this->dryRun) {
+                $this->log->info("[DRY-RUN] Skipped GET {$endpoint}");
+                return ['success' => true, 'code' => 'DRY', 'message' => 'Dry-run skipped', 'data' => []];
+            }
+
+            $ch = curl_init();
+            curl_setopt_array($ch, [
+                CURLOPT_URL            => $url,
+                CURLOPT_HTTPGET        => true,
+                CURLOPT_HTTPHEADER     => $headers,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT        => self::REQUEST_TIMEOUT,
+                CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_SSL_VERIFYHOST => 0,
+                CURLOPT_USERAGENT      => self::USER_AGENT,
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error    = curl_error($ch);
+            curl_close($ch);
+
+            if ($error || $httpCode >= 500 || $httpCode === 0) {
+                $errMessage = $error ?: "HTTP Status {$httpCode}";
+                $this->log->warning("[HTTP] GET {$endpoint} (Attempt {$attempt}/{$maxTries}) failed: {$errMessage}");
+                if ($attempt < $maxTries) {
+                    sleep(1);
+                    continue;
+                }
+                return ['success' => false, 'code' => (string)$httpCode, 'message' => $errMessage, 'data' => []];
+            }
+
+            $res = $this->parseApiResponse($endpoint, $response, $httpCode, $timestamp);
+            if ($res['success']) {
+                return $res;
+            }
+
+            if ($this->isResultRetryable($res)) {
+                $this->log->warning("[HTTP] GET {$endpoint} (Attempt {$attempt}/{$maxTries}) returned retryable API error: {$res['code']} - {$res['message']}");
+                if ($attempt < $maxTries) {
+                    sleep(1);
+                    continue;
+                }
+            }
+
+            return $res;
+        }
+
+        return ['success' => false, 'code' => '500', 'message' => 'Maximum retry attempts reached', 'data' => []];
+    }
+
+    /**
      * Determine if an API result/failure is transient and should be retried.
      */
     private function isResultRetryable(array $res): bool
@@ -411,7 +489,11 @@ class BpjsAntreanClient
                 try {
                     $decrypted = $this->decrypt($responseField, $timestamp);
                     $decoded   = json_decode($decrypted, true);
-                    $data      = is_array($decoded) ? $decoded : [];
+                    if (is_array($decoded)) {
+                        $data = isset($decoded['list']) && is_array($decoded['list']) ? $decoded['list'] : $decoded;
+                    } else {
+                        $data = [];
+                    }
                     $this->log->debug("[BPJS] {$label} Decrypted: " . json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
                 } catch (\Throwable $e) {
                     $this->log->error("[BPJS] {$label} Decryption failed: " . $e->getMessage());
@@ -419,7 +501,7 @@ class BpjsAntreanClient
                     $isSuccess = false;
                 }
             } elseif (is_array($responseField)) {
-                $data = $responseField; // Raw JSON without encryption
+                $data = isset($responseField['list']) && is_array($responseField['list']) ? $responseField['list'] : $responseField;
             }
         } else {
             $this->log->warning("[BPJS] {$label}: {$code} — {$message}");

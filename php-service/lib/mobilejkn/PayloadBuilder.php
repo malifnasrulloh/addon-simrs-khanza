@@ -17,6 +17,25 @@ class PayloadBuilder
      */
     public static function jknBooking(array $b): array
     {
+        $estimasiMs = (int) ($b['estimasidilayani'] ?? 0);
+        $tglPeriksa = $b['tanggalperiksa'] ?? date('Y-m-d');
+        
+        // Safety Fallback: Ensure estimasidilayani timestamp date matches tanggalperiksa exactly
+        if ($estimasiMs > 0) {
+            $estimasiDate = date('Y-m-d', (int) round($estimasiMs / 1000));
+            if ($estimasiDate !== $tglPeriksa) {
+                $jamMulai = explode('-', $b['jampraktek'] ?? '08:00')[0] ?? '08:00';
+                $noReg = (int) ($b['angkaantrean'] ?? 1);
+                $baseTime = strtotime("{$tglPeriksa} {$jamMulai}");
+                $estimasiMs = ($baseTime + ($noReg * 10 * 60)) * 1000;
+            }
+        } else {
+            $jamMulai = explode('-', $b['jampraktek'] ?? '08:00')[0] ?? '08:00';
+            $noReg = (int) ($b['angkaantrean'] ?? 1);
+            $baseTime = strtotime("{$tglPeriksa} {$jamMulai}");
+            $estimasiMs = ($baseTime + ($noReg * 10 * 60)) * 1000;
+        }
+
         return [
             'kodebooking'      => $b['nobooking'],
             'jenispasien'      => 'JKN',
@@ -27,7 +46,7 @@ class PayloadBuilder
             'namapoli'         => $b['nm_poli'],
             'pasienbaru'       => (int) $b['pasienbaru'],
             'norm'             => $b['no_rkm_medis'],
-            'tanggalperiksa'   => $b['tanggalperiksa'],
+            'tanggalperiksa'   => $tglPeriksa,
             'kodedokter'       => (int) $b['kodedokter'],
             'namadokter'       => $b['nm_dokter'],
             'jampraktek'       => $b['jampraktek'],
@@ -35,7 +54,7 @@ class PayloadBuilder
             'nomorreferensi'   => $b['nomorreferensi'],
             'nomorantrean'     => $b['nomorantrean'],
             'angkaantrean'     => (int) $b['angkaantrean'],
-            'estimasidilayani' => (int) $b['estimasidilayani'],
+            'estimasidilayani' => $estimasiMs,
             'sisakuotajkn'     => (int) $b['sisakuotajkn'],
             'kuotajkn'         => (int) $b['kuotajkn'],
             'sisakuotanonjkn'  => (int) $b['sisakuotanonjkn'],

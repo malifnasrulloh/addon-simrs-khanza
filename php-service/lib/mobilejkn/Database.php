@@ -187,12 +187,15 @@ SQL;
      * Fetch jadwal (schedule) for a doctor+poli+day combination.
      * Matches Java ANTROL-ROBOT.JAVA line 736.
      */
-    public function fetchJadwal(string $hari, string $kdDokter, string $kdPoli): ?array
+    public function fetchJadwal(string $hari, string $kdDokter, string $kdPoli, string $jamReg = ''): ?array
     {
-        $sql = "SELECT * FROM jadwal WHERE hari_kerja=:h AND kd_dokter=:d AND kd_poli=:p LIMIT 1";
+        $sql = "SELECT * FROM jadwal WHERE hari_kerja=:h AND kd_dokter=:d AND kd_poli=:p ORDER BY jam_mulai ASC";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute(['h' => $hari, 'd' => $kdDokter, 'p' => $kdPoli]);
-        return $stmt->fetch() ?: null;
+        $slots = $stmt->fetchAll();
+        if (empty($slots)) return null;
+
+        return self::matchBestJadwalSlot($slots, $jamReg);
     }
 
     /**
@@ -208,7 +211,7 @@ SQL;
         // Initialize default empty states
         $states = [];
         foreach ($noRawats as $nr) {
-            $states[$nr] = ['3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
+            $states[$nr] = ['1' => '', '2' => '', '3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
         }
         
         $placeholders = implode(',', array_fill(0, count($noRawats), '?'));
@@ -460,28 +463,70 @@ SQL;
 
     /**
      * Eager-load ALL jadwal into an in-memory hash map keyed by "hari|dokter|poli".
-     * Prevents per-patient SELECT inside the task chain loop.
+     * Supports multiple working shifts/slots per doctor per day.
      *
-     * @return array<string, array> Map of "hari_kerja|kd_dokter|kd_poli" => jadwal row
+     * @return array<string, array[]> Map of "hari_kerja|kd_dokter|kd_poli" => list of jadwal slots
      */
     public function fetchAllJadwal(): array
     {
-        $sql = "SELECT hari_kerja, kd_dokter, kd_poli, jam_mulai, jam_selesai, kuota FROM jadwal";
+        $sql = "SELECT hari_kerja, kd_dokter, kd_poli, jam_mulai, jam_selesai, kuota FROM jadwal ORDER BY jam_mulai ASC";
         $stmt = $this->pdo->query($sql);
         $map = [];
         while ($row = $stmt->fetch()) {
             $key = "{$row['hari_kerja']}|{$row['kd_dokter']}|{$row['kd_poli']}";
-            $map[$key] = $row;
+            if (!isset($map[$key])) {
+                $map[$key] = [];
+            }
+            $map[$key][] = $row;
         }
         return $map;
     }
 
     /**
-     * Lookup jadwal from pre-loaded hash map.
+     * Lookup best matching jadwal slot from pre-loaded hash map.
      */
-    public function lookupJadwal(array $jadwalDict, string $hari, string $kdDokter, string $kdPoli): ?array
+    public function lookupJadwal(array $jadwalDict, string $hari, string $kdDokter, string $kdPoli, string $jamReg = ''): ?array
     {
-        return $jadwalDict["{$hari}|{$kdDokter}|{$kdPoli}"] ?? null;
+        $key = "{$hari}|{$kdDokter}|{$kdPoli}";
+        $slots = $jadwalDict[$key] ?? [];
+        if (empty($slots)) {
+            return null;
+        }
+        return self::matchBestJadwalSlot($slots, $jamReg);
+    }
+
+    /**
+     * Match the best schedule slot for a given patient registration/appointment time (jamReg).
+     */
+    public static function matchBestJadwalSlot(array $slots, string $jamReg): array
+    {
+        if (count($slots) === 1 || empty($jamReg)) {
+            return $slots[0];
+        }
+
+        $targetTime = strlen($jamReg) === 5 ? $jamReg . ':00' : $jamReg;
+
+        // 1. Exact match: targetTime falls between jam_mulai and jam_selesai
+        foreach ($slots as $slot) {
+            if ($targetTime >= $slot['jam_mulai'] && $targetTime <= $slot['jam_selesai']) {
+                return $slot;
+            }
+        }
+
+        // 2. Proximity match: find slot with minimum time distance from targetTime
+        $bestSlot = $slots[0];
+        $targetTs = strtotime("1970-01-01 $targetTime");
+        $minDiff  = abs($targetTs - strtotime("1970-01-01 " . $slots[0]['jam_mulai']));
+
+        foreach ($slots as $slot) {
+            $diffStart = abs($targetTs - strtotime("1970-01-01 " . $slot['jam_mulai']));
+            if ($diffStart < $minDiff) {
+                $minDiff  = $diffStart;
+                $bestSlot = $slot;
+            }
+        }
+
+        return $bestSlot;
     }
 
     // ═══════════════════════════════════════════════════════════════════════

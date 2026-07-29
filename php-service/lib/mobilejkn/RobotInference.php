@@ -93,13 +93,13 @@ class RobotInference
     }
 
     /**
-     * Infer Task 3 time dynamically.
-     * If patient registered before polyclinic starts, use jam_mulai + small random offset.
-     * If patient registered during polyclinic hours, use jam_reg + small random offset.
+     * Infer Task 3 time dynamically using Box-Muller Gaussian distribution.
+     * If patient registered before polyclinic starts, use jam_mulai + random offset.
+     * If patient registered during polyclinic hours, use jam_reg + random offset.
      */
-    public static function inferTask3(string $tglRegistrasi, string $jamReg, string $jamMulai): string
+    public static function inferTask3(string $tglRegistrasi, string $jamReg, string $jamMulai, ?array $customRanges = null): string
     {
-        $regTs = strtotime("{$tglRegistrasi} {$jamReg}");
+        $regTs   = strtotime("{$tglRegistrasi} {$jamReg}");
         $startTs = strtotime("{$tglRegistrasi} {$jamMulai}");
         
         if ($regTs === false || $startTs === false) {
@@ -109,8 +109,12 @@ class RobotInference
         // Base timestamp
         $baseTs = ($regTs < $startTs) ? $startTs : $regTs;
         
-        // Add random offset: 10 to 20 minutes, plus random seconds
-        $offsetMinutes = rand(10, 20);
+        [$minMinutes, $maxMinutes] = $customRanges['3'] ?? [10, 20];
+        $mean   = ($minMinutes + $maxMinutes) / 2.0;
+        $stdDev = ($maxMinutes - $minMinutes) / 4.0;
+
+        $offsetMinutes = (int) round(self::boxMuller($mean, $stdDev));
+        $offsetMinutes = max($minMinutes, min($maxMinutes, $offsetMinutes));
         $offsetSeconds = rand(0, 59);
         
         $inferredTs = $baseTs + ($offsetMinutes * 60) + $offsetSeconds;
@@ -118,12 +122,41 @@ class RobotInference
     }
 
     /**
+     * Infer Task 1 or Task 2 time as a backward offset prior to Task 3.
+     */
+    public static function inferPrecedingTask(string $taskId, string $waktu3, ?array $customRanges = null): string
+    {
+        $t3Ts = strtotime($waktu3);
+        if ($t3Ts === false || $t3Ts <= 0) {
+            return '';
+        }
+
+        $range = $customRanges[$taskId] ?? self::getRange($taskId, false);
+        [$minMinutes, $maxMinutes] = $range;
+        if ($minMinutes === 0 && $maxMinutes === 0) {
+            return '';
+        }
+
+        $mean   = ($minMinutes + $maxMinutes) / 2.0;
+        $stdDev = ($maxMinutes - $minMinutes) / 4.0;
+
+        $offsetMin = (int) round(self::boxMuller($mean, $stdDev));
+        $offsetMin = max($minMinutes, min($maxMinutes, $offsetMin));
+        $offsetSec = rand(0, 59);
+
+        $inferredTs = $t3Ts - ($offsetMin * 60) - $offsetSec;
+        return date('Y-m-d H:i:s', $inferredTs);
+    }
+
+    /**
      * Get the random minute range for each task transition.
-     * Exact values from Java ANTROL-ROBOT.JAVA.
      */
     private static function getRange(string $taskId, bool $isRacikan): array
     {
         return match ($taskId) {
+            '1' => [15, 30],
+            '2' => [5, 15],
+            '3' => [10, 20],
             '4' => [35, 58],
             '5' => [3, 10],
             '6' => [6, 15],

@@ -106,10 +106,39 @@ class QueueProcessor
         }
         $this->log->info("[BLOCK 1] Found " . count($bookings) . " unsent booking(s).");
 
+        // Fetch existing BPJS queue registrations for dates in range via GET /antrean/pendaftaran/tanggal/{tanggal}
+        $existingBpjsBookings = [];
+        $uniqueDates = array_unique(array_column($bookings, 'tanggalperiksa'));
+        foreach ($uniqueDates as $tgl) {
+            $pendaftaranRes = $this->api->getAntreanPendaftaranTanggal($tgl);
+            if ($pendaftaranRes['success'] && is_array($pendaftaranRes['data'])) {
+                foreach ($pendaftaranRes['data'] as $item) {
+                    $kb = (string) ($item['kodebooking'] ?? '');
+                    if (!empty($kb)) {
+                        $existingBpjsBookings[$kb] = true;
+                    }
+                }
+            }
+        }
+
         foreach ($bookings as $b) {
             $nb = $b['nobooking'];
 
-            // Auto-heal statuskirim: If booking already has tasks sent on BPJS, sync statuskirim=Sudah
+            // Check via GET /antrean/pendaftaran/tanggal list first
+            if (isset($existingBpjsBookings[$nb])) {
+                try {
+                    $this->db->markBookingAsSent($nb);
+                    $this->log->info("[BLOCK 1] {$nb}: auto-synced statuskirim=Sudah (found in BPJS /antrean/pendaftaran/tanggal list)");
+                    $this->successCount++;
+                    continue;
+                } catch (\PDOException $e) {
+                    $this->log->error("[BLOCK 1] DB update failed for {$nb}: " . $e->getMessage());
+                    $this->failCount++;
+                    continue;
+                }
+            }
+
+            // Fallback check: getListTask
             $listRes = $this->api->getListTask($nb);
             if ($listRes['success'] && !empty($listRes['data'])) {
                 try {
@@ -147,15 +176,13 @@ class QueueProcessor
 
                 // Fallback Active Auto-Healing: try to send TaskID 3 to see if booking actually exists
                 $this->log->info("[BLOCK 1] {$nb}: attempting fallback TaskID 3 auto-healing...");
-                $hari   = $this->db->hariForDate($b['tanggalperiksa']);
-                $jadwal = $this->db->fetchJadwal($hari, $b['kodedokter'], $b['kodepoli']);
+                $regInfo = $this->db->fetchPatientRegInfo($b['no_rawat']);
+                $jamReg  = $regInfo['jam_reg'] ?? '08:00:00';
+                $hari    = $this->db->hariForDate($b['tanggalperiksa']);
+                $jadwal  = $this->db->fetchJadwal($hari, $b['kodedokter'], $b['kodepoli'], $jamReg);
                 $jamMulai = $jadwal['jam_mulai'] ?? '08:00:00';
 
-                // Get reg_periksa details (specifically jam_reg) for the patient
-                $regInfo = $this->db->fetchPatientRegInfo($b['no_rawat']);
-                $jamReg = $regInfo['jam_reg'] ?? '08:00:00';
-
-                $datajam = RobotInference::inferTask3($b['tanggalperiksa'], $jamReg, $jamMulai);
+                $datajam = RobotInference::inferTask3($b['tanggalperiksa'], $jamReg, $jamMulai, $this->config->robotRanges);
 
                 if (!empty($datajam)) {
                     $r = $this->sendTaskId($nb, $b['no_rawat'], '3', $datajam, 'BLOCK 1');
@@ -263,7 +290,7 @@ class QueueProcessor
             $this->log->info("[BLOCK 3] ── Patient " . ($idx + 1) . "/{$total}: {$noRawat} ──");
 
             // Load task state from pre-fetched dictionary
-            $state = $taskStates[$noRawat] ?? ['3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
+            $state = $taskStates[$noRawat] ?? ['1' => '', '2' => '', '3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
 
             // Check for missing master data from LEFT JOIN (BUG-D: zero patient loss)
             if (empty($p['nm_dokter']) || empty($p['nm_poli'])) {
@@ -272,7 +299,8 @@ class QueueProcessor
 
             // Resolve jadwal from pre-loaded dictionary (Fix #7)
             $hari   = $this->db->hariForDate($p['tgl_registrasi']);
-            $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli']);
+            $jamReg = $p['jam_reg'] ?? '08:00:00';
+            $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli'], $jamReg);
             if (!$jadwal) {
                 // Log which patient is being skipped and WHY (BUG-D: clear reason for skip)
                 $this->log->warning("[BLOCK 3] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
@@ -342,7 +370,8 @@ class QueueProcessor
 
             // Resolve jadwal from pre-loaded dictionary (Fix #7)
             $hari   = $this->db->hariForDate($p['tgl_registrasi']);
-            $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli']);
+            $jamReg = $p['jam_reg'] ?? '08:00:00';
+            $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli'], $jamReg);
             if (!$jadwal) {
                 // Log which patient is being skipped and WHY (BUG-D: clear reason for skip)
                 $this->log->warning("[BLOCK 4] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
@@ -367,7 +396,7 @@ class QueueProcessor
             $p['kd_poli_bpjs']   = $poliBpjs;
 
             // Load existing task state from pre-fetched dictionary
-            $state = $taskStates[$noRawat] ?? ['3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
+            $state = $taskStates[$noRawat] ?? ['1' => '', '2' => '', '3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
 
             // Load pre-fetched prescription number and racikan status (Fix #5)
             $noResep   = $noResepMap[$noRawat] ?? '';
@@ -431,7 +460,7 @@ class QueueProcessor
         $jenisresep = empty($noResep) ? 'Tidak ada' : ($isRacikan ? 'Racikan' : 'Non racikan');
 
         // Smart-Bypass Caching: check if patient's active milestones are already fully completed locally
-        $isCompleted = ($state['3'] === 'Sudah' && $state['4'] === 'Sudah' && $state['5'] === 'Sudah');
+        $isCompleted = ($state['1'] === 'Sudah' && $state['2'] === 'Sudah' && $state['3'] === 'Sudah' && $state['4'] === 'Sudah' && $state['5'] === 'Sudah');
         if ($isCompleted) {
             $hasPrescription = !empty($noResep);
             if ($hasPrescription || !$this->config->skipFarmasiNoResep) {
@@ -453,34 +482,66 @@ class QueueProcessor
             return;
         }
 
-        // ── Task 3: mulai tunggu poli ─────────────────────────────────────
-        if ($state['3'] === '') {
-            // Fix #1: Use real Task 3 timestamp from mutasi_berkas.dikirim when available
-            // (matches ANTROL-ROBOT.JAVA behavior). Only infer when real data is missing.
+        // ── Resolve Task 3 timestamp first as anchor for preceding tasks (Task 1 & 2) ──
+        $waktu3Str = $state['waktu_3'] ?? '';
+        if (empty($waktu3Str)) {
             if (!empty($realTask3)) {
-                $datajam = $realTask3;
-                $this->log->debug("[{$label}] {$noRawat} TaskID 3: real timestamp from mutasi_berkas.dikirim = {$datajam}");
+                $waktu3Str = $realTask3;
             } else {
-                $datajam = RobotInference::inferTask3($patient['tgl_registrasi'], $patient['jam_reg'], $jamMulai);
-                $this->log->debug("[{$label}] {$noRawat} TaskID 3: robot-inferred to {$datajam}");
+                $waktu3Str = RobotInference::inferTask3($patient['tgl_registrasi'], $patient['jam_reg'] ?? '08:00:00', $jamMulai, $this->config->robotRanges);
+            }
+        }
+
+        // ── Task 1: pendaftaran antrean ───────────────────────────────────
+        if ($state['99'] === '' && $state['1'] === '') {
+            $waktu1Str = RobotInference::inferPrecedingTask('1', $waktu3Str, $this->config->robotRanges);
+            if (!empty($waktu1Str) && strtotime($waktu1Str) <= time()) {
+                $r1 = $this->sendTaskId($kodebooking, $noRawat, '1', $waktu1Str, $label, $jenisresep);
+                if ($r1['ok']) {
+                    $state['1'] = 'Sudah';
+                    $state['waktu_1'] = $waktu1Str;
+                }
+            }
+        }
+
+        // ── Task 2: pendaftaran dilayani ──────────────────────────────────
+        if ($state['99'] === '' && $state['1'] === 'Sudah' && $state['2'] === '') {
+            $waktu2Str = RobotInference::inferPrecedingTask('2', $waktu3Str, $this->config->robotRanges);
+            // Monotonicity Gate: Ensure T1 < T2
+            $t1Ts = strtotime($state['waktu_1'] ?? '');
+            if ($t1Ts !== false && strtotime($waktu2Str) <= $t1Ts) {
+                $waktu2Str = date('Y-m-d H:i:s', $t1Ts + 180); // 3 minutes after Task 1
             }
 
-            if (!empty($datajam)) {
-                // Future-time gate: don't send if the time hasn't happened yet
-                // e.g., jam_mulai=11:00 but now()=07:41 → wait until 11:00 passes
-                $datajamTs = strtotime($datajam);
+            if (!empty($waktu2Str) && strtotime($waktu2Str) <= time()) {
+                $r2 = $this->sendTaskId($kodebooking, $noRawat, '2', $waktu2Str, $label, $jenisresep);
+                if ($r2['ok']) {
+                    $state['2'] = 'Sudah';
+                    $state['waktu_2'] = $waktu2Str;
+                }
+            }
+        }
+
+        // ── Task 3: mulai tunggu poli ─────────────────────────────────────
+        if ($state['99'] === '' && $state['2'] === 'Sudah' && $state['3'] === '') {
+            // Monotonicity Gate: Ensure T2 < T3
+            $t2Ts = strtotime($state['waktu_2'] ?? '');
+            if ($t2Ts !== false && strtotime($waktu3Str) <= $t2Ts) {
+                $waktu3Str = date('Y-m-d H:i:s', $t2Ts + 180); // 3 minutes after Task 2
+            }
+
+            if (!empty($waktu3Str)) {
+                $datajamTs = strtotime($waktu3Str);
                 if ($datajamTs !== false && $datajamTs > time()) {
-                    $this->log->debug("[{$label}] {$noRawat} TaskID 3: time {$datajam} is in the future — wait");
+                    $this->log->debug("[{$label}] {$noRawat} TaskID 3: time {$waktu3Str} is in the future — wait");
                 } else {
-                    $r = $this->sendTaskId($kodebooking, $noRawat, '3', $datajam, $label, $jenisresep);
+                    $r = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3Str, $label, $jenisresep);
                     if ($r['ok']) {
                         $state['3'] = 'Sudah';
-                        $state['waktu_3'] = $datajam;
+                        $state['waktu_3'] = $waktu3Str;
                     } elseif ($r['reason'] === 'booking_not_found') {
                         if ($patient['tgl_registrasi'] < date('Y-m-d')) {
-                            // Fix #2: Do NOT auto-mark as cancelled. Booking might be delayed
-                            // in BPJS indexing (eventual consistency). Skip and retry next cycle.
-                            $this->log->warning("[{$label}] {$noRawat} TaskID 3 failed: booking_not_found, past date ({$patient['tgl_registrasi']}). Skipping — will retry next cycle. (NOT marking cancelled)");
+                            $this->log->warning("[{$label}] {$noRawat} TaskID 3 failed: booking_not_found, past date ({$patient['tgl_registrasi']}). Skipping — will retry next cycle.");
                             $state['3'] = 'Belum';
                         } else {
                             $this->log->info("[{$label}] {$noRawat} TaskID 3 failed: booking_not_found. Triggering dynamic booking recovery...");
@@ -510,10 +571,10 @@ class QueueProcessor
                                         $this->db->markBookingAsSent($bookingData['nobooking']);
                                     }
                                     // Retry sending Task 3
-                                    $retryR = $this->sendTaskId($kodebooking, $noRawat, '3', $datajam, $label, $jenisresep);
+                                    $retryR = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3Str, $label, $jenisresep);
                                     if ($retryR['ok']) {
                                         $state['3'] = 'Sudah';
-                                        $state['waktu_3'] = $datajam;
+                                        $state['waktu_3'] = $waktu3Str;
                                     } else {
                                         $state['3'] = 'Belum';
                                     }
@@ -818,7 +879,7 @@ class QueueProcessor
         // 2. Sync Local -> BPJS (Prune local tasks that BPJS does NOT have)
         // If BPJS doesn't have it, local DB is out of sync (e.g. booking reset or failed API propagation)
         // Fix #8: Skip pruning for tasks just sent in this cycle (BPJS eventual consistency)
-        $possibleTasks = ['3', '4', '5', '6', '7', '99'];
+        $possibleTasks = ['1', '2', '3', '4', '5', '6', '7', '99'];
         foreach ($possibleTasks as $tId) {
             if (($state[$tId] ?? '') === 'Sudah' && !isset($bpjsTasks[$tId])) {
                 // Guard: don't prune tasks we just successfully sent this cycle
@@ -984,7 +1045,8 @@ class QueueProcessor
 
             // Resolve jadwal from pre-loaded dictionary (Fix #7)
             $hari   = $this->db->hariForDate($p['tgl_registrasi']);
-            $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli']);
+            $jamReg = $p['jam_reg'] ?? '08:00:00';
+            $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli'], $jamReg);
             if (!$jadwal) {
                 // Log which patient is being skipped and WHY (BUG-D: clear reason for skip)
                 $this->log->warning("[BLOCK 5] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
@@ -1009,7 +1071,7 @@ class QueueProcessor
             $p['kd_poli_bpjs']   = $poliBpjs;
 
             // Load pre-fetched state, prescription, racikan, mutasi berkas
-            $state    = $taskStates[$noRawat] ?? ['3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
+            $state    = $taskStates[$noRawat] ?? ['1' => '', '2' => '', '3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
             $noResep  = $noResepMap[$noRawat] ?? '';
             $isRacikan = isset($racikanSet[$noResep]);
             $realTask3 = $mutasiBerkasMap[$noRawat] ?? '';

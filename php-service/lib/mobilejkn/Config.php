@@ -87,6 +87,9 @@ class MobileJknConfig
         $this->skipFarmasiNoResep = filter_var($this->get('MOBILEJKN_SKIP_FARMASI_NO_RESEP', 'false'), FILTER_VALIDATE_BOOLEAN);
         $this->deferTaskChain     = filter_var($this->get('MOBILEJKN_DEFER_ROBOT_INFER', 'false'), FILTER_VALIDATE_BOOLEAN);
         $this->robotRanges        = [
+            '1' => self::parseRange($this->get('ROBOT_RANGE_1', '15,30'), [15, 30]),
+            '2' => self::parseRange($this->get('ROBOT_RANGE_2', '5,15'), [5, 15]),
+            '3' => self::parseRange($this->get('ROBOT_RANGE_3', '10,20'), [10, 20]),
             '4' => self::parseRange($this->get('ROBOT_RANGE_4', '35,58'), [35, 58]),
             '5' => self::parseRange($this->get('ROBOT_RANGE_5', '3,10'), [3, 10]),
             '6' => self::parseRange($this->get('ROBOT_RANGE_6', '6,15'), [6, 15]),
