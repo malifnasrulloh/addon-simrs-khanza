@@ -395,15 +395,18 @@ class QueueProcessor
             $p['kd_dokter_bpjs'] = $dokterBpjs;
             $p['kd_poli_bpjs']   = $poliBpjs;
 
-            // Load existing task state from pre-fetched dictionary
-            $state = $taskStates[$noRawat] ?? ['1' => '', '2' => '', '3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
+            // Ensure /antrean/add is registered immediately if missing on BPJS
+            // (All /antrean/... endpoints run immediately; ONLY /antrean/updatewaktu task IDs are deferred)
+            $listRes = $this->api->getListTask($kodebooking);
+            $msgLower = strtolower($listRes['message'] ?? '');
+            if (!$listRes['success'] && (str_contains($msgLower, 'tidak ditemukan') || str_contains($msgLower, 'belum terdaftar') || str_contains($msgLower, 'tidak terdaftar'))) {
+                $nomorRef = $isJkn ? $this->db->fetchNomorReferensi($noRawat) : '';
+                $payload  = PayloadBuilder::onsitePatient($p, $isJkn, $nomorRef);
+                $this->log->info("[BLOCK 4] {$noRawat}: sending immediate /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
+                $addResult = $this->api->addAntrean($payload);
+            }
 
-            // Load pre-fetched prescription number and racikan status (Fix #5)
-            $noResep   = $noResepMap[$noRawat] ?? '';
-            $isRacikan = isset($racikanSet[$noResep]);
-
-            // Directly run the task chain. If the booking is not registered on BPJS yet,
-            // Task 3 will automatically detect 'booking_not_found' and register it dynamically.
+            // Directly run the task chain
             $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 4', $isJkn, $noResep, $isRacikan, $mutasiBerkasMap[$noRawat] ?? '');
         }
     }
@@ -1077,7 +1080,18 @@ class QueueProcessor
             $realTask3 = $mutasiBerkasMap[$noRawat] ?? '';
 
             // SEP patients are always kd_pj='BPJ' (JKN)
-            // Run the task chain — Block 5 processes just like Block 4 (dynamic booking on need)
+            // Ensure /antrean/add is registered immediately if missing on BPJS
+            // (All /antrean/... endpoints run immediately; ONLY /antrean/updatewaktu task IDs are deferred)
+            $listRes = $this->api->getListTask($kodebooking);
+            $msgLower = strtolower($listRes['message'] ?? '');
+            if (!$listRes['success'] && (str_contains($msgLower, 'tidak ditemukan') || str_contains($msgLower, 'belum terdaftar') || str_contains($msgLower, 'tidak terdaftar'))) {
+                $nomorRef = $this->db->fetchNomorReferensi($noRawat);
+                $payload  = PayloadBuilder::onsitePatient($p, true, $nomorRef);
+                $this->log->info("[BLOCK 5] {$noRawat}: sending immediate /antrean/add (jenispasien=JKN)");
+                $addResult = $this->api->addAntrean($payload);
+            }
+
+            // Run the task chain
             $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 5', true, $noResep, $isRacikan, $realTask3);
         }
     }
