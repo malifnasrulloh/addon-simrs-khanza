@@ -395,6 +395,11 @@ class QueueProcessor
             $p['kd_dokter_bpjs'] = $dokterBpjs;
             $p['kd_poli_bpjs']   = $poliBpjs;
 
+            // Load existing task state, prescription, racikan from pre-fetched dictionaries
+            $state     = $taskStates[$noRawat] ?? ['1' => '', '2' => '', '3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
+            $noResep   = $noResepMap[$noRawat] ?? '';
+            $isRacikan = isset($racikanSet[$noResep]);
+
             // Ensure /antrean/add is registered immediately if missing on BPJS
             // (All /antrean/... endpoints run immediately; ONLY /antrean/updatewaktu task IDs are deferred)
             $listRes = $this->api->getListTask($kodebooking);
