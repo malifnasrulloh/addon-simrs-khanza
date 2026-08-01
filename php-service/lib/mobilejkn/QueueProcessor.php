@@ -400,15 +400,20 @@ class QueueProcessor
             $noResep   = $noResepMap[$noRawat] ?? '';
             $isRacikan = isset($racikanSet[$noResep]);
 
-            // Ensure /antrean/add is registered immediately if missing on BPJS
-            // (All /antrean/... endpoints run immediately; ONLY /antrean/updatewaktu task IDs are deferred)
-            $listRes = $this->api->getListTask($kodebooking);
-            $msgLower = strtolower($listRes['message'] ?? '');
-            if (!$listRes['success'] && (str_contains($msgLower, 'tidak ditemukan') || str_contains($msgLower, 'belum terdaftar') || str_contains($msgLower, 'tidak terdaftar'))) {
+            // ── IMMEDIATE /antrean/add ────────────────────────────────────
+            // Matches Java robot: if Task 3 is empty locally, send /antrean/add IMMEDIATELY!
+            if (($state['3'] ?? '') === '') {
                 $nomorRef = $isJkn ? $this->db->fetchNomorReferensi($noRawat) : '';
                 $payload  = PayloadBuilder::onsitePatient($p, $isJkn, $nomorRef);
-                $this->log->info("[BLOCK 4] {$noRawat}: sending immediate /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
+                $this->log->info("[BLOCK 4] {$noRawat}: SEND /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
                 $addResult = $this->api->addAntrean($payload);
+                $addCode   = $addResult['code'] ?? '';
+                if ($addResult['success'] || $addCode === '208') {
+                    $this->log->info("[BLOCK 4] {$noRawat}: ✓ /antrean/add accepted (code={$addCode})");
+                    $this->successCount++;
+                } else {
+                    $this->log->warning("[BLOCK 4] {$noRawat}: ✗ /antrean/add failed ({$addCode}) — {$addResult['message']}");
+                }
             }
 
             // Directly run the task chain
@@ -1085,15 +1090,20 @@ class QueueProcessor
             $realTask3 = $mutasiBerkasMap[$noRawat] ?? '';
 
             // SEP patients are always kd_pj='BPJ' (JKN)
-            // Ensure /antrean/add is registered immediately if missing on BPJS
-            // (All /antrean/... endpoints run immediately; ONLY /antrean/updatewaktu task IDs are deferred)
-            $listRes = $this->api->getListTask($kodebooking);
-            $msgLower = strtolower($listRes['message'] ?? '');
-            if (!$listRes['success'] && (str_contains($msgLower, 'tidak ditemukan') || str_contains($msgLower, 'belum terdaftar') || str_contains($msgLower, 'tidak terdaftar'))) {
+            // ── IMMEDIATE /antrean/add ────────────────────────────────────
+            // Matches Java robot: if Task 3 is empty locally, send /antrean/add IMMEDIATELY!
+            if (($state['3'] ?? '') === '') {
                 $nomorRef = $this->db->fetchNomorReferensi($noRawat);
                 $payload  = PayloadBuilder::onsitePatient($p, true, $nomorRef);
-                $this->log->info("[BLOCK 5] {$noRawat}: sending immediate /antrean/add (jenispasien=JKN)");
+                $this->log->info("[BLOCK 5] {$noRawat}: SEND /antrean/add (jenispasien=JKN)");
                 $addResult = $this->api->addAntrean($payload);
+                $addCode   = $addResult['code'] ?? '';
+                if ($addResult['success'] || $addCode === '208') {
+                    $this->log->info("[BLOCK 5] {$noRawat}: ✓ /antrean/add accepted (code={$addCode})");
+                    $this->successCount++;
+                } else {
+                    $this->log->warning("[BLOCK 5] {$noRawat}: ✗ /antrean/add failed ({$addCode}) — {$addResult['message']}");
+                }
             }
 
             // Run the task chain
