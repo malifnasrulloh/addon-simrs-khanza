@@ -52,8 +52,7 @@ _handler.setFormatter(logging.Formatter(
 ))
 logger.addHandler(_handler)
 
-MAPPING_PATH = "/etc/orthanc/mapping_tindakan_radiologi.iyem"
-_mapping_cache = None  # loaded once, reused
+
 
 
 def _env(key, default=""):
@@ -188,17 +187,30 @@ def resolve_modality(kd_jenis_prw):
     return "CR"
 
 
+# AE Title defaults per modality — configurable via env if needed.
+_DEFAULT_AET_MAP = {
+    "CR": "CR_STATION",
+    "DX": "DX_STATION",
+    "CT": "CT_STATION",
+    "MR": "MR_STATION",
+    "US": "USG_STATION",
+    "MG": "MG_STATION",
+    "RF": "RF_STATION",
+}
+
+
 def get_ae_title(kd_jenis_prw, modality, fallback_aet):
-    """Resolve Scheduled Station AE Title for a procedure."""
-    mapping = load_modality_mapping()
-    for item in mapping.get("mapping", []):
-        if item.get("kd_jenis_prw") == kd_jenis_prw:
-            aet = item.get("aet", "").strip()
-            if aet:
-                return aet
-    default_aet = mapping.get("default_aet", {})
-    if modality in default_aet and default_aet[modality].strip():
-        return default_aet[modality].strip()
+    """
+    Resolve Scheduled Station AE Title for a procedure.
+
+    Resolution order:
+      1. Modality-based default from _DEFAULT_AET_MAP
+      2. Caller-provided fallback_aet
+    """
+    if modality:
+        mod_upper = modality.strip().upper()
+        if mod_upper in _DEFAULT_AET_MAP:
+            return _DEFAULT_AET_MAP[mod_upper]
     return fallback_aet
 
 

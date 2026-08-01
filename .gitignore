@@ -1,0 +1,3 @@
+*.pyc
+graphify-out/
+.playwright-mcp/

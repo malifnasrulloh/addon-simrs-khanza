@@ -32,7 +32,6 @@ define('WL_DIR',                getenv('MWL_WL_DIR') ?: '/var/lib/orthanc/workli
 define('DCM_SHARE_DIR',         getenv('MWL_DCM_SHARE_DIR') ?: '/var/lib/orthanc/dicom-share/');
 define('DUMP2DCM',              '/usr/bin/dump2dcm');
 define('TMP_DIR',               '/tmp/mwl_dump/');
-define('MODALITY_MAP_JSON',     __DIR__ . '/mapping_tindakan_radiologi.iyem');
 define('DASHBOARD_REFRESH_SEC', (int)(getenv('MWL_DASHBOARD_REFRESH_SEC') ?: getenv('MWL_RELOAD_SEC') ?: 300));
 define('STALE_DAYS',            (int)(getenv('MWL_STALE_DAYS') ?: 2));
 define('DEFAULT_AET',           'ORTHANC');
@@ -170,7 +169,7 @@ function dicomTime(?string $time): string {
 }
 
 /**
- * Load the consolidated modality configuration from modality_mapping.json.
+ * Load the consolidated modality configuration from database table satu_sehat_mapping_radiologi.
  *
  * Returns an array with two keys:
  *   - 'procedures'  : kd_jenis_prw => ['modality' => 'XR', 'aet' => 'CR_STATION' (optional)]
@@ -201,7 +200,7 @@ function loadModalityConfig(?PDO $pdo = null): array {
  * Detect DICOM modality for a procedure.
  *
  * Resolution order:
- *   1. Exact match from modality_mapping.json (by kd_jenis_prw)
+ *   1. Exact match from database mapping (by kd_jenis_prw)
  *   2. Explicit parenthesized code in procedure name, e.g. "(CR)"
  *   3. Keyword-based detection from procedure name
  *   4. Default: CR (conventional radiography)
