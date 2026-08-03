@@ -276,13 +276,18 @@ class QueueProcessor
         }
         $this->log->info("[BLOCK 3] Processing {$total} JKN patient(s)...");
 
-        // Eager Load Task States, Prescriptions, Racikan, Mutasi Berkas, and Jadwal
-        $noRawats        = array_column($patients, 'no_rawat');
-        $taskStates      = $this->db->fetchBatchTaskStates($noRawats);
-        $noResepMap      = $this->db->fetchBatchNoResep($noRawats);
-        $racikanSet      = $this->db->fetchBatchIsRacikan(array_filter(array_values($noResepMap)));
-        $mutasiBerkasMap = $this->db->fetchBatchMutasiBerkas($noRawats);
-        $jadwalDict      = $this->db->fetchAllJadwal();
+        // Eager Load Task States, Prescriptions, Racikan, Mutasi Berkas, Real SIMRS events, and Jadwal
+        $noRawats              = array_column($patients, 'no_rawat');
+        $taskStates            = $this->db->fetchBatchTaskStates($noRawats);
+        $noResepMap            = $this->db->fetchBatchNoResep($noRawats);
+        $racikanSet            = $this->db->fetchBatchIsRacikan(array_filter(array_values($noResepMap)));
+        $mutasiBerkasMap       = $this->db->fetchBatchMutasiBerkas($noRawats);
+        $pemeriksaanRalanMap   = $this->db->fetchBatchPemeriksaanRalan($noRawats);
+        $mutasiDiterimaMap     = $this->db->fetchBatchMutasiDiterima($noRawats);
+        $mutasiKembaliMap      = $this->db->fetchBatchMutasiKembali($noRawats);
+        $resepRalanMap         = $this->db->fetchBatchResepObatRalan($noRawats);
+        $resepPenyerahanMap    = $this->db->fetchBatchResepObatPenyerahan($noRawats);
+        $jadwalDict            = $this->db->fetchAllJadwal();
 
         foreach ($patients as $idx => $p) {
             $noRawat     = $p['no_rawat'];
@@ -307,15 +312,20 @@ class QueueProcessor
                 continue;
             }
 
-            // Booking creation always runs immediately (no defer)
-            // Task chain processing may be deferred (handled inside processTaskChain)
-
             // Load pre-fetched prescription number and racikan status (Fix #5)
             $noResep   = $noResepMap[$noRawat] ?? '';
             $isRacikan = isset($racikanSet[$noResep]);
 
-            // Process task chain: 3 → 4 → 5 → [farmasi] → 6 → 7
-            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 3', true, $noResep, $isRacikan, $mutasiBerkasMap[$noRawat] ?? '');
+            $realEvents = [
+                '3' => $mutasiBerkasMap[$noRawat] ?? '',
+                '4' => $pemeriksaanRalanMap[$noRawat] ?? ($mutasiDiterimaMap[$noRawat] ?? ''),
+                '5' => $mutasiKembaliMap[$noRawat] ?? (($p['stts'] ?? '') === 'Sudah' ? date('Y-m-d H:i:s') : ''),
+                '6' => $resepRalanMap[$noRawat] ?? '',
+                '7' => $resepPenyerahanMap[$noRawat] ?? '',
+            ];
+
+            // Process task chain: 1 → 2 → 3 → 4 → 5 → [farmasi] → 6 → 7
+            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 3', true, $noResep, $isRacikan, $realEvents);
         }
     }
 
@@ -350,11 +360,16 @@ class QueueProcessor
         $poliDict    = $this->db->fetchAllPoliBpjsMappings();
         $jadwalDict  = $this->db->fetchAllJadwal();
 
-        $noRawats    = array_column($patients, 'no_rawat');
-        $taskStates  = $this->db->fetchBatchTaskStates($noRawats);
-        $noResepMap  = $this->db->fetchBatchNoResep($noRawats);
-        $racikanSet  = $this->db->fetchBatchIsRacikan(array_filter(array_values($noResepMap)));
-        $mutasiBerkasMap = $this->db->fetchBatchMutasiBerkas($noRawats);
+        $noRawats              = array_column($patients, 'no_rawat');
+        $taskStates            = $this->db->fetchBatchTaskStates($noRawats);
+        $noResepMap            = $this->db->fetchBatchNoResep($noRawats);
+        $racikanSet            = $this->db->fetchBatchIsRacikan(array_filter(array_values($noResepMap)));
+        $mutasiBerkasMap       = $this->db->fetchBatchMutasiBerkas($noRawats);
+        $pemeriksaanRalanMap   = $this->db->fetchBatchPemeriksaanRalan($noRawats);
+        $mutasiDiterimaMap     = $this->db->fetchBatchMutasiDiterima($noRawats);
+        $mutasiKembaliMap      = $this->db->fetchBatchMutasiKembali($noRawats);
+        $resepRalanMap         = $this->db->fetchBatchResepObatRalan($noRawats);
+        $resepPenyerahanMap    = $this->db->fetchBatchResepObatPenyerahan($noRawats);
 
         foreach ($patients as $idx => $p) {
             $noRawat     = $p['no_rawat'];
@@ -377,9 +392,6 @@ class QueueProcessor
                 $this->log->warning("[BLOCK 4] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
                 continue;
             }
-
-            // Booking creation always runs immediately (no defer)
-            // Task chain processing may be deferred (handled inside processTaskChain)
 
             // Java: per-patient mapping lookup (lines 718–724)
             $dokterBpjs = $dokterDict[$p['kd_dokter']] ?? '';
@@ -416,8 +428,16 @@ class QueueProcessor
                 }
             }
 
+            $realEvents = [
+                '3' => $mutasiBerkasMap[$noRawat] ?? '',
+                '4' => $pemeriksaanRalanMap[$noRawat] ?? ($mutasiDiterimaMap[$noRawat] ?? ''),
+                '5' => $mutasiKembaliMap[$noRawat] ?? (($p['stts'] ?? '') === 'Sudah' ? date('Y-m-d H:i:s') : ''),
+                '6' => $resepRalanMap[$noRawat] ?? '',
+                '7' => $resepPenyerahanMap[$noRawat] ?? '',
+            ];
+
             // Directly run the task chain
-            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 4', $isJkn, $noResep, $isRacikan, $mutasiBerkasMap[$noRawat] ?? '');
+            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 4', $isJkn, $noResep, $isRacikan, $realEvents);
         }
     }
 
@@ -461,13 +481,11 @@ class QueueProcessor
         bool   $isJkn,
         string $noResep = '',
         bool   $isRacikan = false,
-        string $realTask3 = ''
+        array  $realEvents = []
     ): void {
         $jamMulai   = $jadwal['jam_mulai'] ?? '08:00:00';
         $jamSelesai = $jadwal['jam_selesai'] ?? '14:00:00';
-
-        // Full-Robot Mode: always allow robot inference immediately (strict sequence gates apply)
-        $allowRobot = true;
+        $isRealtime = ($this->config->syncMode === 'realtime');
 
         // Determine prescription info from pre-loaded data (Fix #5)
         $jenisresep = empty($noResep) ? 'Tidak ada' : ($isRacikan ? 'Racikan' : 'Non racikan');
@@ -498,10 +516,16 @@ class QueueProcessor
         // ── Resolve Task 3 timestamp first as anchor for preceding tasks (Task 1 & 2) ──
         $waktu3Str = $state['waktu_3'] ?? '';
         if (empty($waktu3Str)) {
-            if (!empty($realTask3)) {
-                $waktu3Str = $realTask3;
-            } else {
+            $real3 = $realEvents['3'] ?? '';
+            if (!empty($real3)) {
+                $waktu3Str = $real3;
+            } elseif (!$isRealtime) {
                 $waktu3Str = RobotInference::inferTask3($patient['tgl_registrasi'], $patient['jam_reg'] ?? '08:00:00', $jamMulai, $this->config->robotRanges);
+            } else {
+                // Realtime Mode: fallback anchor to max(reg_periksa.jam_reg, jadwal.jam_mulai)
+                $regDateTime   = $patient['tgl_registrasi'] . ' ' . ($patient['jam_reg'] ?? '08:00:00');
+                $startDateTime = $patient['tgl_registrasi'] . ' ' . $jamMulai;
+                $waktu3Str     = ($regDateTime > $startDateTime) ? $regDateTime : $startDateTime;
             }
         }
 
@@ -612,47 +636,86 @@ class QueueProcessor
         // ── Task 4: mulai pelayanan poli ──────────────────────────────────
         if ($state['99'] === '' && $state['3'] === 'Sudah' && $state['4'] === '') {
             $prevWaktu = $state['waktu_3'] ?? '';
-            // Ensure physician service (Task 4) is never inferred before polyclinic opens (jam_mulai)
-            $openTime = $patient['tgl_registrasi'] . ' ' . $jamMulai;
+            $openTime  = $patient['tgl_registrasi'] . ' ' . $jamMulai;
             if (strtotime($prevWaktu) < strtotime($openTime)) {
                 $prevWaktu = $openTime;
             }
-            $datajam = $this->inferAndSendRobotTask($kodebooking, $noRawat, '4', $prevWaktu, false, $label, $jenisresep);
-            if ($datajam !== null) {
-                $state['4'] = 'Sudah';
-                $state['waktu_4'] = $datajam;
+
+            $waktu4Str = $realEvents['4'] ?? '';
+            if (empty($waktu4Str) && !$isRealtime) {
+                $waktu4Str = RobotInference::infer('4', $prevWaktu, false, $this->config->robotRanges);
+            }
+
+            if (!empty($waktu4Str)) {
+                $t3Ts = strtotime($prevWaktu);
+                if ($t3Ts !== false && strtotime($waktu4Str) <= $t3Ts) {
+                    $waktu4Str = date('Y-m-d H:i:s', $t3Ts + 180);
+                }
+                if (strtotime($waktu4Str) <= time()) {
+                    $r4 = $this->sendTaskId($kodebooking, $noRawat, '4', $waktu4Str, $label, $jenisresep);
+                    if ($r4['ok']) {
+                        $state['4'] = 'Sudah';
+                        $state['waktu_4'] = $waktu4Str;
+                    }
+                }
             } else {
-                $state = $this->db->loadTaskState($noRawat);
+                $this->log->debug("[{$label}] {$noRawat} TaskID 4: real SIMRS event missing — waiting for examination entry in pemeriksaan_ralan / mutasi_berkas");
             }
         }
 
         // ── Task 5: selesai pelayanan poli ────────────────────────────────
         if ($state['99'] === '' && $state['4'] === 'Sudah' && $state['5'] === '') {
             $prevWaktu = $state['waktu_4'] ?? '';
-            $datajam = $this->inferAndSendRobotTask($kodebooking, $noRawat, '5', $prevWaktu, false, $label, $jenisresep);
-            if ($datajam !== null) {
-                $state['5'] = 'Sudah';
-                $state['waktu_5'] = $datajam;
+
+            $waktu5Str = $realEvents['5'] ?? '';
+            if (empty($waktu5Str) && !$isRealtime) {
+                $waktu5Str = RobotInference::infer('5', $prevWaktu, false, $this->config->robotRanges);
+            }
+
+            if (!empty($waktu5Str)) {
+                $t4Ts = strtotime($prevWaktu);
+                if ($t4Ts !== false && strtotime($waktu5Str) <= $t4Ts) {
+                    $waktu5Str = date('Y-m-d H:i:s', $t4Ts + 180);
+                }
+                if (strtotime($waktu5Str) <= time()) {
+                    $r5 = $this->sendTaskId($kodebooking, $noRawat, '5', $waktu5Str, $label, $jenisresep);
+                    if ($r5['ok']) {
+                        $state['5'] = 'Sudah';
+                        $state['waktu_5'] = $waktu5Str;
+                    }
+                }
             } else {
-                $state = $this->db->loadTaskState($noRawat);
+                $this->log->debug("[{$label}] {$noRawat} TaskID 5: real SIMRS event missing — waiting for polyclinic completion in mutasi_berkas / reg_periksa.stts='Sudah'");
             }
         }
 
         // ── Farmasi + Task 6 ──────────────────────────────────────────────
         if ($state['99'] === '' && $state['5'] === 'Sudah' && $state['6'] === '') {
-            // Skip tasks 6/7 if patient has no prescription and config says to skip
             if (empty($noResep) && $this->config->skipFarmasiNoResep) {
                 $this->log->info("[{$label}] {$noRawat} TaskID 6,7: skip — no resep (MOBILEJKN_SKIP_FARMASI_NO_RESEP=true)");
             } else {
-                $this->sendFarmasi($kodebooking, $noRawat, $noResep);
-
                 $prevWaktu = $state['waktu_5'] ?? '';
-                $datajam   = $this->inferAndSendRobotTask($kodebooking, $noRawat, '6', $prevWaktu, $isRacikan, $label, $jenisresep);
-                if ($datajam !== null) {
-                    $state['6'] = 'Sudah';
-                    $state['waktu_6'] = $datajam;
+                $waktu6Str = $realEvents['6'] ?? '';
+
+                if (empty($waktu6Str) && !$isRealtime) {
+                    $waktu6Str = RobotInference::infer('6', $prevWaktu, $isRacikan, $this->config->robotRanges);
+                }
+
+                if (!empty($waktu6Str)) {
+                    $this->sendFarmasi($kodebooking, $noRawat, $noResep);
+                    $t5Ts = strtotime($prevWaktu);
+                    if ($t5Ts !== false && strtotime($waktu6Str) <= $t5Ts) {
+                        $waktu6Str = date('Y-m-d H:i:s', $t5Ts + 180);
+                    }
+                    if (strtotime($waktu6Str) <= time()) {
+                        $r6 = $this->sendTaskId($kodebooking, $noRawat, '6', $waktu6Str, $label, $jenisresep);
+                        if ($r6['ok']) {
+                            $state['6'] = 'Sudah';
+                            $state['waktu_6'] = $waktu6Str;
+                        }
+                    }
                 } else {
-                    $state = $this->db->loadTaskState($noRawat);
+                    $this->log->debug("[{$label}] {$noRawat} TaskID 6: real SIMRS event missing — waiting for prescription in resep_obat");
                 }
             }
         }
@@ -660,12 +723,26 @@ class QueueProcessor
         // ── Task 7: selesai farmasi ───────────────────────────────────────
         if ($state['99'] === '' && $state['6'] === 'Sudah' && $state['7'] === '') {
             $prevWaktu = $state['waktu_6'] ?? '';
-            $datajam   = $this->inferAndSendRobotTask($kodebooking, $noRawat, '7', $prevWaktu, $isRacikan, $label, $jenisresep);
-            if ($datajam !== null) {
-                $state['7'] = 'Sudah';
-                $state['waktu_7'] = $datajam;
+            $waktu7Str = $realEvents['7'] ?? '';
+
+            if (empty($waktu7Str) && !$isRealtime) {
+                $waktu7Str = RobotInference::infer('7', $prevWaktu, $isRacikan, $this->config->robotRanges);
+            }
+
+            if (!empty($waktu7Str)) {
+                $t6Ts = strtotime($prevWaktu);
+                if ($t6Ts !== false && strtotime($waktu7Str) <= $t6Ts) {
+                    $waktu7Str = date('Y-m-d H:i:s', $t6Ts + 180);
+                }
+                if (strtotime($waktu7Str) <= time()) {
+                    $r7 = $this->sendTaskId($kodebooking, $noRawat, '7', $waktu7Str, $label, $jenisresep);
+                    if ($r7['ok']) {
+                        $state['7'] = 'Sudah';
+                        $state['waktu_7'] = $waktu7Str;
+                    }
+                }
             } else {
-                $state = $this->db->loadTaskState($noRawat);
+                $this->log->debug("[{$label}] {$noRawat} TaskID 7: real SIMRS event missing — waiting for drug dispensing in resep_obat (tgl_penyerahan + jam_penyerahan)");
             }
         }
 
@@ -1040,11 +1117,16 @@ class QueueProcessor
         $poliDict    = $this->db->fetchAllPoliBpjsMappings();
         $jadwalDict  = $this->db->fetchAllJadwal();
 
-        $noRawats       = array_column($patients, 'no_rawat');
-        $taskStates     = $this->db->fetchBatchTaskStates($noRawats);
-        $noResepMap     = $this->db->fetchBatchNoResep($noRawats);
-        $racikanSet     = $this->db->fetchBatchIsRacikan(array_filter(array_values($noResepMap)));
-        $mutasiBerkasMap = $this->db->fetchBatchMutasiBerkas($noRawats);
+        $noRawats              = array_column($patients, 'no_rawat');
+        $taskStates            = $this->db->fetchBatchTaskStates($noRawats);
+        $noResepMap            = $this->db->fetchBatchNoResep($noRawats);
+        $racikanSet            = $this->db->fetchBatchIsRacikan(array_filter(array_values($noResepMap)));
+        $mutasiBerkasMap       = $this->db->fetchBatchMutasiBerkas($noRawats);
+        $pemeriksaanRalanMap   = $this->db->fetchBatchPemeriksaanRalan($noRawats);
+        $mutasiDiterimaMap     = $this->db->fetchBatchMutasiDiterima($noRawats);
+        $mutasiKembaliMap      = $this->db->fetchBatchMutasiKembali($noRawats);
+        $resepRalanMap         = $this->db->fetchBatchResepObatRalan($noRawats);
+        $resepPenyerahanMap    = $this->db->fetchBatchResepObatPenyerahan($noRawats);
 
         foreach ($patients as $idx => $p) {
             $noRawat     = $p['no_rawat'];
@@ -1066,9 +1148,6 @@ class QueueProcessor
                 continue;
             }
 
-            // Booking creation always runs immediately (no defer)
-            // Task chain processing may be deferred (handled inside processTaskChain)
-
             // BPJS mapping lookup from pre-loaded dictionaries
             $dokterBpjs = $dokterDict[$p['kd_dokter']] ?? '';
             $poliBpjs   = $poliDict[$p['kd_poli']] ?? '';
@@ -1087,7 +1166,6 @@ class QueueProcessor
             $state    = $taskStates[$noRawat] ?? ['1' => '', '2' => '', '3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
             $noResep  = $noResepMap[$noRawat] ?? '';
             $isRacikan = isset($racikanSet[$noResep]);
-            $realTask3 = $mutasiBerkasMap[$noRawat] ?? '';
 
             // SEP patients are always kd_pj='BPJ' (JKN)
             // ── IMMEDIATE /antrean/add ────────────────────────────────────
@@ -1106,8 +1184,16 @@ class QueueProcessor
                 }
             }
 
+            $realEvents = [
+                '3' => $mutasiBerkasMap[$noRawat] ?? '',
+                '4' => $pemeriksaanRalanMap[$noRawat] ?? ($mutasiDiterimaMap[$noRawat] ?? ''),
+                '5' => $mutasiKembaliMap[$noRawat] ?? (($p['stts'] ?? '') === 'Sudah' ? date('Y-m-d H:i:s') : ''),
+                '6' => $resepRalanMap[$noRawat] ?? '',
+                '7' => $resepPenyerahanMap[$noRawat] ?? '',
+            ];
+
             // Run the task chain
-            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 5', true, $noResep, $isRacikan, $realTask3);
+            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 5', true, $noResep, $isRacikan, $realEvents);
         }
     }
 }

@@ -22,6 +22,7 @@ class MobileJknConfig
     public readonly string $baseUrl;
 
     // ─── Runtime tuning ────────────────────────────────────────────────────
+    public readonly string $syncMode; // 'realtime' or 'robot'
     public readonly int    $batchSize;
     public readonly int    $lookbackDays;
     public readonly bool   $includeNonJkn;
@@ -81,6 +82,8 @@ class MobileJknConfig
         }
 
         // ── Runtime tuning ──────────────────────────────────────────────
+        $rawMode = strtolower($this->get('MOBILEJKN_SYNC_MODE', 'realtime'));
+        $this->syncMode           = in_array($rawMode, ['realtime', 'robot'], true) ? $rawMode : 'robot';
         $this->batchSize          = max(1, (int) $this->get('MOBILEJKN_BATCH_SIZE', '4'));
         $this->lookbackDays       = max(1, (int) $this->get('MOBILEJKN_LOOKBACK_DAYS', '6'));
         $this->includeNonJkn      = filter_var($this->get('MOBILEJKN_INCLUDE_NON_JKN', 'true'), FILTER_VALIDATE_BOOLEAN);

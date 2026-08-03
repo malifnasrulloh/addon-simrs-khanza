@@ -559,6 +559,119 @@ SQL;
         return $map;
     }
 
+    /**
+     * Eager-load real Task 4 timestamps from pemeriksaan_ralan (tgl_perawatan + jam_rawat).
+     * Matches frmUtama.java line 703.
+     */
+    public function fetchBatchPemeriksaanRalan(array $noRawats): array
+    {
+        if (empty($noRawats)) return [];
+        $placeholders = implode(',', array_fill(0, count($noRawats), '?'));
+        $sql = "SELECT no_rawat, CONCAT(tgl_perawatan, ' ', jam_rawat) as waktu FROM pemeriksaan_ralan
+                WHERE no_rawat IN ($placeholders)
+                  AND tgl_perawatan IS NOT NULL
+                  AND tgl_perawatan != '0000-00-00'
+                ORDER BY tgl_perawatan ASC, jam_rawat ASC";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(array_values($noRawats));
+        $map = [];
+        while ($row = $stmt->fetch()) {
+            if (!isset($map[$row['no_rawat']])) {
+                $map[$row['no_rawat']] = substr($row['waktu'], 0, 19);
+            }
+        }
+        return $map;
+    }
+
+    /**
+     * Eager-load real Task 4 fallback timestamps from mutasi_berkas.diterima.
+     * Matches frmUtama.java line 705.
+     */
+    public function fetchBatchMutasiDiterima(array $noRawats): array
+    {
+        if (empty($noRawats)) return [];
+        $placeholders = implode(',', array_fill(0, count($noRawats), '?'));
+        $sql = "SELECT no_rawat, diterima FROM mutasi_berkas
+                WHERE no_rawat IN ($placeholders)
+                  AND diterima IS NOT NULL
+                  AND diterima != ''
+                  AND diterima NOT LIKE '0000%'";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(array_values($noRawats));
+        $map = [];
+        while ($row = $stmt->fetch()) {
+            $map[$row['no_rawat']] = substr($row['diterima'], 0, 19);
+        }
+        return $map;
+    }
+
+    /**
+     * Eager-load real Task 5 timestamps from mutasi_berkas.kembali.
+     * Matches frmUtama.java line 735.
+     */
+    public function fetchBatchMutasiKembali(array $noRawats): array
+    {
+        if (empty($noRawats)) return [];
+        $placeholders = implode(',', array_fill(0, count($noRawats), '?'));
+        $sql = "SELECT no_rawat, kembali FROM mutasi_berkas
+                WHERE no_rawat IN ($placeholders)
+                  AND kembali IS NOT NULL
+                  AND kembali != ''
+                  AND kembali NOT LIKE '0000%'";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(array_values($noRawats));
+        $map = [];
+        while ($row = $stmt->fetch()) {
+            $map[$row['no_rawat']] = substr($row['kembali'], 0, 19);
+        }
+        return $map;
+    }
+
+    /**
+     * Eager-load real Task 6 timestamps from resep_obat (tgl_perawatan + jam).
+     * Matches frmUtama.java line 788.
+     */
+    public function fetchBatchResepObatRalan(array $noRawats): array
+    {
+        if (empty($noRawats)) return [];
+        $placeholders = implode(',', array_fill(0, count($noRawats), '?'));
+        $sql = "SELECT no_rawat, CONCAT(tgl_perawatan, ' ', jam) as waktu FROM resep_obat
+                WHERE no_rawat IN ($placeholders)
+                  AND status = 'ralan'
+                  AND tgl_perawatan IS NOT NULL
+                  AND tgl_perawatan != '0000-00-00'";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(array_values($noRawats));
+        $map = [];
+        while ($row = $stmt->fetch()) {
+            $map[$row['no_rawat']] = substr($row['waktu'], 0, 19);
+        }
+        return $map;
+    }
+
+    /**
+     * Eager-load real Task 7 timestamps from resep_obat (tgl_penyerahan + jam_penyerahan).
+     * Matches frmUtama.java line 817.
+     */
+    public function fetchBatchResepObatPenyerahan(array $noRawats): array
+    {
+        if (empty($noRawats)) return [];
+        $placeholders = implode(',', array_fill(0, count($noRawats), '?'));
+        $sql = "SELECT no_rawat, CONCAT(tgl_penyerahan, ' ', jam_penyerahan) as waktu FROM resep_obat
+                WHERE no_rawat IN ($placeholders)
+                  AND status = 'ralan'
+                  AND tgl_penyerahan IS NOT NULL
+                  AND tgl_penyerahan != '0000-00-00'
+                  AND jam_penyerahan != '00:00:00'";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(array_values($noRawats));
+        $map = [];
+        while ($row = $stmt->fetch()) {
+            $map[$row['no_rawat']] = substr($row['waktu'], 0, 19);
+        }
+        return $map;
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Fix #4: Block 5 — Unsent SEP Recovery (from ANTROL-ROBOT.JAVA)
     // ═══════════════════════════════════════════════════════════════════════
