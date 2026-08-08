@@ -407,6 +407,9 @@ class QueueProcessor
             $p['kd_dokter_bpjs'] = $dokterBpjs;
             $p['kd_poli_bpjs']   = $poliBpjs;
 
+            // Resolve kodebooking matching index.php (unified MAX+1 sequence when formatOnsiteKodebooking=true)
+            $kodebooking = $this->db->fetchOrGenerateNobooking($p, $this->config->formatOnsiteKodebooking);
+
             // Load existing task state, prescription, racikan from pre-fetched dictionaries
             $state     = $taskStates[$noRawat] ?? ['1' => '', '2' => '', '3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
             $noResep   = $noResepMap[$noRawat] ?? '';
@@ -416,8 +419,8 @@ class QueueProcessor
             // Matches Java robot: if Task 3 is empty locally, send /antrean/add IMMEDIATELY!
             if (($state['3'] ?? '') === '') {
                 $nomorRef = $isJkn ? $this->db->fetchNomorReferensi($noRawat) : '';
-                $payload  = PayloadBuilder::onsitePatient($p, $isJkn, $nomorRef);
-                $this->log->info("[BLOCK 4] {$noRawat}: SEND /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
+                $payload  = PayloadBuilder::onsitePatient($p, $isJkn, $nomorRef, $kodebooking, $this->config->nomorantreanFormat);
+                $this->log->info("[BLOCK 4] {$noRawat} (kodebooking={$kodebooking}): SEND /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
                 $addResult = $this->api->addAntrean($payload);
                 $addCode   = $addResult['code'] ?? '';
                 if ($addResult['success'] || $addCode === '208') {
@@ -576,6 +579,19 @@ class QueueProcessor
                     if ($r['ok']) {
                         $state['3'] = 'Sudah';
                         $state['waktu_3'] = $waktu3Str;
+
+                        // ── Repeated Task 3 (1-2-3-3-4-5-6-7) ─────────────────────
+                        if ($this->config->repeatTask3) {
+                            $t3bTs = strtotime($waktu3Str) + 180; // 3 minutes after 1st Task 3
+                            if ($t3bTs <= time()) {
+                                $waktu3bStr = date('Y-m-d H:i:s', $t3bTs);
+                                $this->log->info("[{$label}] {$noRawat} TaskID 3 (repeat): SEND 2nd Task 3 at {$waktu3bStr}");
+                                $r3b = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3bStr, $label, $jenisresep);
+                                if ($r3b['ok']) {
+                                    $state['waktu_3'] = $waktu3bStr;
+                                }
+                            }
+                        }
                     } elseif ($r['reason'] === 'booking_not_found') {
                         if ($patient['tgl_registrasi'] < date('Y-m-d')) {
                             $this->log->warning("[{$label}] {$noRawat} TaskID 3 failed: booking_not_found, past date ({$patient['tgl_registrasi']}). Skipping — will retry next cycle.");
@@ -591,10 +607,10 @@ class QueueProcessor
                                     $payload = PayloadBuilder::jknBooking($bookingData);
                                 } else {
                                     $nomorRef = $this->db->fetchNomorReferensi($noRawat);
-                                    $payload  = PayloadBuilder::onsitePatient($patient, true, $nomorRef);
+                                    $payload  = PayloadBuilder::onsitePatient($patient, true, $nomorRef, '', $this->config->nomorantreanFormat);
                                 }
                             } else {
-                                $payload = PayloadBuilder::onsitePatient($patient, false, '');
+                                $payload = PayloadBuilder::onsitePatient($patient, false, '', '', $this->config->nomorantreanFormat);
                             }
 
                             if ($payload) {
@@ -656,6 +672,15 @@ class QueueProcessor
                     if ($r4['ok']) {
                         $state['4'] = 'Sudah';
                         $state['waktu_4'] = $waktu4Str;
+                    } elseif (($r4['reason'] ?? '') === 'preceding_tasks_missing') {
+                        $missingId = $r4['missing_taskid'] ?? null;
+                        if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '4', $jenisresep, $missingId)) {
+                            $retryR4 = $this->sendTaskId($kodebooking, $noRawat, '4', $waktu4Str, $label, $jenisresep);
+                            if ($retryR4['ok']) {
+                                $state['4'] = 'Sudah';
+                                $state['waktu_4'] = $waktu4Str;
+                            }
+                        }
                     }
                 }
             } else {
@@ -682,6 +707,15 @@ class QueueProcessor
                     if ($r5['ok']) {
                         $state['5'] = 'Sudah';
                         $state['waktu_5'] = $waktu5Str;
+                    } elseif (($r5['reason'] ?? '') === 'preceding_tasks_missing') {
+                        $missingId = $r5['missing_taskid'] ?? null;
+                        if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '5', $jenisresep, $missingId)) {
+                            $retryR5 = $this->sendTaskId($kodebooking, $noRawat, '5', $waktu5Str, $label, $jenisresep);
+                            if ($retryR5['ok']) {
+                                $state['5'] = 'Sudah';
+                                $state['waktu_5'] = $waktu5Str;
+                            }
+                        }
                     }
                 }
             } else {
@@ -712,6 +746,15 @@ class QueueProcessor
                         if ($r6['ok']) {
                             $state['6'] = 'Sudah';
                             $state['waktu_6'] = $waktu6Str;
+                        } elseif (($r6['reason'] ?? '') === 'preceding_tasks_missing') {
+                            $missingId = $r6['missing_taskid'] ?? null;
+                            if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '6', $jenisresep, $missingId)) {
+                                $retryR6 = $this->sendTaskId($kodebooking, $noRawat, '6', $waktu6Str, $label, $jenisresep);
+                                if ($retryR6['ok']) {
+                                    $state['6'] = 'Sudah';
+                                    $state['waktu_6'] = $waktu6Str;
+                                }
+                            }
                         }
                     }
                 } else {
@@ -739,6 +782,15 @@ class QueueProcessor
                     if ($r7['ok']) {
                         $state['7'] = 'Sudah';
                         $state['waktu_7'] = $waktu7Str;
+                    } elseif (($r7['reason'] ?? '') === 'preceding_tasks_missing') {
+                        $missingId = $r7['missing_taskid'] ?? null;
+                        if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '7', $jenisresep, $missingId)) {
+                            $retryR7 = $this->sendTaskId($kodebooking, $noRawat, '7', $waktu7Str, $label, $jenisresep);
+                            if ($retryR7['ok']) {
+                                $state['7'] = 'Sudah';
+                                $state['waktu_7'] = $waktu7Str;
+                            }
+                        }
                     }
                 }
             } else {
@@ -754,6 +806,84 @@ class QueueProcessor
                 $this->sendTaskId($kodebooking, $noRawat, '99', $nowStr, $label, $jenisresep);
             }
         }
+    }
+
+    /**
+     * Auto-heal missing preceding tasks (Task 1, 2, 3) when BPJS rejects Task N
+     * with "TaskId=X belum ada" or "preceding_tasks_missing".
+     */
+    private function healPrecedingTasks(
+        string $kodebooking,
+        string $noRawat,
+        array  $patient,
+        array  &$state,
+        array  $jadwal,
+        string $label,
+        bool   $isJkn,
+        string $targetTaskId,
+        string $jenisresep,
+        ?string $missingTaskId = null
+    ): bool {
+        $missingId = $missingTaskId ?? (string)((int)$targetTaskId - 1);
+        $this->log->warning("[HEAL] {$noRawat}: BPJS rejected TaskID {$targetTaskId} because preceding TaskID {$missingId} is missing. Initiating auto-healing...");
+
+        $jamMulai  = $jadwal['jam_mulai'] ?? '08:00:00';
+        $waktu3Str = $state['waktu_3'] ?? '';
+        if (empty($waktu3Str)) {
+            $waktu3Str = RobotInference::inferTask3($patient['tgl_registrasi'], $patient['jam_reg'] ?? '08:00:00', $jamMulai, $this->config->robotRanges);
+        }
+
+        // 1. Heal Task 1 if needed
+        if ($missingId === '1' || ($state['1'] ?? '') !== 'Sudah') {
+            $this->db->deleteTaskId($noRawat, '1');
+            $waktu1Str = RobotInference::inferPrecedingTask('1', $waktu3Str, $this->config->robotRanges);
+            if (!empty($waktu1Str)) {
+                $r1 = $this->sendTaskId($kodebooking, $noRawat, '1', $waktu1Str, $label, $jenisresep);
+                if ($r1['ok']) {
+                    $state['1'] = 'Sudah';
+                    $state['waktu_1'] = $waktu1Str;
+                    $this->log->info("[HEAL] {$noRawat}: ✓ TaskID 1 auto-healed on BPJS.");
+                }
+            }
+        }
+
+        // 2. Heal Task 2 if needed
+        if ($missingId === '2' || ($state['2'] ?? '') !== 'Sudah') {
+            $this->db->deleteTaskId($noRawat, '2');
+            $waktu2Str = RobotInference::inferPrecedingTask('2', $waktu3Str, $this->config->robotRanges);
+            $t1Ts = strtotime($state['waktu_1'] ?? '');
+            if ($t1Ts !== false && strtotime($waktu2Str) <= $t1Ts) {
+                $waktu2Str = date('Y-m-d H:i:s', $t1Ts + 180);
+            }
+            if (!empty($waktu2Str)) {
+                $r2 = $this->sendTaskId($kodebooking, $noRawat, '2', $waktu2Str, $label, $jenisresep);
+                if ($r2['ok']) {
+                    $state['2'] = 'Sudah';
+                    $state['waktu_2'] = $waktu2Str;
+                    $this->log->info("[HEAL] {$noRawat}: ✓ TaskID 2 auto-healed on BPJS.");
+                }
+            }
+        }
+
+        // 3. Heal Task 3 if needed
+        if ($missingId === '3' || ($state['3'] ?? '') !== 'Sudah') {
+            $this->db->deleteTaskId($noRawat, '3');
+            $t2Ts = strtotime($state['waktu_2'] ?? '');
+            if ($t2Ts !== false && strtotime($waktu3Str) <= $t2Ts) {
+                $waktu3Str = date('Y-m-d H:i:s', $t2Ts + 180);
+            }
+            if (!empty($waktu3Str)) {
+                $r3 = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3Str, $label, $jenisresep);
+                if ($r3['ok']) {
+                    $state['3'] = 'Sudah';
+                    $state['waktu_3'] = $waktu3Str;
+                    $this->log->info("[HEAL] {$noRawat}: ✓ TaskID 3 auto-healed on BPJS.");
+                    return true;
+                }
+            }
+        }
+
+        return (($state['3'] ?? '') === 'Sudah');
     }
 
     /**
@@ -857,26 +987,31 @@ class QueueProcessor
             str_contains($msgLower, 'belum ada')
         );
 
-        $isNotFound = (
-            str_contains($msgLower, 'tidak ditemukan') ||
-            str_contains($msgLower, 'tidak terdaftar') ||
-            str_contains($msgLower, 'belum terdaftar') ||
-            str_contains($msgLower, 'tidak ada') ||
-            str_contains($msgLower, 'booking')
-        );
-
+        $missingTaskId = null;
         if ($isPrecedingMissing) {
+            if (preg_match('/task\s*id\s*=?\s*(\d+)/i', $msg, $matches)) {
+                $missingTaskId = $matches[1];
+            }
             $reason = 'preceding_tasks_missing';
-        } elseif ($isNotFound) {
-            $reason = 'booking_not_found';
         } else {
-            $isTimeOrder = (str_contains($msg, 'tidak boleh kurang') || str_contains($msg, 'waktu sebelumnya'));
-            $reason = $isTimeOrder ? 'time_order' : 'api_error';
+            $isNotFound = (
+                str_contains($msgLower, 'tidak ditemukan') ||
+                str_contains($msgLower, 'tidak terdaftar') ||
+                str_contains($msgLower, 'belum terdaftar') ||
+                str_contains($msgLower, 'tidak ada') ||
+                str_contains($msgLower, 'booking')
+            );
+            if ($isNotFound) {
+                $reason = 'booking_not_found';
+            } else {
+                $isTimeOrder = (str_contains($msg, 'tidak boleh kurang') || str_contains($msg, 'waktu sebelumnya'));
+                $reason = $isTimeOrder ? 'time_order' : 'api_error';
+            }
         }
 
         $this->log->warning("[{$label}] {$noRawat} TaskID {$taskId}: ✗ {$code} — {$msg} (rolled back, reason={$reason})");
         $this->failCount++;
-        return ['ok' => false, 'reason' => $reason];
+        return ['ok' => false, 'reason' => $reason, 'missing_taskid' => $missingTaskId];
     }
 
     /**
@@ -1162,6 +1297,9 @@ class QueueProcessor
             $p['kd_dokter_bpjs'] = $dokterBpjs;
             $p['kd_poli_bpjs']   = $poliBpjs;
 
+            // Resolve kodebooking matching index.php (unified MAX+1 sequence when formatOnsiteKodebooking=true)
+            $kodebooking = $this->db->fetchOrGenerateNobooking($p, $this->config->formatOnsiteKodebooking);
+
             // Load pre-fetched state, prescription, racikan, mutasi berkas
             $state    = $taskStates[$noRawat] ?? ['1' => '', '2' => '', '3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
             $noResep  = $noResepMap[$noRawat] ?? '';
@@ -1172,8 +1310,8 @@ class QueueProcessor
             // Matches Java robot: if Task 3 is empty locally, send /antrean/add IMMEDIATELY!
             if (($state['3'] ?? '') === '') {
                 $nomorRef = $this->db->fetchNomorReferensi($noRawat);
-                $payload  = PayloadBuilder::onsitePatient($p, true, $nomorRef);
-                $this->log->info("[BLOCK 5] {$noRawat}: SEND /antrean/add (jenispasien=JKN)");
+                $payload  = PayloadBuilder::onsitePatient($p, true, $nomorRef, $kodebooking, $this->config->nomorantreanFormat);
+                $this->log->info("[BLOCK 5] {$noRawat} (kodebooking={$kodebooking}): SEND /antrean/add (jenispasien=JKN)");
                 $addResult = $this->api->addAntrean($payload);
                 $addCode   = $addResult['code'] ?? '';
                 if ($addResult['success'] || $addCode === '208') {

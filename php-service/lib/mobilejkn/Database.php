@@ -399,6 +399,83 @@ SQL;
         return $row ? $row : null;
     }
 
+    /**
+     * Fetch existing nobooking from referensi_mobilejkn_bpjs, or generate a unified MAX+1
+     * nobooking (matching index.php lines 523–524) for on-site patients when formatOnsite is enabled.
+     */
+    public function fetchOrGenerateNobooking(array $p, bool $formatOnsite = true): string
+    {
+        $noRawat = $p['no_rawat'] ?? '';
+        if (empty($noRawat)) return '';
+
+        // 1. Check existing referensi_mobilejkn_bpjs record
+        $sql = "SELECT nobooking FROM referensi_mobilejkn_bpjs WHERE no_rawat = :nr LIMIT 1";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $row = $stmt->fetch();
+        if ($row && !empty($row['nobooking'])) {
+            return $row['nobooking'];
+        }
+
+        // 2. If formatting is disabled, fallback to raw no_rawat
+        if (!$formatOnsite) {
+            return $noRawat;
+        }
+
+        // 3. Compute MAX(nobooking)+1 matching index.php
+        $tglPeriksa = $p['tgl_registrasi'] ?? date('Y-m-d');
+        $sqlMax = "SELECT IFNULL(MAX(CONVERT(RIGHT(nobooking, 6), SIGNED)), 0) + 1 AS maxb FROM referensi_mobilejkn_bpjs WHERE tanggalperiksa = :tgl";
+        $stmtMax = $this->pdo->prepare($sqlMax);
+        $stmtMax->execute(['tgl' => $tglPeriksa]);
+        $maxRow = $stmtMax->fetch();
+        $maxNum = (int) ($maxRow['maxb'] ?? 1);
+
+        $nobooking = str_replace('-', '', $tglPeriksa) . sprintf('%06d', $maxNum);
+
+        // 4. Save to referensi_mobilejkn_bpjs to keep table in sync
+        $noReg      = (int) ($p['no_reg'] ?? 1);
+        $isJkn      = (($p['kd_pj'] ?? '') === 'BPJ');
+        $statusDaftar = match ($p['stts_daftar'] ?? '-') {
+            'Baru' => '1',
+            default => '0',
+        };
+        $jamMulai   = substr($p['jam_mulai'] ?? '08:00:00', 0, 5);
+        $jamSelesai = substr($p['jam_selesai'] ?? '16:00:00', 0, 5);
+        $jamPraktek = "{$jamMulai}-{$jamSelesai}";
+        $kdPoliBpjs = $p['kd_poli_bpjs'] ?? '';
+        $kdDokterBpjs = $p['kd_dokter_bpjs'] ?? '';
+        $kuota      = (int) ($p['kuota'] ?? 30);
+        $estimasiMs = strtotime("{$tglPeriksa} {$jamMulai}") * 1000;
+
+        $insertSql = "INSERT IGNORE INTO referensi_mobilejkn_bpjs 
+            (nobooking, no_rawat, nomorkartu, nik, nohp, kodepoli, pasienbaru, norm, tanggalperiksa, kodedokter, jampraktek, jeniskunjungan, nomorreferensi, nomorantrean, angkaantrean, estimasidilayani, sisakuotajkn, kuotajkn, sisakuotanonjkn, kuotanonjkn, status, validasi, statuskirim)
+            VALUES (:nb, :nr, :nk, :nik, :hp, :kp, :pb, :rm, :tgl, :kd, :jp, '3 (Kontrol)', '', :na, :aa, :est, :skj, :kj, :sknj, :knj, 'Checkin', NOW(), 'Sudah')";
+
+        $stmtIns = $this->pdo->prepare($insertSql);
+        $stmtIns->execute([
+            'nb' => $nobooking,
+            'nr' => $noRawat,
+            'nk' => $isJkn ? ($p['no_peserta'] ?: '-') : '-',
+            'nik' => $isJkn ? ($p['no_ktp'] ?: '-') : '-',
+            'hp' => $p['no_tlp'] ?: '-',
+            'kp' => $kdPoliBpjs,
+            'pb' => $statusDaftar,
+            'rm' => $p['no_rkm_medis'] ?? '',
+            'tgl' => $tglPeriksa,
+            'kd' => $kdDokterBpjs,
+            'jp' => $jamPraktek,
+            'na' => "{$kdPoliBpjs}-{$noReg}",
+            'aa' => $noReg,
+            'est' => $estimasiMs,
+            'skj' => max(0, $kuota - $noReg),
+            'kj' => $kuota,
+            'sknj' => max(0, $kuota - $noReg),
+            'knj' => $kuota,
+        ]);
+
+        return $nobooking;
+    }
+
 
 
 

@@ -71,7 +71,7 @@ class PayloadBuilder
      * @param bool   $isJkn   True for JKN, false for Non-JKN
      * @param string $nomorRef SEP reference number (empty for Non-JKN)
      */
-    public static function onsitePatient(array $p, bool $isJkn, string $nomorRef = ''): array
+    public static function onsitePatient(array $p, bool $isJkn, string $nomorRef = '', string $kodebookingOverride = '', string $nomorantreanFormat = 'prefix'): array
     {
         $noReg      = (int) ($p['no_reg'] ?? 1);
         $jamMulai   = substr($p['jam_mulai'] ?? '08:00:00', 0, 5);
@@ -89,8 +89,15 @@ class PayloadBuilder
             default => 0,
         };
 
+        $kodebooking = !empty($kodebookingOverride) ? $kodebookingOverride : ($p['kodebooking'] ?? $p['no_rawat']);
+
+        // Build nomorantrean based on config format ('prefix' e.g. ANA-001 or 'raw' e.g. 001)
+        $rawReg = (string) ($p['no_reg'] ?? '001');
+        $kdPoli = $p['kd_poli_bpjs'] ?: ($p['kd_poli'] ?? '');
+        $nomorAntrean = ($nomorantreanFormat === 'raw') ? $rawReg : "{$kdPoli}-{$rawReg}";
+
         return [
-            'kodebooking'      => $p['no_rawat'],
+            'kodebooking'      => $kodebooking,
             'jenispasien'      => $isJkn ? 'JKN' : 'NON JKN',
             'nomorkartu'       => $isJkn ? ($p['no_peserta'] ?: '-') : '-',
             'nik'              => $isJkn ? ($p['no_ktp'] ?: '-') : '-',
@@ -105,7 +112,7 @@ class PayloadBuilder
             'jampraktek'       => "{$jamMulai}-{$jamSelesai}",
             'jeniskunjungan'   => $isJkn ? (int) substr($p['jeniskunjungan'] ?? '3', 0, 1) : 3,
             'nomorreferensi'   => $isJkn ? ($nomorRef ?: '-') : '-',
-            'nomorantrean'     => ($p['kd_poli'] ?? '') . '-' . ($p['no_reg'] ?? '001'),
+            'nomorantrean'     => $nomorAntrean,
             'angkaantrean'     => $noReg,
             'estimasidilayani' => $estimasiMs,
             'sisakuotajkn'     => max(0, $kuota - $noReg),

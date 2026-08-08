@@ -28,6 +28,9 @@ class MobileJknConfig
     public readonly bool   $includeNonJkn;
     public readonly bool   $skipFarmasiNoResep;
     public readonly bool   $deferTaskChain;
+    public readonly bool   $formatOnsiteKodebooking;
+    public readonly bool   $repeatTask3;
+    public readonly string $nomorantreanFormat; // 'prefix' (ANA-001) or 'raw' (001)
     public readonly array  $robotRanges;
 
     // ─── Database ──────────────────────────────────────────────────────────
@@ -86,10 +89,14 @@ class MobileJknConfig
         $this->syncMode           = in_array($rawMode, ['realtime', 'robot'], true) ? $rawMode : 'robot';
         $this->batchSize          = max(1, (int) $this->get('MOBILEJKN_BATCH_SIZE', '4'));
         $this->lookbackDays       = max(1, (int) $this->get('MOBILEJKN_LOOKBACK_DAYS', '6'));
-        $this->includeNonJkn      = filter_var($this->get('MOBILEJKN_INCLUDE_NON_JKN', 'true'), FILTER_VALIDATE_BOOLEAN);
-        $this->skipFarmasiNoResep = filter_var($this->get('MOBILEJKN_SKIP_FARMASI_NO_RESEP', 'false'), FILTER_VALIDATE_BOOLEAN);
-        $this->deferTaskChain     = filter_var($this->get('MOBILEJKN_DEFER_ROBOT_INFER', 'false'), FILTER_VALIDATE_BOOLEAN);
-        $this->robotRanges        = [
+        $this->includeNonJkn            = filter_var($this->get('MOBILEJKN_INCLUDE_NON_JKN', 'true'), FILTER_VALIDATE_BOOLEAN);
+        $this->skipFarmasiNoResep       = filter_var($this->get('MOBILEJKN_SKIP_FARMASI_NO_RESEP', 'false'), FILTER_VALIDATE_BOOLEAN);
+        $this->deferTaskChain           = filter_var($this->get('MOBILEJKN_DEFER_ROBOT_INFER', 'false'), FILTER_VALIDATE_BOOLEAN);
+        $this->formatOnsiteKodebooking  = filter_var($this->get('MOBILEJKN_FORMAT_ONSITE_KODEBOOKING', 'true'), FILTER_VALIDATE_BOOLEAN);
+        $this->repeatTask3              = filter_var($this->get('MOBILEJKN_REPEAT_TASK_3', 'true'), FILTER_VALIDATE_BOOLEAN);
+        $rawNomorFormat                 = strtolower($this->get('MOBILEJKN_NOMORANTREAN_FORMAT', 'prefix'));
+        $this->nomorantreanFormat       = in_array($rawNomorFormat, ['prefix', 'raw'], true) ? $rawNomorFormat : 'prefix';
+        $this->robotRanges              = [
             '1' => self::parseRange($this->get('ROBOT_RANGE_1', '15,30'), [15, 30]),
             '2' => self::parseRange($this->get('ROBOT_RANGE_2', '5,15'), [5, 15]),
             '3' => self::parseRange($this->get('ROBOT_RANGE_3', '10,20'), [10, 20]),
