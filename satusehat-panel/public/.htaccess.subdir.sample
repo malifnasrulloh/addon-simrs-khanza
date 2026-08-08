@@ -1,0 +1,51 @@
+# =============================================================
+# SATUSEHAT Admin Panel — root-level deployment sample (.htaccess)
+#
+# ONLY needed when the panel is NOT the site docroot — i.e. when you
+# map the whole repo to a sub-folder such as  192.168.1.10/satusehat-panel/
+# via an Apache Alias/DocumentRoot  OR  copy it inside an existing site.
+#
+# When public/ IS the docroot, you do NOT need this file — the shipped
+# public/.htaccess handles everything. Copy the applicable block below
+# into YOUR site's root .htaccess (or vhost) instead.
+#
+# The panel auto-detects its own base path from SCRIPT_NAME
+# (config/base_path.php) and the front controller + shell + JS all use
+# it, so 'Alias /satusehat-panel' or a copied sub-directory "just works".
+# ===========================================================
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # --- System-informasi-operasi style: app routes within the panel ---
+    # Serve real files/dirs directly, route /api/* to the front controller,
+    # route /{subdir}/api conflicts to the panel's public/, everything else
+    # to the SPA shell. `subdir` below = /satusehat-panel (change to taste).
+
+    # Direct static assets under the panel's public/ dir
+    RewriteCond %{REQUEST_URI} ^/satusehat-panel/(css|js|fonts|img|assets)/ [NC]
+    RewriteRule ^ satusehat-panel/public%{REQUEST_URI} [L]
+
+    # API routes -> panel front controller
+    RewriteRule ^satusehat-panel/api/ satusehat-panel/public/index.php [L]
+
+    # Non-static, non-API -> panel SPA shell (base-path injected)
+    RewriteRule ^satusehat-panel(/.*)?$ satusehat-panel/public/shell.php [L]
+</IfModule>
+
+# ------------------------------------------------------------------
+# Alternative pattern (like Sistem-Informasi-Operasi's) — if you keep the
+# whole SI-KO app at /siko/ and the panel at /satusehat-panel/, add an
+# Apache Alias instead and let SCRIPT_NAME detection handle the rest:
+#
+#   Alias /satusehat-panel "/var/www/satusehat-panel/public"
+#   <Directory "/var/www/satusehat-panel/public">
+#       Options Indexes FollowSymLinks
+#       RewriteEngine On
+#       ...
+#   </Directory>
+#
+# With pub health , in public/.htaccess you can also route EVERYTHING
+# (including /satusehat-panel/api) through fallback to the shell with a
+# per-directory override rather than fighting sub-folder prefixes at root.
+# ------------------------------------------------------------------

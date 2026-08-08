@@ -1,0 +1,40 @@
+# SATUSEHAT Admin Panel — Apache production config
+# Place in satusehat-panel/public/
+#
+# Requires mod_rewrite. Points ALL requests at the front controller:
+#   /api/*            -> index.php (handles API routing)
+#   / (SPA routes)    -> index.html (serves the shell)
+# Existing static files (css/js/images) are served directly.
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # If the request maps to a real file, serve it directly (but let the
+# shell render the directory root so the base path is injected, not a
+# raw static index.html with a literal {{BASE_PATH}} placeholder)
+RewriteCond %{REQUEST_FILENAME} -f
+RewriteRule ^(?!shell\.php$)(?!index\.php$) - [L]
+
+    # API routes -> front controller
+    RewriteRule ^api/ index.php [L]
+
+    # Everything else -> SPA shell (through shell.php so the sub-folder
+    # base path is injected into the {{BASE_PATH}} placeholder)
+    RewriteRule ^ shell.php [L]
+</IfModule>
+
+# Deny direct access to sensitive files (if docroot is the repo root)
+<IfModule mod_rewrite.c>
+    RewriteRule ^\.env$ - [F,L]
+    RewriteRule ^\.gitignore$ - [F,L]
+    RewriteRule ^config/ - [F,L]
+    RewriteRule ^src/ - [F,L]
+    RewriteRule ^storage/ - [F,L]
+</IfModule>
+
+# Security headers
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "DENY"
+    Header set Referrer-Policy "no-referrer"
+</IfModule>

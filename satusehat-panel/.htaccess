@@ -1,0 +1,29 @@
+# SATUSEHAT Admin Panel — drop-in .htaccess (Apache)
+#
+# When the panel is pasted into a webroot like any Khanza add-on
+# (dashboard_eksekutif / mapping_satu_sehat), this file makes the
+# folder self-protecting: blocks listing + blocks the internal dirs.
+# Nginx ignores .htaccess — use nginx.sample.conf there.
+
+# Disable directory listing (anti-traversal)
+Options -Indexes
+ServerSignature Off
+
+# Block sensitive files/dirs from the web (same spirit as the add-ons)
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^(config|src|storage)(/|$) - [F,L]
+    RewriteRule ^\.env$ - [F,L]
+</IfModule>
+
+# Security headers
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "DENY"
+    Header set Referrer-Policy "no-referrer"
+</IfModule>
+
+# Block common backup/temp extensions
+<FilesMatch "\.(bak|backup|log|tmp|sql|old)$">
+    Require all denied
+</FilesMatch>

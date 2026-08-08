@@ -1,0 +1,11 @@
+# Runtime / local config
+.env
+storage/*.db
+storage/*.db-wal
+storage/*.db-shm
+storage/*.log
+storage/.satusehat_env.tmp
+
+# OS / editor
+.DS_Store
+*.swp

@@ -1,0 +1,3026 @@
+<?php
+
+/**
+ * PayloadBuilder - Builds JSON payloads for Satu Sehat Encounter.
+ *
+ * @author malifnasrulloh (converted from Java by Antigravity)
+ */
+
+declare(strict_types=1);
+
+class SatuSehatPayloadBuilder
+{
+    private static function getServiceType(string $kdPoli, string $statusLanjut): array
+    {
+        // Map kd_poli to service type based on known patterns
+        // If kd_poli starts with known prefixes, map to appropriate service type
+        $poli = strtoupper($kdPoli);
+
+        // IGD
+        if ($poli === 'IGDK') {
+            return [
+                'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
+                'code'   => '186',
+                'display' => 'Emergency'
+            ];
+        }
+
+        // Operating room
+        if (str_starts_with($poli, 'OK')) {
+            return [
+                'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
+                'code'   => '333',
+                'display' => 'Surgery'
+            ];
+        }
+
+        // ICU/NICU/PICU
+        if (in_array($poli, ['ICU', 'ICCU', 'NICU', 'PICU', 'PIICU'])) {
+            return [
+                'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
+                'code'   => '380',
+                'display' => 'Intensive care'
+            ];
+        }
+
+        // Inpatient wards
+        if ($statusLanjut === 'Ranap') {
+            return [
+                'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
+                'code'   => '110',
+                'display' => 'Inpatient care'
+            ];
+        }
+
+        // Default outpatient
+        return [
+            'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
+            'code'   => '108',
+            'display' => 'Outpatient care'
+        ];
+    }
+
+    private static function getLocationPeriodStart(array $p, string $status): ?string
+    {
+        // For Ranap, use admission time; for Ralan/IGD use registration time
+        if (($p['status_lanjut'] ?? '') === 'Ranap' && !empty($p['tgl_masuk'])) {
+            return self::sanitizeDateTime($p['tgl_masuk'] ?? null, $p['jam_masuk'] ?? null, $p);
+        }
+        return self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
+    }
+
+    private static function buildServiceClassExtension(array $p): array
+    {
+        $isRalan = ($p['status_lanjut'] ?? '') === 'Ralan';
+        $kdPoli = $p['kd_poli'] ?? '';
+
+        if ($kdPoli === 'IGDK') {
+            $serviceSystem = 'http://terminology.kemkes.go.id/CodeSystem/locationServiceClass-Outpatient';
+            $serviceCode = 'reguler';
+            $serviceDisplay = 'Kelas Reguler';
+        } elseif (!$isRalan) {
+            $serviceSystem = 'http://terminology.kemkes.go.id/CodeSystem/locationServiceClass-Inpatient';
+            // Infer bed class from kamar code if available, default to 3
+            $kdKamar = $p['kd_kamar'] ?? '';
+            if (str_starts_with($kdKamar, 'VIP')) {
+                $serviceCode = 'VIP';
+                $serviceDisplay = 'Kelas VIP';
+            } elseif (str_starts_with($kdKamar, 'K1')) {
+                $serviceCode = '1';
+                $serviceDisplay = 'Kelas 1';
+            } elseif (str_starts_with($kdKamar, 'K2')) {
+                $serviceCode = '2';
+                $serviceDisplay = 'Kelas 2';
+            } elseif (str_starts_with($kdKamar, 'K3') || str_starts_with($kdKamar, 'K3A')) {
+                $serviceCode = '3';
+                $serviceDisplay = 'Kelas 3';
+            } elseif (str_starts_with($kdKamar, 'ICU') || str_starts_with($kdKamar, 'ICCU') || str_starts_with($kdKamar, 'NICU') || str_starts_with($kdKamar, 'PICU')) {
+                $serviceCode = 'ICU';
+                $serviceDisplay = 'Kelas ICU';
+            } elseif (str_starts_with($kdKamar, 'ISO')) {
+                $serviceCode = 'isolasi';
+                $serviceDisplay = 'Kelas Isolasi';
+            } else {
+                $serviceCode = '3';
+                $serviceDisplay = 'Kelas 3';
+            }
+        } else {
+            $serviceSystem = 'http://terminology.kemkes.go.id/CodeSystem/locationServiceClass-Outpatient';
+            $serviceCode = 'reguler';
+            $serviceDisplay = 'Kelas Reguler';
+        }
+
+        return [
+            'url' => 'https://fhir.kemkes.go.id/r4/StructureDefinition/ServiceClass',
+            'extension' => [
+                [
+                    'url' => 'value',
+                    'valueCodeableConcept' => [
+                        'coding' => [
+                            [
+                                'system'  => $serviceSystem,
+                                'code'    => $serviceCode,
+                                'display' => $serviceDisplay
+                            ]
+                        ]
+                    ]
+                ],
+                [
+                    'url' => 'upgradeClassIndicator',
+                    'valueCodeableConcept' => [
+                        'coding' => [
+                            [
+                                'system' => 'http://terminology.kemkes.go.id/CodeSystem/locationUpgradeClass',
+                                'code'   => 'kelas-tetap',
+                                'display' => 'Kelas Tetap Perawatan'
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ];
+    }
+
+    /**
+     * Build Encounter payload.
+     *
+     * @param string $orgId    SATUSEHAT_ORG_ID from config
+     * @param array  $p        Patient data row
+     * @param string $idPasien IHS Patient ID
+     * @param string $idDokter IHS Practitioner ID
+     * @param string $status   'arrived', 'in-progress', or 'finished'
+     * @param array  $diagnoses Array of diagnoses (only used if status is finished)
+     * @param string $idEncounter Existing Encounter ID (if updating)
+     * @param string|null $idEpisodeOfCare EpisodeOfCare ID to link (optional)
+     * @return array
+     */
+    public static function encounter(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $status,
+        array $diagnoses = [],
+        string $idEncounter = '',
+        ?string $idEpisodeOfCare = null
+    ): array {
+        $isRalan = ($p['status_lanjut'] === 'Ralan');
+        $isRanap = ($p['status_lanjut'] === 'Ranap');
+        if (($p['kd_poli'] ?? '') === 'IGDK') {
+            $classCode = 'EMER';
+            $classDisplay = 'emergency';
+        } else {
+            $classCode = $isRalan ? 'AMB' : 'IMP';
+            $classDisplay = $isRalan ? 'ambulatory' : 'inpatient encounter';
+        }
+
+        // For Ranap, use admission time as start instead of registration time
+        $startWaktu = $isRanap && !empty($p['tgl_masuk'])
+            ? self::sanitizeDateTime($p['tgl_masuk'] ?? null, $p['jam_masuk'] ?? null, $p)
+            : self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
+
+        $inProgressWaktu = self::sanitizeDateTime($p['waktu_perawatan'] ?? null, null, $p);
+        $finishedWaktu = !empty($p['waktu_pulang']) ? self::sanitizeDateTime($p['waktu_pulang'], null, $p) : null;
+
+        // Build history array
+        $statusHistory = [];
+
+        // For Ranap, the first status is 'in-progress' (not 'arrived')
+        if ($isRanap && $classCode === 'IMP') {
+            // Inpatient starts at in-progress
+            $statusHistory[] = [
+                'status' => 'in-progress',
+                'period' => [
+                    'start' => $startWaktu,
+                ]
+            ];
+            if ($status === 'finished' && $finishedWaktu) {
+                $statusHistory[0]['period']['end'] = $finishedWaktu;
+                $statusHistory[] = [
+                    'status' => 'finished',
+                    'period' => [
+                        'start' => $finishedWaktu,
+                        'end'   => $finishedWaktu
+                    ]
+                ];
+            }
+        } else {
+            // Ralan/IGD: arrived -> in-progress -> finished
+            $statusHistory[] = [
+                'status' => 'arrived',
+                'period' => [
+                    'start' => $startWaktu,
+                ]
+            ];
+
+            if (in_array($status, ['in-progress', 'finished'])) {
+                $statusHistory[0]['period']['end'] = $inProgressWaktu;
+
+                $historyInProgress = [
+                    'status' => 'in-progress',
+                    'period' => [
+                        'start' => $inProgressWaktu,
+                    ]
+                ];
+
+                if ($status === 'finished' && $finishedWaktu) {
+                    $historyInProgress['period']['end'] = $finishedWaktu;
+                }
+                $statusHistory[] = $historyInProgress;
+            }
+
+            if ($status === 'finished' && $finishedWaktu) {
+                $statusHistory[] = [
+                    'status' => 'finished',
+                    'period' => [
+                        'start' => $finishedWaktu,
+                        'end'   => $finishedWaktu
+                    ]
+                ];
+            }
+        }
+
+        // Build location entry with period and ServiceClass extension
+        $locationEntry = [
+            'location' => [
+                'reference' => 'Location/' . $p['id_lokasi_satusehat'],
+                'display'   => $p['nm_poli']
+            ],
+            'period' => [
+                'start' => self::getLocationPeriodStart($p, $status),
+            ],
+            'extension' => [
+                self::buildServiceClassExtension($p)
+            ]
+        ];
+        if ($status === 'finished' && $finishedWaktu) {
+            $locationEntry['period']['end'] = $finishedWaktu;
+        }
+
+        $payload = [
+            'resourceType' => 'Encounter',
+            'status' => ($isRanap && $classCode === 'IMP') ? 'in-progress' : $status,
+            'class' => [
+                'system'  => 'http://terminology.hl7.org/CodeSystem/v3-ActCode',
+                'code'    => $classCode,
+                'display' => $classDisplay
+            ],
+            'serviceType' => self::getServiceType($p['kd_poli'] ?? '', $p['status_lanjut'] ?? ''),
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'participant' => [
+                [
+                    'type' => [
+                        [
+                            'coding' => [
+                                [
+                                    'system'  => 'http://terminology.hl7.org/CodeSystem/v3-ParticipationType',
+                                    'code'    => 'ATND',
+                                    'display' => 'attender'
+                                ]
+                            ]
+                        ]
+                    ],
+                    'individual' => [
+                        'reference' => 'Practitioner/' . $idDokter,
+                        'display'   => $p['nama']
+                    ]
+                ]
+            ],
+            'period' => [
+                'start' => $startWaktu,
+            ],
+            'location' => [$locationEntry],
+            'statusHistory' => $statusHistory,
+            'serviceProvider' => [
+                'reference' => 'Organization/' . $orgId
+            ],
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/encounter/' . $orgId,
+                    'value'  => $p['no_rawat']
+                ]
+            ]
+        ];
+
+        if ($status === 'finished' && $finishedWaktu) {
+            $payload['period']['end'] = $finishedWaktu;
+        }
+
+        // Add episodeOfCare link if present
+        if ($idEpisodeOfCare !== null) {
+            $payload['episodeOfCare'] = [
+                ['reference' => 'EpisodeOfCare/' . $idEpisodeOfCare]
+            ];
+        }
+
+        if (!empty($idEncounter)) {
+            $payload['id'] = $idEncounter;
+        }
+
+        // Add length (duration) for finished encounters
+        if ($status === 'finished' && $finishedWaktu) {
+            $durationSeconds = strtotime($finishedWaktu) - strtotime($startWaktu);
+            if ($durationSeconds > 0) {
+                $unit = $isRalan ? 'min' : 'd';
+                $durationValue = $isRalan ? round($durationSeconds / 60) : round($durationSeconds / 86400, 1);
+                if ($durationValue < 1) {
+                    $durationValue = 1;
+                    $unit = 'min';
+                }
+                $payload['length'] = [
+                    'value'  => $durationValue,
+                    'unit'   => $unit,
+                    'system' => 'http://unitsofmeasure.org',
+                    'code'   => $unit
+                ];
+            }
+        }
+
+        // Add hospitalization discharge disposition mapping if status is finished
+        if ($status === 'finished') {
+            $dischargeDisposition = null;
+            if ($isRalan) {
+                // Outpatient
+                $stts = $p['stts'] ?? '';
+                if ($stts === 'Dirujuk') {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'other-hcf',
+                        'display' => 'Other healthcare facility'
+                    ];
+                } elseif ($stts === 'Meninggal') {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'oth',
+                        'display' => 'Other'
+                    ];
+                } elseif ($stts === 'Pulang Paksa') {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'aadvice',
+                        'display' => 'Left against advice'
+                    ];
+                } else {
+                    // Fallback to home/Home
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'home',
+                        'display' => 'Home'
+                    ];
+                }
+            } else {
+                // Inpatient (Ranap)
+                $sttsPulang = $p['stts_pulang'] ?? '';
+                $lama = intval($p['lama'] ?? 0);
+                if (in_array($sttsPulang, ['Sehat', 'Sembuh', 'Membaik', 'Atas Persetujuan Dokter'])) {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'home',
+                        'display' => 'Home'
+                    ];
+                } elseif (in_array($sttsPulang, ['Atas Permintaan Sendiri', 'APS', 'Isoman'])) {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'aadvice',
+                        'display' => 'Left against advice'
+                    ];
+                } elseif ($sttsPulang === 'Pulang Paksa') {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'aadvice',
+                        'display' => 'Left against advice'
+                    ];
+                } elseif ($sttsPulang === 'Rujuk') {
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'other-hcf',
+                        'display' => 'Other healthcare facility'
+                    ];
+                } elseif (in_array($sttsPulang, ['+', 'Meninggal'])) {
+                    // Check length of stay
+                    if ($lama <= 2) {
+                        $dischargeDisposition = [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/discharge-disposition',
+                            'code' => 'exp-lt48h',
+                            'display' => 'Meninggal < 48 jam'
+                        ];
+                    } else {
+                        $dischargeDisposition = [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/discharge-disposition',
+                            'code' => 'exp-gt48h',
+                            'display' => 'Meninggal > 48 jam'
+                        ];
+                    }
+                } else {
+                    // Fallback to home/Home
+                    $dischargeDisposition = [
+                        'system' => 'http://terminology.hl7.org/CodeSystem/discharge-disposition',
+                        'code' => 'home',
+                        'display' => 'Home'
+                    ];
+                }
+            }
+
+            if ($dischargeDisposition !== null) {
+                $payload['hospitalization'] = [
+                    'dischargeDisposition' => [
+                        'coding' => [
+                            [
+                                'system' => $dischargeDisposition['system'],
+                                'code' => $dischargeDisposition['code'],
+                                'display' => $dischargeDisposition['display']
+                            ]
+                        ]
+                    ]
+                ];
+            }
+        }
+
+        // Add Diagnoses if status is finished
+        if ($status === 'finished' && !empty($diagnoses)) {
+            $diagnosisPayload = [];
+            $rank = 1;
+            foreach ($diagnoses as $diag) {
+                $diagnosisPayload[] = [
+                    'condition' => [
+                        'reference' => 'Condition/' . $diag['id_condition'],
+                        'display'   => $diag['nm_penyakit']
+                    ],
+                    'use' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://terminology.hl7.org/CodeSystem/diagnosis-role',
+                                'code'    => 'DD',
+                                'display' => 'Discharge diagnosis'
+                            ]
+                        ]
+                    ],
+                    'rank' => $rank
+                ];
+                $rank++;
+            }
+            $payload['diagnosis'] = $diagnosisPayload;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Build EpisodeOfCare payload.
+     *
+     * @param string $orgId    SATUSEHAT_ORG_ID
+     * @param array  $p        Patient/Diagnosis data row
+     * @param string $idPasien IHS Patient ID
+     * @param string $idDokter IHS Practitioner ID
+     * @param string $status   'active' or 'finished'
+     * @param EpisodeOfCareType $type Type of episode (e.g., ANC, TB-SO)
+     * @param string $idEpisode Existing EpisodeOfCare ID (if updating)
+     * @param array  $diagnoses Array of diagnoses (optional, with id_condition, nm_penyakit)
+     * @return array
+     */
+    public static function episodeOfCare(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $status,
+        EpisodeOfCareType $type,
+        string $idEpisode = '',
+        array $diagnoses = []
+    ): array {
+        $startWaktu = self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
+        $finishedWaktu = !empty($p['waktu_pulang']) ? self::sanitizeDateTime($p['waktu_pulang'], null, $p) : null;
+
+        $statusHistory = [
+            [
+                'status' => 'active',
+                'period' => [
+                    'start' => $startWaktu
+                ]
+            ]
+        ];
+
+        if ($status === 'finished' && $finishedWaktu) {
+            $statusHistory[0]['period']['end'] = $finishedWaktu;
+            $statusHistory[] = [
+                'status' => 'finished',
+                'period' => [
+                    'start' => $finishedWaktu,
+                    'end'   => $finishedWaktu
+                ]
+            ];
+        }
+
+        $payload = [
+            'resourceType' => 'EpisodeOfCare',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/episode-of-care/' . $orgId,
+                    'value'  => $p['no_rawat']
+                ]
+            ],
+            'status' => $status,
+            'statusHistory' => $statusHistory,
+            'type' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => $type->system,
+                            'code'    => $type->code,
+                            'display' => $type->display
+                        ]
+                    ]
+                ]
+            ],
+            'patient' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'careManager' => [
+                'reference' => 'Practitioner/' . $idDokter,
+                'display'   => $p['nama']
+            ],
+            'managingOrganization' => [
+                'reference' => 'Organization/' . $orgId
+            ],
+            'period' => [
+                'start' => $startWaktu
+            ]
+        ];
+
+        if ($status === 'finished' && $finishedWaktu) {
+            $payload['period']['end'] = $finishedWaktu;
+        }
+
+        if (!empty($idEpisode)) {
+            $payload['id'] = $idEpisode;
+        }
+
+        // Add diagnosis array with Condition references
+        if (!empty($diagnoses)) {
+            $diagnosisArray = [];
+            $rank = 1;
+            foreach ($diagnoses as $diag) {
+                $idCond = $diag['id_condition'] ?? ($diag['id'] ?? null);
+                $nmPenyakit = $diag['nm_penyakit'] ?? ($diag['display'] ?? '');
+                if (empty($idCond)) {
+                    continue;
+                }
+                $diagnosisArray[] = [
+                    'condition' => [
+                        'reference' => 'Condition/' . $idCond,
+                        'display'   => $nmPenyakit
+                    ],
+                    'role' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://terminology.hl7.org/CodeSystem/diagnosis-role',
+                                'code'    => 'DD',
+                                'display' => 'Discharged Diagnosis'
+                            ]
+                        ]
+                    ],
+                    'rank' => $rank
+                ];
+                $rank++;
+            }
+            if (!empty($diagnosisArray)) {
+                $payload['diagnosis'] = $diagnosisArray;
+            }
+        }
+
+        return $payload;
+    }
+
+    /**
+     * ICD-10 code mapping: maps codes not recognized by SATUSEHAT (ICD-10 2010 edition)
+     * to their nearest accepted equivalent.
+     *
+     * Structure: 'REJECTED_CODE' => 'ACCEPTED_2010_CODE'
+     */
+    private static function mapIcd10(string $code): string
+    {
+        $map = [
+            // Cardiovascular
+            'I96'   => 'I95.9',  // Gangrene (not in 2010) -> Hypotension, unspecified
+            'I69.9' => 'I69.8',  // Sequelae of other/unspecified CVD (not 2010) -> Sequelae of other/unspecified
+            'I50.2' => 'I50.9',  // Systolic heart failure (2012+) -> Heart failure, unspecified
+            'I16.1' => 'I10',    // Hypertensive emergency (2018+) -> Essential hypertension
+            'I48.9' => 'I48',    // AFib, unspecified (4-digit, not in 2010) -> AFib (3-digit 2010)
+            // Hemorrhoid
+            'K64.9' => 'I84.9',  // Haemorrhoid unspecified (not in ICD-10 2010 K-series) -> Haemorrhoid unspecified
+            'K64.3' => 'I84.3',  // Haemorrhoid grade 3 -> Internal haemorrhoid grade 3
+            // Respiratory
+            'J96.0' => 'J96',    // Acute respiratory failure (ICD-10 2010 uses 3-digit)
+            'J96.1' => 'J96',    // Chronic respiratory failure
+            'J96.9' => 'J96',    // Respiratory failure, unspecified
+            // Fever
+            'R50.0' => 'R50',    // Fever with chills (ICD-10 2010 uses 3-digit R50)
+            'R50.9' => 'R50',    // Fever, unspecified
+            // Other preventive/screening
+            'Z00.11' => 'Z00.1', // Health examination for newborns (not in 2010) -> Health examination
+            'Z00.12' => 'Z00.1',
+            // Atherosclerosis (I70.xx) — WHO ICD-10 uses I70.9 not I70.90 (5-char is US CM extension)
+            'I70.90' => 'I70.9',  // Unspecified atherosclerosis -> Atherosclerosis, unspecified
+            // Benign neoplasm of mandible (D16.5x)
+            'D16.50' => 'D16.5',  // Benign neoplasm of mandible (unspecified part) -> D16.5 4-char WHO form
+        ];
+
+        return $map[$code] ?? $code; // Return mapped code, or original if not in map
+    }
+
+    /**
+     * Build Condition payload.
+     *
+     * @param array  $p        Patient/Diagnosis data row
+     * @param string $idPasien IHS Patient ID
+     * @param string $idCondition Existing Condition ID (if updating)
+     * @return array|null Returns null if the ICD-10 code is invalid/empty (should be skipped).
+     */
+    public static function condition(array $p, string $idPasien, string $idCondition = '', ?string $idDokter = null, ?string $namaDokter = null): ?array
+    {
+        $startWaktu = self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
+        $waktuPulang = $p['pulang'] ?? '';
+
+        // Validate and map ICD-10 code
+        $rawCode = strtoupper(trim($p['kd_penyakit'] ?? ''));
+        if (empty($rawCode) || $rawCode === '-' || $rawCode === '.') {
+            return null; // Signal to caller to skip this record
+        }
+        $kdPenyakit = self::mapIcd10($rawCode);
+
+        $payload = [
+            'resourceType' => 'Condition',
+            'clinicalStatus' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/CodeSystem/condition-clinical',
+                        'code'    => 'active',
+                        'display' => 'Active'
+                    ]
+                ]
+            ],
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/condition-category',
+                            'code'    => 'encounter-diagnosis',
+                            'display' => 'Encounter Diagnosis'
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://hl7.org/fhir/sid/icd-10',
+                        'code'    => $kdPenyakit,
+                        'display' => $p['nm_penyakit']
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Diagnosa ' . $p['nm_pasien'] . ' selama kunjungan/dirawat dari tanggal ' . $startWaktu . ' sampai ' . $waktuPulang
+            ],
+            'recordedDate' => $startWaktu,
+        ];
+
+        if ($idDokter !== null) {
+            $payload['recorder'] = [
+                'reference' => 'Practitioner/' . $idDokter,
+                'display'   => $namaDokter ?? ''
+            ];
+        }
+
+        if (!empty($idCondition)) {
+            $payload['id'] = $idCondition;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Build Observation-TTV payload dynamically based on dictionary definition.
+     */
+    public static function observationTTV(array $p, string $idPasien, string $idDokter, array $def): array
+    {
+        $waktuObservasi = self::sanitizeDateTime($p['tgl_observasi'] ?? null, $p['jam_observasi'] ?? null, $p);
+
+        $categoryCode = $def['category_code'] ?? 'vital-signs';
+        $categoryDisplay = $def['category_display'] ?? 'Vital Signs';
+
+        $payload = [
+            'resourceType' => 'Observation',
+            'status' => 'final',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/observation-category',
+                            'code'    => $categoryCode,
+                            'display' => $categoryDisplay
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => $def['system'],
+                        'code'    => $def['code'],
+                        'display' => $def['display']
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'performer' => [
+                [
+                    'reference' => 'Practitioner/' . $idDokter,
+                    'display'   => $p['nama']
+                ]
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => "Pemeriksaan Fisik " . str_replace("Ralan", "Rawat Jalan/IGD", str_replace("Ranap", "Rawat Inap", $p['nm_poli'] ?? '')) . ", Pasien " . $p['nm_pasien'] . " Pada Tanggal " . $p['tgl_observasi'] . " Jam " . $p['jam_observasi']
+            ],
+            'effectiveDateTime' => $waktuObservasi,
+            'issued' => $waktuObservasi
+        ];
+
+        // Format value based on type
+        $val = trim((string)$p['value']);
+
+        if ($def['type'] === 'quantity') {
+            // standard numeric
+            $payload['valueQuantity'] = [
+                'value'  => (float) $val,
+                'unit'   => $def['unit_display'],
+                'system' => 'http://unitsofmeasure.org',
+                'code'   => $def['unit']
+            ];
+        } elseif ($def['type'] === 'string') {
+            // GCS
+            $payload['valueString'] = $val;
+        } elseif ($def['type'] === 'codeable_concept') {
+            // Unused currently but kept for legacy
+            $map = ObservationTTVDictionary::mapKesadaran($val);
+            $payload['valueCodeableConcept'] = [
+                'coding' => [
+                    [
+                        'system'  => 'http://snomed.info/sct',
+                        'code'    => $map['code'],
+                        'display' => $map['display']
+                    ]
+                ]
+            ];
+        } elseif ($def['type'] === 'kesadaran_text') {
+            // Kesadaran strictly matched to Java output
+            $textVal = str_replace(
+                ['Compos Mentis', 'Somnolence', 'Sopor', 'Coma'],
+                ['Alert', 'Voice', 'Pain', 'Unresponsive'],
+                $val
+            );
+            $payload['valueCodeableConcept'] = [
+                'text' => $textVal
+            ];
+        } elseif ($def['type'] === 'blood_pressure') {
+            // Tensi component structure
+            // DB format: "120/80"
+            $parts = explode('/', $val);
+            $systolic = (float) ($parts[0] ?? 0);
+            $diastolic = (float) ($parts[1] ?? 0);
+
+            $payload['component'] = [
+                [
+                    'code' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://loinc.org',
+                                'code'    => '8480-6',
+                                'display' => 'Systolic blood pressure'
+                            ]
+                        ]
+                    ],
+                    'valueQuantity' => [
+                        'value'  => $systolic,
+                        'unit'   => 'mm[Hg]',
+                        'system' => 'http://unitsofmeasure.org',
+                        'code'   => 'mm[Hg]'
+                    ]
+                ],
+                [
+                    'code' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://loinc.org',
+                                'code'    => '8462-4',
+                                'display' => 'Diastolic blood pressure'
+                            ]
+                        ]
+                    ],
+                    'valueQuantity' => [
+                        'value'  => $diastolic,
+                        'unit'   => 'mm[Hg]',
+                        'system' => 'http://unitsofmeasure.org',
+                        'code'   => 'mm[Hg]'
+                    ]
+                ]
+            ];
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Build Procedure payload.
+     *
+     * @param array  $p        Patient/Procedure data row
+     * @param string $idPasien IHS Patient ID
+     * @param string $idProcedure Existing Procedure ID (if updating)
+     * @return array
+     */
+    public static function procedure(array $p, string $idPasien, string $idProcedure = '', ?string $idDokter = null, ?string $namaDokter = null): array
+    {
+        $startWaktu = self::sanitizeDateTime($p['waktu_registrasi'] ?? null, null, $p);
+        $endWaktu = self::sanitizeDateTime($p['waktu_pulang'] ?? null, null, $p);
+
+        // Ensure start <= end (FHIRPath constraint)
+        if (strtotime($endWaktu) < strtotime($startWaktu)) {
+            $endWaktu = $startWaktu;
+        }
+
+        $payload = [
+            'resourceType' => 'Procedure',
+            'status' => 'completed',
+            'category' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://snomed.info/sct',
+                        'code'    => '103693007',
+                        'display' => 'Diagnostic procedure'
+                    ]
+                ],
+                'text' => 'Diagnostic procedure'
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://hl7.org/fhir/sid/icd-9-cm',
+                        'code'    => $p['kode'],
+                        'display' => $p['deskripsi_panjang']
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Prosedur ' . $p['nm_pasien'] . ' selama kunjungan/dirawat dari tanggal ' . $startWaktu . ' sampai ' . $endWaktu
+            ],
+            'performedPeriod' => [
+                'start' => $startWaktu,
+                'end'   => $endWaktu
+            ]
+        ];
+
+        // Add performer (critical — 98% of Postman examples include it)
+        if ($idDokter !== null) {
+            $payload['performer'] = [
+                [
+                    'actor' => [
+                        'reference' => 'Practitioner/' . $idDokter,
+                        'display'   => $namaDokter ?? ''
+                    ]
+                ]
+            ];
+        }
+
+        if (!empty($idProcedure)) {
+            $payload['id'] = $idProcedure;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Build CarePlan payload.
+     *
+     * @param string $orgId        SATUSEHAT_ORG_ID from config
+     * @param array  $p            CarePlan data row
+     * @param string $idPasien     IHS Patient ID
+     * @param string $idDokter     IHS Practitioner ID
+     * @param string $idCarePlan   Existing CarePlan ID (if updating)
+     * @param string|null $title   CarePlan title (defaults to 'Instruksi Medik dan Keperawatan Pasien')
+     * @param array  $goalRefs     Array of Goal references (optional)
+     * @return array
+     */
+    public static function carePlan(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $idCarePlan = '',
+        ?string $title = null,
+        array $goalRefs = []
+    ): array {
+        $isRalan = ($p['status_lanjut'] === 'Ralan');
+        $createdTime = self::sanitizeDateTime($p['tgl_perawatan'] ?? null, $p['jam_rawat'] ?? null, $p);
+        $waktuRegistrasi = $p['tgl_registrasi'] . ' ' . $p['jam_reg'];
+
+        // Clean description: replacing newlines with <br>, tab characters with space
+        $description = str_replace(["\r\n", "\r", "\n", "\n\r"], '<br>', $p['rtl']);
+        $description = str_replace("\t", ' ', $description);
+
+        if (($p['kd_poli'] ?? '') === 'IGDK') {
+            $categoryCoding = [
+                'system'  => 'http://terminology.kemkes.go.id',
+                'code'    => 'TK000068',
+                'display' => 'Emergency care plan'
+            ];
+        } else {
+            $categoryCoding = [
+                'system'  => 'http://snomed.info/sct',
+                'code'    => $isRalan ? '736271009' : '736353004',
+                'display' => $isRalan ? 'Outpatient care plan' : 'Inpatient care plan'
+            ];
+        }
+
+        $payload = [
+            'resourceType' => 'CarePlan',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/careplan/' . $orgId,
+                    'value'  => $p['no_rawat']
+                ]
+            ],
+            'title' => $title ?? 'Instruksi Medik dan Keperawatan Pasien',
+            'status' => 'active',
+            'intent' => 'plan',
+            'category' => [
+                [
+                    'coding' => [
+                        $categoryCoding
+                    ]
+                ]
+            ],
+            'description' => $description,
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Kunjungan ' . $p['nm_pasien'] . ' pada tanggal ' . $waktuRegistrasi . ' dengan nomor kunjungan ' . $p['no_rawat']
+            ],
+            'created' => $createdTime,
+            'author' => [
+                'reference' => 'Practitioner/' . $idDokter,
+                'display'   => $p['nama']
+            ]
+        ];
+
+        // Add period if available
+        $startWaktu = self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
+        $endWaktu = !empty($p['waktu_pulang']) ? self::sanitizeDateTime($p['waktu_pulang'], null, $p) : null;
+        $period = ['start' => $startWaktu];
+        if ($endWaktu) {
+            $period['end'] = $endWaktu;
+        }
+        $payload['period'] = $period;
+
+        // Add goal references if available
+        if (!empty($goalRefs)) {
+            $goals = [];
+            foreach ($goalRefs as $g) {
+                $goals[] = ['reference' => 'Goal/' . $g];
+            }
+            $payload['goal'] = $goals;
+        }
+
+        if (!empty($idCarePlan)) {
+            $payload['id'] = $idCarePlan;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Build AllergyIntolerance payload.
+     *
+     * @param array  $a            Patient/Allergy data row
+     * @param array  $allergyData  Dictionary lookup data for the allergy
+     * @param string $idPasien     IHS Patient ID
+     * @param string $idPraktisi   IHS Practitioner ID
+     * @param string $idSatuSehat  SIMRS Satu Sehat ID (from config/DB)
+     * @param string $idAllergy    Existing AllergyIntolerance ID (if updating)
+     * @return array
+     */
+    public static function allergyIntolerance(array $a, array $allergyData, string $idPasien, string $idPraktisi, string $idSatuSehat, string $idAllergy = ''): array
+    {
+        $recordedDate = self::sanitizeDateTime($a['tgl_perawatan'] ?? null, $a['jam_rawat'] ?? null, $a);
+
+        $payload = [
+            'resourceType' => 'AllergyIntolerance',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/allergy/' . $idSatuSehat,
+                    'value'  => $a['no_rawat']
+                ]
+            ],
+            'clinicalStatus' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical',
+                        'code'    => 'active',
+                        'display' => 'Active'
+                    ]
+                ]
+            ],
+            'verificationStatus' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/CodeSystem/allergyintolerance-verification',
+                        'code'    => 'confirmed',
+                        'display' => 'Confirmed'
+                    ]
+                ]
+            ],
+            'category' => [
+                $allergyData['category']
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => $allergyData['coding_system'],
+                        'code'    => $allergyData['coding_code'],
+                        'display' => $allergyData['coding_display']
+                    ]
+                ],
+                'text' => $allergyData['text']
+            ],
+            'patient' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $a['nm_pasien']
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $a['id_encounter'],
+                'display'   => 'Kunjungan ' . $a['nm_pasien'] . ' pada tanggal ' . ($a['tgl_registrasi'] ?? '') . ' dengan nomor kunjungan ' . $a['no_rawat']
+            ],
+            'recordedDate' => $recordedDate,
+            'recorder' => [
+                'reference' => 'Practitioner/' . $idPraktisi,
+                'display'   => $a['nama']
+            ]
+        ];
+
+        if (!empty($idAllergy)) {
+            $payload['id'] = $idAllergy;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Build Immunization payload.
+     *
+     * @param array  $imm           Immunization/Vaccination data row
+     * @param string $idPasien      IHS Patient ID
+     * @param string $idDokter      IHS Practitioner ID
+     * @param string $idImmunization Existing Immunization ID (if updating)
+     * @return array
+     */
+    public static function immunization(
+        array $imm,
+        string $idPasien,
+        string $idDokter,
+        string $idImmunization = ''
+    ): array {
+        // Occurrence time
+        $occurrenceDateTime = self::sanitizeDateTime($imm['tgl_perawatan'] ?? null, $imm['jam'] ?? null, $imm);
+        
+        // Expiration date (only if valid)
+        $expirationDate = null;
+        if (!empty($imm['tgl_kadaluarsa']) && $imm['tgl_kadaluarsa'] !== '0000-00-00' && strpos($imm['tgl_kadaluarsa'], '0000') === false) {
+            $expirationDate = self::sanitizeDateTime($imm['tgl_kadaluarsa'], null, [], [], true);
+        }
+
+        // Parse dose number from 'aturan' (e.g. "Dosis 1", "Dosis 2", etc.)
+        $doseStr = strtolower($imm['aturan']);
+        $doseStr = str_replace(['dosis', ' '], '', $doseStr);
+        
+        $validDose = false;
+        if (is_numeric($doseStr)) {
+            $d = intval($doseStr);
+            if ($d > 0) {
+                $validDose = true;
+            }
+        }
+        
+        if (!$validDose) {
+            $doseStr = '1';
+        }
+
+        $payload = [
+            'resourceType' => 'Immunization',
+            'status' => 'completed',
+            'vaccineCode' => [
+                'coding' => [
+                    [
+                        'system' => $imm['vaksin_system'],
+                        'code' => $imm['vaksin_code'],
+                        'display' => $imm['vaksin_display']
+                    ]
+                ]
+            ],
+            'patient' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $imm['id_encounter']
+            ],
+            'occurrenceDateTime' => $occurrenceDateTime,
+            'recorded' => $occurrenceDateTime,
+            'primarySource' => true,
+            'location' => [
+                'reference' => 'Location/' . $imm['id_lokasi_satusehat'],
+                'display' => $imm['nm_poli']
+            ],
+            'lotNumber' => $imm['no_batch'],
+            'route' => [
+                'coding' => [
+                    [
+                        'system' => $imm['route_system'],
+                        'code' => $imm['route_code'],
+                        'display' => $imm['route_display']
+                    ]
+                ]
+            ],
+            'doseQuantity' => self::sanitizeUcum([
+                'value' => (float)$imm['jml'],
+                'unit' => $imm['dose_quantity_unit'],
+                'system' => $imm['dose_quantity_system'],
+                'code' => $imm['dose_quantity_code']
+            ]),
+            'performer' => [
+                [
+                    'function' => [
+                        'coding' => [
+                            [
+                                'system' => 'http://terminology.hl7.org/CodeSystem/v2-0443',
+                                'code' => 'AP',
+                                'display' => 'Administering Provider'
+                            ]
+                        ]
+                    ],
+                    'actor' => [
+                        'reference' => 'Practitioner/' . $idDokter
+                    ]
+                ]
+            ],
+            'reasonCode' => [
+                [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id/CodeSystem/immunization-reason',
+                            'code' => 'IM-Program',
+                            'display' => 'Imunisasi Program'
+                        ]
+                    ]
+                ]
+            ],
+            'protocolApplied' => [
+                [
+                    'doseNumberPositiveInt' => intval($doseStr)
+                ]
+            ]
+        ];
+
+        if ($expirationDate) {
+            $payload['expirationDate'] = $expirationDate;
+        }
+
+        if (!empty($idImmunization)) {
+            $payload['id'] = $idImmunization;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Build Medication payload.
+     *
+     * @param string      $orgId         Satu Sehat Organization ID
+     * @param array       $p             Medication data row
+     * @param string|null $idMedication  Existing Medication ID (if updating)
+     * @return array
+     */
+    public static function medication(string $orgId, array $p, ?string $idMedication = null): array
+    {
+        $payload = [
+            'resourceType' => 'Medication',
+            'meta' => [
+                'profile' => ['https://fhir.kemkes.go.id/r4/StructureDefinition/Medication']
+            ],
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/medication/' . $orgId,
+                    'use'    => 'official',
+                    'value'  => trim($p['kode_brng'])
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => str_replace(' ', '', trim($p['obat_system'])),
+                        'code'    => trim($p['obat_code']),
+                        'display' => trim($p['obat_display'])
+                    ]
+                ]
+            ],
+            'status' => $p['status'] === '0' ? 'inactive' : 'active',
+            'form' => [
+                'coding' => [
+                    [
+                        'system'  => str_replace(' ', '', trim($p['form_system'])),
+                        'code'    => trim($p['form_code']),
+                        'display' => trim($p['form_display'])
+                    ]
+                ]
+            ],
+            'extension' => [
+                [
+                    'url' => 'https://fhir.kemkes.go.id/r4/StructureDefinition/MedicationType',
+                    'valueCodeableConcept' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://terminology.kemkes.go.id/CodeSystem/medication-type',
+                                'code'    => 'NC',
+                                'display' => 'Non-compound'
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ];
+
+        if ($idMedication) {
+            $payload['id'] = $idMedication;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Build MedicationRequest payload.
+     *
+     * @param string      $orgId               Satu Sehat Organization ID
+     * @param array       $p                   MedicationRequest data row
+     * @param string      $idPasien            IHS Patient ID
+     * @param string      $idDokter            IHS Practitioner ID
+     * @param string|null $idMedicationRequest Existing MedicationRequest ID (if updating)
+     * @return array
+     */
+    public static function medicationRequest(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        ?string $idMedicationRequest = null
+    ): array {
+        // Parse signa aturan pakai
+        $signa1 = 1.0;
+        $signa2 = 1.0;
+        $aturan = $p['aturan_pakai'] ?? '';
+        $parts = explode('x', strtolower($aturan));
+        if (isset($parts[0])) {
+            $val = preg_replace('/[^0-9.]/', '', $parts[0]);
+            if (is_numeric($val)) {
+                $signa1 = (float)$val;
+            }
+        }
+        if (isset($parts[1])) {
+            $val = preg_replace('/[^0-9.]/', '', $parts[1]);
+            if (is_numeric($val)) {
+                $signa2 = (float)$val;
+            }
+        }
+
+        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
+        $authoredOn = self::sanitizeDateTime($p['tgl_peresepan'] ?? null, $p['jam_peresepan'] ?? null, $p);
+
+        // Identifiers
+        $isRacikan = (bool)$p['is_racikan'];
+        $noRacik = $p['no_racik'] ?? '';
+        
+        $prescVal = $p['no_resep'];
+        if ($isRacikan && $noRacik !== '') {
+            $prescVal = $p['no_resep'] . '-' . $noRacik;
+        }
+
+        $payload = [
+            'resourceType' => 'MedicationRequest',
+            'meta' => [
+                'profile' => ['https://fhir.kemkes.go.id/r4/StructureDefinition/MedicationRequest']
+            ],
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/prescription/' . $orgId,
+                    'use'    => 'official',
+                    'value'  => $prescVal
+                ],
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/prescription-item/' . $orgId,
+                    'use'    => 'official',
+                    'value'  => $p['kode_brng']
+                ]
+            ],
+            'status' => 'completed',
+            'intent' => 'order',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/medicationrequest-category',
+                            'code'    => strtolower($p['status_lanjut']) === 'ranap' ? 'inpatient' : 'outpatient',
+                            'display' => strtolower($p['status_lanjut']) === 'ranap' ? 'Inpatient' : 'Outpatient'
+                        ]
+                    ]
+                ]
+            ],
+            'priority' => 'routine',
+            'medicationReference' => [
+                'reference' => 'Medication/' . $p['id_medication'],
+                'display'   => $p['obat_display']
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter']
+            ],
+            'authoredOn' => $authoredOn,
+            'requester' => [
+                'reference' => 'Practitioner/' . $idDokter,
+                'display'   => $p['nama']
+            ],
+            'courseOfTherapyType' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/CodeSystem/medicationrequest-course-of-therapy',
+                        'code'    => 'continuous',
+                        'display' => 'Continuing long term therapy'
+                    ]
+                ]
+            ],
+            'dosageInstruction' => [
+                [
+                    'sequence' => 1,
+                    'patientInstruction' => $aturan,
+                    'timing' => [
+                        'repeat' => [
+                            'frequency'  => (int)$signa2,
+                            'period'     => 1,
+                            'periodUnit' => 'd'
+                        ]
+                    ],
+                    'route' => [
+                        'coding' => [
+                            [
+                                'system'  => isset($p['route_system']) ? trim($p['route_system']) : null,
+                                'code'    => isset($p['route_code']) ? trim($p['route_code']) : null,
+                                'display' => isset($p['route_display']) ? trim($p['route_display']) : null
+                            ]
+                        ]
+                    ],
+                    'doseAndRate' => [
+                        [
+                            'doseQuantity' => self::sanitizeUcum([
+                                'value'  => $signa1,
+                                'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
+                                'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
+                                'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
+                            ])
+                        ]
+                    ]
+                ]
+            ],
+            'dispenseRequest' => [
+                'quantity' => self::sanitizeUcum([
+                    'value'  => $p['jml'],
+                    'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
+                    'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
+                    'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
+                ])
+            ]
+        ];
+
+        // Include Organization performer as in Java (only if not compound, but let's make it consistent)
+        if (!$isRacikan) {
+            $payload['dispenseRequest']['performer'] = [
+                'reference' => 'Organization/' . $orgId
+            ];
+        }
+
+        if ($idMedicationRequest) {
+            $payload['id'] = $idMedicationRequest;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Build MedicationDispense payload.
+     *
+     * @param string      $orgId                 Satu Sehat Organization ID
+     * @param array       $p                     MedicationDispense data row
+     * @param string      $idPasien              IHS Patient ID
+     * @param string      $idDokter              IHS Practitioner ID
+     * @param string|null $idMedicationRequest   Authorizing MedicationRequest ID (if synced)
+     * @param string|null $idMedicationDispense  Existing MedicationDispense ID (if updating)
+     * @return array
+     */
+    public static function medicationDispense(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        ?string $idMedicationRequest,
+        ?string $idMedicationDispense = null
+    ): array {
+        // Parse signa aturan pakai
+        $signa1 = 1.0;
+        $signa2 = 1.0;
+        $aturan = $p['aturan'] ?? '';
+        $parts = explode('x', strtolower($aturan));
+        if (isset($parts[0])) {
+            $val = preg_replace('/[^0-9.]/', '', $parts[0]);
+            if (is_numeric($val)) {
+                $signa1 = (float)$val;
+            }
+        }
+        if (isset($parts[1])) {
+            $val = preg_replace('/[^0-9.]/', '', $parts[1]);
+            if (is_numeric($val)) {
+                $signa2 = (float)$val;
+            }
+        }
+
+        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
+        $whenPrepared = self::sanitizeDateTime($p['tgl_peresepan'] ?? null, $p['jam_peresepan'] ?? null, $p);
+        $whenHandedOver = self::sanitizeDateTime($p['tgl_perawatan'] ?? null, $p['jam'] ?? null, $p);
+
+        // Enforce constraint: whenHandedOver >= whenPrepared
+        if (strtotime($whenHandedOver) < strtotime($whenPrepared)) {
+            $whenHandedOver = $whenPrepared;
+        }
+
+        // Identifiers: must be from the allowed systems in SATUSEHAT for MedicationDispense
+        $payload = [
+            'resourceType' => 'MedicationDispense',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/prescription/' . $orgId,
+                    'use'    => 'official',
+                    'value'  => $p['no_resep']
+                ],
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/prescription-item/' . $orgId,
+                    'use'    => 'official',
+                    'value'  => $p['kode_brng']
+                ]
+            ],
+            'status' => 'completed',
+            'category' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/fhir/CodeSystem/medicationdispense-category',
+                        'code'    => strtolower($p['status_pemberian']) === 'ranap' ? 'inpatient' : 'outpatient',
+                        'display' => strtolower($p['status_pemberian']) === 'ranap' ? 'Inpatient' : 'Outpatient'
+                    ]
+                ]
+            ],
+            'medicationReference' => [
+                'reference' => 'Medication/' . $p['id_medication'],
+                'display'   => $p['obat_display']
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'context' => [
+                'reference' => 'Encounter/' . $p['id_encounter']
+            ],
+            'performer' => [
+                [
+                    'actor' => [
+                        'reference' => 'Practitioner/' . $idDokter,
+                        'display'   => $p['nama']
+                    ]
+                ]
+            ],
+            'location' => [
+                'reference' => 'Location/' . $p['id_lokasi_satusehat'],
+                'display'   => $p['nm_bangsal']
+            ],
+            'quantity' => self::sanitizeUcum([
+                'value'  => $p['jml'],
+                'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
+                'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
+                'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
+            ]),
+            'whenPrepared'   => $whenPrepared,
+            'whenHandedOver' => $whenHandedOver,
+            'dosageInstruction' => [
+                [
+                    'sequence' => 1,
+                    'text'     => $aturan,
+                    'timing' => [
+                        'repeat' => [
+                            'frequency'  => (int)$signa2,
+                            'period'     => 1,
+                            'periodUnit' => 'd'
+                        ]
+                    ],
+                    'route' => [
+                        'coding' => [
+                            [
+                                'system'  => isset($p['route_system']) ? trim($p['route_system']) : null,
+                                'code'    => isset($p['route_code']) ? trim($p['route_code']) : null,
+                                'display' => isset($p['route_display']) ? trim($p['route_display']) : null
+                            ]
+                        ]
+                    ],
+                    'doseAndRate' => [
+                        [
+                            'doseQuantity' => self::sanitizeUcum([
+                                'value'  => $signa1,
+                                'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
+                                'system' => isset($p['denominator_system']) ? trim($p['denominator_system']) : null,
+                                'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
+                            ])
+                        ]
+                    ]
+                ]
+            ]
+        ];
+
+        if (!empty($idMedicationRequest)) {
+            $payload['authorizingPrescription'] = [
+                [
+                    'reference' => 'MedicationRequest/' . $idMedicationRequest
+                ]
+            ];
+        }
+
+        // Add daysSupply if available (from prescription or calculated)
+        $jml = floatval($p['jml'] ?? 0);
+        $supplyDays = 0;
+        if ($jml > 0 && $signa1 > 0) {
+            // Calculate days supply: total qty / dose per day
+            $dosePerDay = $signa1 * max((int)$signa2, 1);
+            if ($dosePerDay > 0) {
+                $supplyDays = (int)ceil($jml / $dosePerDay);
+            }
+        }
+        if ($supplyDays > 0) {
+            $payload['daysSupply'] = [
+                'value'  => $supplyDays,
+                'unit'   => 'Day',
+                'system' => 'http://unitsofmeasure.org',
+                'code'   => 'd'
+            ];
+        }
+
+        if ($idMedicationDispense) {
+            $payload['id'] = $idMedicationDispense;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Build MedicationStatement payload.
+     *
+     * @param string      $orgId                  Satu Sehat Organization ID
+     * @param array       $p                      MedicationStatement data row
+     * @param string      $idPasien               IHS Patient ID
+     * @param string|null $idMedicationStatement  Existing MedicationStatement ID (if updating)
+     * @return array
+     */
+    public static function medicationStatement(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        ?string $idMedicationStatement = null
+    ): array {
+        // Parse signa aturan pakai
+        $signa1 = 1.0;
+        $signa2 = 1.0;
+        $aturan = $p['aturan_pakai'] ?? '';
+        $parts = explode('x', strtolower($aturan));
+        if (isset($parts[0])) {
+            $val = preg_replace('/[^0-9.]/', '', $parts[0]);
+            if (is_numeric($val)) {
+                $signa1 = (float)$val;
+            }
+        }
+        if (isset($parts[1])) {
+            $val = preg_replace('/[^0-9.]/', '', $parts[1]);
+            if (is_numeric($val)) {
+                $signa2 = (float)$val;
+            }
+        }
+
+        // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
+        $dateAsserted = self::sanitizeDateTime($p['tgl_penyerahan'] ?? null, $p['jam_penyerahan'] ?? null, $p);
+
+        // Identifiers:
+        // System: http://sys-ids.kemkes.go.id/medicationstatement/{orgId}
+        // Value non-racikan: {no_resep}-{kode_brng}
+        // Value racikan: {no_resep}-{kode_brng}-{no_racik}
+        $isRacikan = (bool)$p['is_racikan'];
+        $noRacik = $p['no_racik'] ?? '';
+        
+        $valIdentifier = $p['no_resep'] . '-' . $p['kode_brng'];
+        if ($isRacikan && $noRacik !== '') {
+            $valIdentifier .= '-' . $noRacik;
+        }
+
+        $payload = [
+            'resourceType' => 'MedicationStatement',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/medicationstatement/' . $orgId,
+                    'use'    => 'official',
+                    'value'  => $valIdentifier
+                ]
+            ],
+            'status' => 'completed',
+            'category' => [
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/CodeSystem/medication-statement-category',
+                        'code'    => strtolower($p['status_lanjut']) === 'ranap' ? 'inpatient' : 'outpatient',
+                        'display' => strtolower($p['status_lanjut']) === 'ranap' ? 'Inpatient' : 'Outpatient'
+                    ]
+                ]
+            ],
+            'medicationReference' => [
+                'reference' => 'Medication/' . $p['id_medication'],
+                'display'   => $p['obat_display']
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'dosage' => [
+                [
+                    'text'   => $aturan,
+                    'timing' => [
+                        'repeat' => [
+                            'frequency'  => (int)$signa2,
+                            'period'     => 1,
+                            'periodUnit' => 'd'
+                        ]
+                    ],
+                    'route' => [
+                        'coding' => [
+                            [
+                                'system'  => isset($p['route_system']) ? trim($p['route_system']) : null,
+                                'code'    => isset($p['route_code']) ? trim($p['route_code']) : null,
+                                'display' => isset($p['route_display']) ? trim($p['route_display']) : null
+                            ]
+                        ]
+                    ],
+                    'doseAndRate' => [
+                        [
+                            'doseQuantity' => self::sanitizeUcum([
+                                'value'  => $signa1,
+                                'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
+                                // system intentionally null — SATUSEHAT rejects http://unitsofmeasure.org
+                                // on MedicationStatement doseQuantity (RuleNumber 10480)
+                                'system' => null,
+                                'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
+                            ])
+                        ]
+                    ]
+                ]
+            ],
+            'dateAsserted' => $dateAsserted,
+            'informationSource' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'context' => [
+                'reference' => 'Encounter/' . $p['id_encounter']
+            ],
+            'note' => [
+                [
+                    'text' => 'Pasien sudah memahami aturan pakai yang dijelaskan oleh petugas & Obat sudah diserahkan ke pasien'
+                ]
+            ]
+        ];
+
+        if ($idMedicationStatement) {
+            $payload['id'] = $idMedicationStatement;
+        }
+
+        return $payload;
+    }
+
+    public static function clinicalImpression(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $idClinicalImpression = ''
+    ): array {
+        // Replace newlines with <br> and clean tabs
+        $description = str_replace(["\r\n", "\r", "\n", "\n\r"], "<br>", $p['keluhan_pemeriksaan']);
+        $description = str_replace("\t", " ", $description);
+
+        $summary = str_replace(["\r\n", "\r", "\n", "\n\r"], "<br>", $p['penilaian']);
+        $summary = str_replace("\t", " ", $summary);
+
+        $effectiveDateTime = self::sanitizeDateTime($p['tgl_perawatan'] ?? null, $p['jam_rawat'] ?? null, $p);
+
+        $payload = [
+            'resourceType' => 'ClinicalImpression',
+            'status' => 'completed',
+            'description' => $description,
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Kunjungan ' . $p['nm_pasien'] . ' pada tanggal ' . $p['tgl_registrasi'] . ' dengan nomor kunjungan ' . $p['no_rawat']
+            ],
+            'effectiveDateTime' => $effectiveDateTime,
+            'date' => $effectiveDateTime,
+            'assessor' => [
+                'reference' => 'Practitioner/' . $idDokter
+            ],
+            'summary' => $summary,
+            'finding' => [
+                [
+                    'itemCodeableConcept' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://hl7.org/fhir/sid/icd-10',
+                                'code'    => strtoupper(trim($p['kd_penyakit'])),
+                                'display' => $p['nm_penyakit']
+                            ]
+                        ]
+                    ],
+                    'itemReference' => [
+                        'reference' => 'Condition/' . $p['id_condition']
+                    ]
+                ]
+            ],
+            'prognosisCodeableConcept' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.kemkes.go.id/CodeSystem/clinical-term',
+                            'code'    => 'PR000001',
+                            'display' => 'Prognosis'
+                        ]
+                    ]
+                ]
+            ]
+        ];
+
+        if (!empty($idClinicalImpression)) {
+            $payload['id'] = $idClinicalImpression;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Builds QuestionnaireResponse payload for Telaah Farmasi
+     *
+     * @param array       $p          QuestionnaireResponse data row
+     * @param string      $idPasien   IHS Patient ID
+     * @param string      $idPraktisi IHS Practitioner ID
+     * @param string|null $idQR       Existing QuestionnaireResponse ID (if updating)
+     * @return array
+     */
+    public static function questionnaireResponse(
+        array $p,
+        string $idPasien,
+        string $idPraktisi,
+        ?string $idQR = null
+    ): array {
+        $authored = self::sanitizeDateTime($p['tgl_peresepan'] ?? null, $p['jam_peresepan'] ?? null, $p);
+
+        $payload = [
+            'resourceType' => 'QuestionnaireResponse',
+            'status' => 'completed',
+            'authored' => $authored,
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display' => $p['nm_pasien']
+            ],
+            'source' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter']
+            ],
+            'author' => [
+                'reference' => 'Practitioner/' . $idPraktisi,
+                'display' => $p['nama']
+            ],
+            'item' => [
+                [
+                    'linkId' => 'identitas',
+                    'text' => 'Identitas',
+                    'item' => [
+                        [
+                            'linkId' => 'no-rawat',
+                            'text' => 'No. Rawat',
+                            'answer' => [['valueString' => $p['no_rawat']]]
+                        ],
+                        [
+                            'linkId' => 'no-rm',
+                            'text' => 'No. RM',
+                            'answer' => [['valueString' => $p['no_rkm_medis']]]
+                        ],
+                        [
+                            'linkId' => 'no-resep',
+                            'text' => 'No. Resep',
+                            'answer' => [['valueString' => $p['no_resep']]]
+                        ]
+                    ]
+                ],
+                [
+                    'linkId' => 'telaah-resep',
+                    'text' => 'Telaah Resep',
+                    'item' => [
+                        [
+                            'linkId' => 'tr-1-tepat-identifikasi-pasien',
+                            'text' => '1. Tepat Identifikasi Pasien',
+                            'answer' => [['valueString' => $p['resep_identifikasi_pasien']]]
+                        ],
+                        [
+                            'linkId' => 'tr-1-tepat-identifikasi-pasien-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_identifikasi_pasien']]]
+                        ],
+                        [
+                            'linkId' => 'tr-2-tepat-obat',
+                            'text' => '2. Tepat Obat',
+                            'answer' => [['valueString' => $p['resep_tepat_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-2-tepat-obat-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_tepat_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-3-tepat-dosis',
+                            'text' => '3. Tepat Dosis',
+                            'answer' => [['valueString' => $p['resep_tepat_dosis']]]
+                        ],
+                        [
+                            'linkId' => 'tr-3-tepat-dosis-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_tepat_dosis']]]
+                        ],
+                        [
+                            'linkId' => 'tr-4-tepat-cara-pemberian',
+                            'text' => '4. Tepat Cara Pemberian',
+                            'answer' => [['valueString' => $p['resep_tepat_cara_pemberian']]]
+                        ],
+                        [
+                            'linkId' => 'tr-4-tepat-cara-pemberian-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_tepat_cara_pemberian']]]
+                        ],
+                        [
+                            'linkId' => 'tr-5-tepat-waktu-pemberian',
+                            'text' => '5. Tepat Waktu Pemberian',
+                            'answer' => [['valueString' => $p['resep_tepat_waktu_pemberian']]]
+                        ],
+                        [
+                            'linkId' => 'tr-5-tepat-waktu-pemberian-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_tepat_waktu_pemberian']]]
+                        ],
+                        [
+                            'linkId' => 'tr-6-duplikasi-obat',
+                            'text' => '6. Ada Tidak Duplikasi Obat',
+                            'answer' => [['valueString' => $p['resep_ada_tidak_duplikasi_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-6-duplikasi-obat-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_ada_tidak_duplikasi_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-7-interaksi-obat',
+                            'text' => '7. Interaksi Obat',
+                            'answer' => [['valueString' => $p['resep_interaksi_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-7-interaksi-obat-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_interaksi_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-8-kontra-indikasi-obat',
+                            'text' => '8. Kontra Indikasi Obat',
+                            'answer' => [['valueString' => $p['resep_kontra_indikasi_obat']]]
+                        ],
+                        [
+                            'linkId' => 'tr-8-kontra-indikasi-obat-ket',
+                            'text' => 'Keterangan',
+                            'answer' => [['valueString' => $p['resep_ket_kontra_indikasi_obat']]]
+                        ]
+                    ]
+                ],
+                [
+                    'linkId' => 'telaah-obat',
+                    'text' => 'Telaah Obat',
+                    'item' => [
+                        [
+                            'linkId' => 'to-1-tepat-pasien',
+                            'text' => '1. Tepat Pasien',
+                            'answer' => [['valueString' => $p['obat_tepat_pasien']]]
+                        ],
+                        [
+                            'linkId' => 'to-2-tepat-obat',
+                            'text' => '2. Tepat Obat',
+                            'answer' => [['valueString' => $p['obat_tepat_obat']]]
+                        ],
+                        [
+                            'linkId' => 'to-3-tepat-dosis',
+                            'text' => '3. Tepat Dosis',
+                            'answer' => [['valueString' => $p['obat_tepat_dosis']]]
+                        ],
+                        [
+                            'linkId' => 'to-4-tepat-cara-pemberian',
+                            'text' => '4. Tepat Cara Pemberian',
+                            'answer' => [['valueString' => $p['obat_tepat_cara_pemberian']]]
+                        ],
+                        [
+                            'linkId' => 'to-5-tepat-waktu-pemberian',
+                            'text' => '5. Tepat Waktu Pemberian',
+                            'answer' => [['valueString' => $p['obat_tepat_waktu_pemberian']]]
+                        ]
+                    ]
+                ]
+            ]
+        ];
+
+        if (!empty($idQR)) {
+            $payload['id'] = $idQR;
+        }
+
+        return $payload;
+    }
+
+    public static function buildAcsn(string $noorder, string $kdJenisPrw): string
+    {
+        $base = str_replace('PR', '', $noorder) . $kdJenisPrw;
+        return preg_replace('/[^a-zA-Z0-9_\-]/', '_', $base);
+    }
+
+    public static function serviceRequestRadiologi(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $orgId,
+        string $idServiceRequest = ''
+    ): array {
+        $acsn = self::buildAcsn($p['noorder'], $p['kd_jenis_prw']);
+        
+        $authoredOn = self::sanitizeDateTime($p['tgl_permintaan'] ?? null, $p['jam_permintaan'] ?? null, $p);
+        $tglJam = date('Y-m-d H:i:s', strtotime($authoredOn));
+
+        $payload = [
+            'resourceType' => 'ServiceRequest',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/acsn/' . $orgId,
+                    'value'  => $acsn
+                ]
+            ],
+            'status' => 'active',
+            'intent' => 'order',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://snomed.info/sct',
+                            'code'    => '363679005',
+                            'display' => 'Imaging'
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['system']) ? $p['system'] : 'http://snomed.info/sct',
+                        'code'    => !empty($p['code']) ? $p['code'] : '',
+                        'display' => !empty($p['display']) ? $p['display'] : $p['nm_perawatan']
+                    ]
+                ],
+                'text' => $p['nm_perawatan']
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Permintaan ' . $p['nm_perawatan'] . ' atas nama pasien ' . $p['nm_pasien'] .
+                               ' No.RM ' . $p['no_rkm_medis'] . ' No.Rawat ' . $p['no_rawat'] .
+                               ', pada tanggal ' . $tglJam
+            ],
+            'authoredOn' => $authoredOn,
+            'requester' => [
+                'reference' => 'Practitioner/' . $idDokter,
+                'display'   => $p['nama']
+            ],
+            'performer' => [
+                [
+                    'reference' => 'Organization/' . $orgId,
+                    'display'   => 'Ruang Radiologi/Petugas Radiologi'
+                ]
+            ],
+            'reasonCode' => [
+                [
+                    'text' => !empty($p['diagnosa_klinis']) ? $p['diagnosa_klinis'] : '-'
+                ]
+            ]
+        ];
+
+        if (!empty($idServiceRequest) && $idServiceRequest !== '-') {
+            $payload['id'] = $idServiceRequest;
+        }
+
+        return $payload;
+    }
+
+    public static function diagnosticReportRadiologi(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $orgId,
+        string $idDiagnosticReport = ''
+    ): array {
+        $dateTimeStr = self::sanitizeDateTime(
+            $p['tgl_hasil'] ?? null,
+            $p['jam_hasil'] ?? null,
+            $p,
+            [
+                ['tgl_permintaan', 'jam_permintaan']
+            ]
+        );
+
+        $conclusion = !empty($p['hasil']) ? $p['hasil'] : '';
+        $conclusion = str_replace(["\r\n", "\r", "\n", "\n\r"], '<br>', $conclusion);
+        $conclusion = str_replace("\t", ' ', $conclusion);
+
+        $payload = [
+            'resourceType' => 'DiagnosticReport',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/diagnostic/' . $orgId . '/rad',
+                    'use'    => 'official',
+                    'value'  => $p['noorder'] . '.' . $p['kd_jenis_prw']
+                ]
+            ],
+            'status' => 'final',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/v2-0074',
+                            'code'    => 'RAD',
+                            'display' => 'Radiology'
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['system']) ? $p['system'] : 'http://snomed.info/sct',
+                        'code'    => !empty($p['code']) ? $p['code'] : '',
+                        'display' => !empty($p['display']) ? $p['display'] : $p['nm_perawatan']
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter']
+            ],
+            'effectiveDateTime' => $dateTimeStr,
+            'issued'            => $dateTimeStr,
+            'performer' => [
+                [
+                    'reference' => 'Practitioner/' . $idDokter
+                ],
+                [
+                    'reference' => 'Organization/' . $orgId
+                ]
+            ],
+            'imagingStudy' => [
+                [
+                    'reference' => 'ImagingStudy/' . $p['id_imaging']
+                ]
+            ],
+            'result' => [
+                [
+                    'reference' => 'Observation/' . $p['id_observation']
+                ]
+            ],
+            'basedOn' => [
+                [
+                    'reference' => 'ServiceRequest/' . $p['id_servicerequest']
+                ]
+            ],
+            'conclusion' => $conclusion
+        ];
+
+        if (!empty($idDiagnosticReport) && $idDiagnosticReport !== '-') {
+            $payload['id'] = $idDiagnosticReport;
+        }
+
+        return $payload;
+    }
+
+    public static function specimenRadiologi(
+        array $p,
+        string $idPasien,
+        string $orgId,
+        string $idSpecimen = ''
+    ): array {
+        $receivedTime = self::sanitizeDateTime(
+            $p['tgl_sampel'] ?? null,
+            $p['jam_sampel'] ?? null,
+            $p,
+            [
+                ['tgl_permintaan', 'jam_permintaan']
+            ]
+        );
+
+        $payload = [
+            'resourceType' => 'Specimen',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/specimen/' . $orgId,
+                    'value'  => $p['noorder'] . '.' . $p['kd_jenis_prw']
+                ]
+            ],
+            'status' => 'available',
+            'type' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['sampel_system']) ? $p['sampel_system'] : '',
+                        'code'    => !empty($p['sampel_code']) ? $p['sampel_code'] : '',
+                        'display' => !empty($p['sampel_display']) ? $p['sampel_display'] : ''
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'request' => [
+                [
+                    'reference' => 'ServiceRequest/' . $p['id_servicerequest']
+                ]
+            ],
+            'receivedTime' => $receivedTime
+        ];
+
+        if (!empty($idSpecimen) && $idSpecimen !== '-') {
+            $payload['id'] = $idSpecimen;
+        }
+
+        return $payload;
+    }
+
+    public static function observationRadiologi(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $orgId,
+        string $idObservation = ''
+    ): array {
+        $dateTimeStr = self::sanitizeDateTime(
+            $p['tgl_hasil'] ?? null,
+            $p['jam_hasil'] ?? null,
+            $p,
+            [
+                ['tgl_permintaan', 'jam_permintaan']
+            ]
+        );
+
+        // Sanitizing valueString
+        $conclusion = str_replace(["\r\n", "\r", "\n"], '<br>', $p['hasil']);
+        $conclusion = str_replace("\t", ' ', $conclusion);
+
+        $payload = [
+            'resourceType' => 'Observation',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/observation/' . $orgId,
+                    'value'  => $p['noorder'] . '.' . $p['kd_jenis_prw']
+                ]
+            ],
+            'status' => 'final',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/observation-category',
+                            'code'    => 'imaging',
+                            'display' => 'Imaging'
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['system']) ? $p['system'] : '',
+                        'code'    => !empty($p['code']) ? $p['code'] : '',
+                        'display' => !empty($p['display']) ? $p['display'] : ''
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Hasil Pemeriksaan Radiologi ' . $p['nm_perawatan'] . ' No.Rawat ' . $p['no_rawat'] . ', Atas Nama Pasien ' . $p['nm_pasien'] . ', Pada Tanggal ' . $p['tgl_hasil'] . ' ' . $time
+            ],
+            'effectiveDateTime' => $dateTimeStr,
+            'issued'            => $dateTimeStr,
+            'performer' => [
+                [
+                    'reference' => 'Practitioner/' . $idDokter
+                ],
+                [
+                    'reference' => 'Organization/' . $orgId
+                ]
+            ],
+            'basedOn' => [
+                [
+                    'reference' => 'ServiceRequest/' . $p['id_servicerequest']
+                ]
+            ],
+            'bodySite' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['sampel_system']) ? $p['sampel_system'] : '',
+                        'code'    => !empty($p['sampel_code']) ? $p['sampel_code'] : '',
+                        'display' => !empty($p['sampel_display']) ? $p['sampel_display'] : ''
+                    ]
+                ]
+            ],
+            'derivedFrom' => [
+                [
+                    'reference' => 'ImagingStudy/' . $p['id_imaging']
+                ]
+            ],
+            'valueString' => $conclusion
+        ];
+
+        if (!empty($idObservation) && $idObservation !== '-') {
+            $payload['id'] = $idObservation;
+        }
+
+        return $payload;
+    }
+
+    public static function serviceRequestLab(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $orgId,
+        string $idServiceRequest = ''
+    ): array {
+        $dateTimeStr = self::sanitizeDateTime($p['tgl_permintaan'] ?? null, $p['jam_permintaan'] ?? null, $p);
+
+        $payload = [
+            'resourceType' => 'ServiceRequest',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/servicerequest/' . $orgId,
+                    'value'  => $p['noorder'] . '.' . $p['id_template']
+                ]
+            ],
+            'status' => 'active',
+            'intent' => 'order',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://snomed.info/sct',
+                            'code'    => '108252007',
+                            'display' => 'Laboratory procedure'
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['system']) ? trim($p['system']) : '',
+                        'code'    => !empty($p['code']) ? trim($p['code']) : '',
+                        'display' => !empty($p['display']) ? trim($p['display']) : ''
+                    ]
+                ],
+                'text' => !empty($p['Pemeriksaan']) ? $p['Pemeriksaan'] : ''
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Permintaan ' . $p['Pemeriksaan'] . ' atas nama pasien ' . $p['nm_pasien'] . ' No.RM ' . $p['no_rkm_medis'] . ' No.Rawat ' . $p['no_rawat'] . ', pada tanggal ' . $p['tgl_permintaan']
+            ],
+            'authoredOn' => $dateTimeStr,
+            'requester' => [
+                'reference' => 'Practitioner/' . $idDokter,
+                'display'   => $p['nm_dokter']
+            ],
+            'performer' => [
+                [
+                    'reference' => 'Organization/' . $orgId,
+                    'display'   => 'Ruang Laborat/Petugas Laborat'
+                ]
+            ],
+            'reasonCode' => [
+                [
+                    'text' => !empty($p['diagnosa_klinis']) ? $p['diagnosa_klinis'] : '-'
+                ]
+            ]
+        ];
+
+        if (!empty($idServiceRequest) && $idServiceRequest !== '-') {
+            $payload['id'] = $idServiceRequest;
+        }
+
+        return $payload;
+    }
+
+    public static function specimenLab(
+        array $p,
+        string $idPasien,
+        string $orgId,
+        string $idSpecimen = ''
+    ): array {
+        $receivedTime = self::sanitizeDateTime(
+            $p['tgl_sampel'] ?? null,
+            $p['jam_sampel'] ?? null,
+            $p,
+            [
+                ['tgl_permintaan', 'jam_permintaan']
+            ]
+        );
+
+        $sampelSystem = !empty($p['sampel_system']) ? trim($p['sampel_system']) : '';
+        if (strpos($sampelSystem, 'snomed.info') !== false) {
+            $sampelSystem = 'http://snomed.info/sct';
+        }
+        $sampelCode = !empty($p['sampel_code']) ? trim($p['sampel_code']) : '';
+        $sampelDisplay = !empty($p['sampel_display']) ? trim($p['sampel_display']) : '';
+
+        $payload = [
+            'resourceType' => 'Specimen',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/specimen/' . $orgId,
+                    'value'  => $p['noorder'] . '.' . $p['id_template']
+                ]
+            ],
+            'status' => 'available',
+            'type' => [
+                'coding' => [
+                    [
+                        'system'  => $sampelSystem,
+                        'code'    => $sampelCode,
+                        'display' => $sampelDisplay
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien']
+            ],
+            'request' => [
+                [
+                    'reference' => 'ServiceRequest/' . $p['id_servicerequest']
+                ]
+            ],
+            'receivedTime' => $receivedTime
+        ];
+
+        if (!empty($idSpecimen) && $idSpecimen !== '-') {
+            $payload['id'] = $idSpecimen;
+        }
+
+        return $payload;
+    }
+
+    public static function observationLab(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $orgId,
+        string $idObservation = ''
+    ): array {
+        $dateTimeStr = self::sanitizeDateTime(
+            $p['tgl_hasil'] ?? null,
+            $p['jam_hasil'] ?? null,
+            $p,
+            [
+                ['tgl_permintaan', 'jam_permintaan']
+            ]
+        );
+
+        $valueString = 'Hasil Lab : ' . $p['nilai'] . ' ' . $p['satuan'] . ', Nilai Rujukan : ' . $p['nilai_rujukan'];
+        if (!empty($p['keterangan'])) {
+            $valueString .= ', Keterangan : ' . $p['keterangan'];
+        }
+        $valueString = str_replace(["\r\n", "\r", "\n"], '<br>', $valueString);
+        $valueString = str_replace("\t", ' ', $valueString);
+
+        $payload = [
+            'resourceType' => 'Observation',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/observation/' . $orgId,
+                    'value'  => $p['noorder'] . '.' . $p['id_template']
+                ]
+            ],
+            'status' => 'final',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/observation-category',
+                            'code'    => 'laboratory',
+                            'display' => 'Laboratory'
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['system']) ? $p['system'] : '',
+                        'code'    => !empty($p['code']) ? $p['code'] : '',
+                        'display' => !empty($p['display']) ? $p['display'] : ''
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'performer' => [
+                [
+                    'reference' => 'Practitioner/' . $idDokter
+                ]
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+                'display'   => 'Hasil Pemeriksaan Lab ' . $p['Pemeriksaan'] . ' No.Rawat ' . $p['no_rawat'] . ', Atas Nama Pasien ' . $p['nm_pasien'] . ', No.RM ' . $p['no_rkm_medis'] . ', Pada Tanggal ' . $p['tgl_hasil']
+            ],
+            'specimen' => [
+                'reference' => 'Specimen/' . $p['id_specimen']
+            ],
+            'effectiveDateTime' => $dateTimeStr,
+            'valueString'       => $valueString
+        ];
+
+        if (!empty($idObservation) && $idObservation !== '-') {
+            $payload['id'] = $idObservation;
+        }
+
+        return $payload;
+    }
+
+    public static function diagnosticReportLab(
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $orgId,
+        string $idDiagnosticReport = ''
+    ): array {
+        $dateTimeStr = self::sanitizeDateTime(
+            $p['tgl_hasil'] ?? null,
+            $p['jam_hasil'] ?? null,
+            $p,
+            [
+                ['tgl_permintaan', 'jam_permintaan']
+            ]
+        );
+
+        $conclusion = !empty($p['kesan']) ? $p['kesan'] : '';
+        $conclusion = str_replace(["\r\n", "\r", "\n", "\n\r"], '<br>', $conclusion);
+        $conclusion = str_replace("\t", ' ', $conclusion);
+
+        $payload = [
+            'resourceType' => 'DiagnosticReport',
+            'identifier' => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/diagnostic/' . $orgId . '/lab',
+                    'use'    => 'official',
+                    'value'  => $p['noorder'] . '.' . $p['id_template']
+                ]
+            ],
+            'status' => 'final',
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/v2-0074',
+                            'code'    => 'LAB',
+                            'display' => 'Laboratory'
+                        ]
+                    ]
+                ]
+            ],
+            'code' => [
+                'coding' => [
+                    [
+                        'system'  => !empty($p['system']) ? $p['system'] : '',
+                        'code'    => !empty($p['code']) ? $p['code'] : '',
+                        'display' => !empty($p['display']) ? $p['display'] : ''
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $p['id_encounter']
+            ],
+            'effectiveDateTime' => $dateTimeStr,
+            'issued'            => $dateTimeStr,
+            'performer' => [
+                [
+                    'reference' => 'Practitioner/' . $idDokter
+                ]
+            ],
+            'specimen' => [
+                [
+                    'reference' => 'Specimen/' . $p['id_specimen']
+                ]
+            ],
+            'result' => [
+                [
+                    'reference' => 'Observation/' . $p['id_observation']
+                ]
+            ],
+            'basedOn' => [
+                [
+                    'reference' => 'ServiceRequest/' . $p['id_servicerequest']
+                ]
+            ],
+            'conclusion' => $conclusion
+        ];
+
+        if (!empty($idDiagnosticReport) && $idDiagnosticReport !== '-') {
+            $payload['id'] = $idDiagnosticReport;
+        }
+
+        return $payload;
+    }
+
+    public static function composition(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        string $idDokter,
+        string $idEncounter,
+        array $refs,
+        string $idComposition = '',
+        string $status = 'preliminary'
+    ): array {
+        $finishedWaktu = self::sanitizeDateTime($p['waktu_pulang'] ?? null, null, $p);
+
+        $sections = [];
+
+        // 1. Anamnesis Section (LOINC TK000003)
+        $anamnesisEntries = [];
+        if (!empty($refs['AllergyIntolerance'])) {
+            foreach ($refs['AllergyIntolerance'] as $id) {
+                $anamnesisEntries[] = ['reference' => 'AllergyIntolerance/' . $id];
+            }
+        }
+        if (!empty($anamnesisEntries)) {
+            $sections[] = [
+                'title' => 'Anamnesis',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id',
+                            'code' => 'TK000003',
+                            'display' => 'Anamnesis'
+                        ]
+                    ]
+                ],
+                'entry' => $anamnesisEntries
+            ];
+        }
+
+        // 2. Pemeriksaan Fisik Section (LOINC TK000007)
+        if (!empty($refs['Observation'])) {
+            $obsEntries = [];
+            foreach ($refs['Observation'] as $id) {
+                $obsEntries[] = ['reference' => 'Observation/' . $id];
+            }
+            $sections[] = [
+                'title' => 'Pemeriksaan Fisik',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id',
+                            'code' => 'TK000007',
+                            'display' => 'Pemeriksaan Fisik'
+                        ]
+                    ]
+                ],
+                'entry' => $obsEntries
+            ];
+        }
+
+        // 3. Diagnosis Section (LOINC TK000004)
+        if (!empty($refs['Condition'])) {
+            $condEntries = [];
+            foreach ($refs['Condition'] as $id) {
+                $condEntries[] = ['reference' => 'Condition/' . $id];
+            }
+            $sections[] = [
+                'title' => 'Diagnosis',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id',
+                            'code' => 'TK000004',
+                            'display' => 'Diagnosis'
+                        ]
+                    ]
+                ],
+                'entry' => $condEntries
+            ];
+        }
+
+        // 4. Tindakan/Prosedur Medis Section (LOINC TK000005)
+        if (!empty($refs['Procedure'])) {
+            $procEntries = [];
+            foreach ($refs['Procedure'] as $id) {
+                $procEntries[] = ['reference' => 'Procedure/' . $id];
+            }
+            $sections[] = [
+                'title' => 'Tindakan/Prosedur Medis',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id',
+                            'code' => 'TK000005',
+                            'display' => 'Tindakan/Prosedur Medis'
+                        ]
+                    ]
+                ],
+                'entry' => $procEntries
+            ];
+        }
+
+        // 5. Farmasi Section (LOINC TK000013)
+        $pharmacyEntries = [];
+        if (!empty($refs['MedicationRequest'])) {
+            foreach ($refs['MedicationRequest'] as $id) {
+                $pharmacyEntries[] = ['reference' => 'MedicationRequest/' . $id];
+            }
+        }
+        if (!empty($refs['MedicationDispense'])) {
+            foreach ($refs['MedicationDispense'] as $id) {
+                $pharmacyEntries[] = ['reference' => 'MedicationDispense/' . $id];
+            }
+        }
+        if (!empty($pharmacyEntries)) {
+            $sections[] = [
+                'title' => 'Farmasi',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id',
+                            'code' => 'TK000013',
+                            'display' => 'Farmasi'
+                        ]
+                    ]
+                ],
+                'entry' => $pharmacyEntries
+            ];
+        }
+
+        // 6. Perencanaan Perawatan Section (LOINC 18776-5)
+        $planEntries = [];
+        if (!empty($refs['ClinicalImpression'])) {
+            foreach ($refs['ClinicalImpression'] as $id) {
+                $planEntries[] = ['reference' => 'ClinicalImpression/' . $id];
+            }
+        }
+        if (!empty($refs['CarePlan'])) {
+            foreach ($refs['CarePlan'] as $id) {
+                $planEntries[] = ['reference' => 'CarePlan/' . $id];
+            }
+        }
+        if (!empty($planEntries)) {
+            $sections[] = [
+                'title' => 'Perencanaan Perawatan',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://loinc.org',
+                            'code' => '18776-5',
+                            'display' => 'Plan of care note'
+                        ]
+                    ]
+                ],
+                'entry' => $planEntries
+            ];
+        }
+
+        // 7. Pemeriksaan Penunjang Section (LOINC TK000009)
+        $supportEntries = [];
+        if (!empty($refs['DiagnosticReport'])) {
+            foreach ($refs['DiagnosticReport'] as $id) {
+                $supportEntries[] = ['reference' => 'DiagnosticReport/' . $id];
+            }
+        }
+        if (!empty($refs['Specimen'])) {
+            foreach ($refs['Specimen'] as $id) {
+                $supportEntries[] = ['reference' => 'Specimen/' . $id];
+            }
+        }
+        if (!empty($supportEntries)) {
+            $sections[] = [
+                'title' => 'Pemeriksaan Penunjang',
+                'code' => [
+                    'coding' => [
+                        [
+                            'system' => 'http://terminology.kemkes.go.id',
+                            'code' => 'TK000009',
+                            'display' => 'Pemeriksaan Penunjang'
+                        ]
+                    ]
+                ],
+                'entry' => $supportEntries
+            ];
+        }
+
+        $isRalan = (($p['status_lanjut'] ?? '') === 'Ralan');
+        $kdPoli = $p['kd_poli'] ?? '';
+
+        if ($kdPoli === 'IGDK') {
+            $typeCode = '97663-9';
+            $typeDisplay = 'Emergency medicine Emergency department Discharge summary';
+            $title = 'Resume Medis Gawat Darurat';
+        } elseif ($isRalan) {
+            $typeCode = '88645-7';
+            $typeDisplay = 'Outpatient hospital Discharge summary';
+            $title = 'Resume Medis Rawat Jalan';
+        } else {
+            $typeCode = '18842-5';
+            $typeDisplay = 'Discharge Summary';
+            $title = 'Resume Medis Rawat Inap';
+        }
+
+        $payload = [
+            'resourceType' => 'Composition',
+            'status' => $status,
+            'type' => [
+                'coding' => [
+                    [
+                        'system' => 'http://loinc.org',
+                        'code' => $typeCode,
+                        'display' => $typeDisplay
+                    ]
+                ]
+            ],
+            'category' => [
+                [
+                    'coding' => [
+                        [
+                            'system' => 'http://loinc.org',
+                            'code' => 'LP173421-1',
+                            'display' => 'Report'
+                        ]
+                    ]
+                ]
+            ],
+            'subject' => [
+                'reference' => 'Patient/' . $idPasien,
+                'display' => $p['nm_pasien']
+            ],
+            'encounter' => [
+                'reference' => 'Encounter/' . $idEncounter
+            ],
+            'date' => $finishedWaktu,
+            'author' => [
+                [
+                    'reference' => 'Practitioner/' . $idDokter,
+                    'display' => $p['nama']
+                ]
+            ],
+            'title' => $title,
+            'custodian' => [
+                'reference' => 'Organization/' . $orgId
+            ],
+            'section' => $sections
+        ];
+
+        if (!empty($idComposition)) {
+            $payload['id'] = $idComposition;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Convert a full FHIR payload array into JSON Patch replace operations.
+     * Skips server-managed fields (resourceType, id, meta) that cannot be PATCHed.
+     * Each field becomes a separate {op: replace, path: /key, value: ...} operation.
+     *
+     * @param array $payload Full FHIR resource payload from a ::build*() method
+     * @return array Array of JSON Patch operations
+     */
+    public static function payloadToPatchOps(array $payload): array
+    {
+        $ops = [];
+        // Fields that are immutable after resource creation — PATCHing them triggers
+        // SATUSEHAT's "You don't have permission to edit resource" because they
+        // create an organization-binding scope.
+        $skipKeys = [
+            'resourceType', 'id', 'meta',
+            'identifier',             // org-scoped: cannot be changed after creation
+            'subject',                // patient reference: immutable
+            'encounter',              // visit reference: immutable
+            'context',                // encounter alias (MedicationDispense, MedicationStatement)
+            'requester',              // who ordered the service: immutable
+            'author',                 // who authored (Composition, CarePlan): immutable
+            'recorder',               // who recorded (Condition): immutable
+            'assessor',               // who assessed (ClinicalImpression): immutable
+            'informationSource',      // who provided info (MedicationStatement): immutable
+            'authoredOn',             // creation timestamp: immutable
+            'dateAsserted',           // assertion timestamp: immutable
+            'recordedDate',           // recording timestamp: immutable
+            'serviceProvider',        // organization reference: immutable
+            'managingOrganization',   // managing org: immutable
+        ];
+
+        foreach ($payload as $key => $value) {
+            if (in_array($key, $skipKeys, true)) {
+                continue;
+            }
+            $ops[] = [
+                'op'    => 'replace',
+                'path'  => '/' . $key,
+                'value' => $value
+            ];
+        }
+
+        return $ops;
+    }
+
+    public static function convertLocalToUtc(string $localDateTime): string
+    {
+        try {
+            $dt = new \DateTime($localDateTime, new \DateTimeZone('Asia/Jakarta'));
+            $dt->setTimezone(new \DateTimeZone('UTC'));
+            return $dt->format('Y-m-d\TH:i:s\+00:00');
+        } catch (\Throwable $e) {
+            return str_replace(' ', 'T', $localDateTime) . '+00:00';
+        }
+    }
+
+    public static function sanitizeUcum(array $qty): array
+    {
+        $value = isset($qty['value']) ? $qty['value'] : null;
+        $unit = isset($qty['unit']) ? trim((string)$qty['unit']) : '';
+        $system = isset($qty['system']) ? trim((string)$qty['system']) : '';
+        $code = isset($qty['code']) ? trim((string)$qty['code']) : '';
+
+        // If code is empty, we must not include system to avoid validation errors
+        if ($code === '') {
+            $system = '';
+        }
+
+        $res = [];
+        if ($value !== null && $value !== '') {
+            $res['value'] = (float)$value;
+        }
+        if ($unit !== '') {
+            $res['unit'] = $unit;
+        }
+        if ($system !== '') {
+            $res['system'] = $system;
+        }
+        if ($code !== '') {
+            $res['code'] = $code;
+        }
+
+        return $res;
+    }
+
+    public static function sanitizeDateTime(
+        ?string $datePart,
+        ?string $timePart = null,
+        array $row = [],
+        array $fallbackPreferences = [],
+        bool $dateOnly = false
+    ): string {
+        $datePart = $datePart !== null ? trim($datePart) : '';
+        $timePart = $timePart !== null ? trim($timePart) : '';
+
+        if ($timePart === '' && strpos($datePart, ' ') !== false) {
+            $parts = explode(' ', $datePart, 2);
+            $datePart = trim($parts[0]);
+            $timePart = trim($parts[1]);
+        }
+
+        $isValidDate = function(?string $d, ?string $t) {
+            $d = $d !== null ? trim($d) : '';
+            $t = $t !== null ? trim($t) : '';
+            if ($d === '' || $d === '0000-00-00' || $d === '0000-00-00 00:00:00') {
+                return false;
+            }
+            $year = (int)substr($d, 0, 4);
+            if ($year < 2014) {
+                return false;
+            }
+            $timeStr = ($t !== '' && $t !== '00:00:00') ? $t : '00:00:00';
+            $ts = @strtotime($d . ' ' . $timeStr);
+            if ($ts === false || $ts <= 0 || $ts > time()) {
+                return false;
+            }
+            return true;
+        };
+
+        if ($isValidDate($datePart, $timePart)) {
+            $timeStr = ($timePart !== '' && $timePart !== '00:00:00') ? $timePart : '00:00:00';
+            $ts = strtotime($datePart . ' ' . $timeStr);
+        } else {
+            $ts = null;
+            foreach ($fallbackPreferences as $pref) {
+                $fDate = $row[$pref[0]] ?? null;
+                $fTime = $row[$pref[1]] ?? null;
+                if ($isValidDate($fDate, $fTime)) {
+                    $timeStr = ($fTime !== '' && $fTime !== '00:00:00') ? $fTime : '00:00:00';
+                    $ts = strtotime($fDate . ' ' . $timeStr);
+                    break;
+                }
+            }
+
+            if ($ts === null) {
+                $regDate = $row['tgl_registrasi'] ?? null;
+                $regTime = $row['jam_reg'] ?? null;
+                if ($isValidDate($regDate, $regTime)) {
+                    $timeStr = ($regTime !== '' && $regTime !== '00:00:00') ? $regTime : '00:00:00';
+                    $ts = strtotime($regDate . ' ' . $timeStr);
+                } else {
+                    $ts = time();
+                }
+            }
+        }
+
+        if ($dateOnly) {
+            return date('Y-m-d', $ts);
+        }
+        return date('Y-m-d\TH:i:s', $ts) . '+07:00';
+    }
+}
+
+
+
+
+
