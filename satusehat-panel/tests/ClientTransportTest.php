@@ -109,4 +109,41 @@ final class ClientTransportTest extends TestCase
         $this->assertSame(200, $result['code']);
         $this->assertSame('enc-1', $result['data']['entry'][0]['resource']['id']);
     }
+
+    public function testTokenFetchWritesValidCacheOnce(): void
+    {
+        // Regression: the token-fetch path used its own curl block (not the
+        // transport seam) and once wrote json_encode(null) into the cache —
+        // "Undefined variable $cacheData" on line ~189. This test drives the
+        // FULL auth+send path through the seam with NO pre-seeded cache.
+        $authCalls = 0;
+        $this->calls = 0;
+        $this->logDir = PANEL_TEST_STORAGE . '/logs-tok-' . uniqid();
+        mkdir($this->logDir, 0755, true);
+
+        $client = $this->client();
+        $client->transport = function (string $url, string $method, array $headers, ?string $body) use (&$authCalls): array {
+            if (str_contains($url, '/accesstoken')) {
+                $authCalls++;
+                return ['{"access_token":"fresh-token-1","expires_in":3600}', 200, ''];
+            }
+            $this->calls++;
+            return ['{"resourceType":"Bundle","type":"transaction-response","entry":[]}', 200, ''];
+        };
+
+        $result = $client->post('/', ['resourceType' => 'Bundle']);
+        $this->assertTrue($result['success']);
+
+        // Exactly one token fetch: the second send reuses the cache.
+        $result2 = $client->post('/', ['resourceType' => 'Bundle']);
+        $this->assertTrue($result2['success']);
+        $this->assertSame(1, $authCalls, 'token must be fetched exactly once across two sends');
+
+        // Cache file holds a real token + expiry and is 0600.
+        $cache = json_decode((string) file_get_contents($this->logDir . '/satusehat_token.json'), true);
+        $this->assertSame('fresh-token-1', $cache['token'] ?? null);
+        $this->assertGreaterThan(time(), (int) ($cache['expires_at'] ?? 0));
+        $perms = fileperms($this->logDir . '/satusehat_token.json') & 0777;
+        $this->assertSame(0600, $perms);
+    }
 }

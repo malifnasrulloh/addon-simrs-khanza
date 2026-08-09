@@ -125,24 +125,28 @@ class SatuSehatClient
         $baseDelaySeconds = 1.5;
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-            $ch = curl_init($url);
-            curl_setopt_array($ch, [
-                CURLOPT_POST           => true,
-                CURLOPT_POSTFIELDS     => $payload,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_TIMEOUT        => self::REQUEST_TIMEOUT,
-                CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
-                CURLOPT_SSL_VERIFYPEER => $this->verifyTls,
-                CURLOPT_SSL_VERIFYHOST => $this->verifyTls ? 2 : 0,
-                CURLOPT_HTTPHEADER     => [
-                    'Content-Type: application/x-www-form-urlencoded'
-                ]
-            ]);
+            if ($this->transport !== null) {
+                [$response, $httpCode, $error] = ($this->transport)($url, 'POST', ['Content-Type: application/x-www-form-urlencoded'], $payload);
+            } else {
+                $ch = curl_init($url);
+                curl_setopt_array($ch, [
+                    CURLOPT_POST           => true,
+                    CURLOPT_POSTFIELDS     => $payload,
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_TIMEOUT        => self::REQUEST_TIMEOUT,
+                    CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
+                    CURLOPT_SSL_VERIFYPEER => $this->verifyTls,
+                    CURLOPT_SSL_VERIFYHOST => $this->verifyTls ? 2 : 0,
+                    CURLOPT_HTTPHEADER     => [
+                        'Content-Type: application/x-www-form-urlencoded'
+                    ]
+                ]);
 
-            $response = curl_exec($ch);
-            $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $error    = curl_error($ch);
-            curl_close($ch);
+                $response = curl_exec($ch);
+                $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $error    = curl_error($ch);
+                curl_close($ch);
+            }
 
             // Determine if token request failed due to transient issues
             $isTransientError = false;
@@ -186,6 +190,10 @@ class SatuSehatClient
             $this->log->info("[AUTH] Token retrieved successfully (Attempts: {$attempt}).");
 
             // Save to cache (0600 — the file holds a live OAuth token).
+            $cacheData = [
+                'token'      => $token,
+                'expires_at' => time() + $this->tokenTimeout,
+            ];
             file_put_contents($this->tokenCacheFile, json_encode($cacheData));
             @chmod($this->tokenCacheFile, 0600);
 
