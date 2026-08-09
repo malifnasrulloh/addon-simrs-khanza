@@ -33,17 +33,20 @@ class EpisodeOfCareType
     {
         return [
             // --- Kemkes disease registry types (prefix-based ICD matching) ---
-            'ANC' => new self(
-                'http://terminology.kemkes.go.id/CodeSystem/episodeofcare-type',
-                'ANC',
-                'Antenatal Care',
-                ['O'] // ICD-10 codes starting with O
-            ),
+            // PNC priority: delivery (O80-O84) + postnatal (Z39) must be
+            // checked BEFORE the generic ANC O-prefix, otherwise PNC is never
+            // reachable (the panel bug: first-match-wins made ANC win all O*).
             'PNC' => new self(
                 'http://terminology.kemkes.go.id/CodeSystem/episodeofcare-type',
                 'PNC',
                 'Postnatal Care',
-                ['O'] // Also O-prefix, but handled after ANC (first match wins)
+                ['O80', 'O81', 'O82', 'O83', 'O84', 'Z39']
+            ),
+            'ANC' => new self(
+                'http://terminology.kemkes.go.id/CodeSystem/episodeofcare-type',
+                'ANC',
+                'Antenatal Care',
+                ['O'] // ICD-10 codes starting with O (prenatal)
             ),
             'TB-SO' => new self(
                 'http://terminology.kemkes.go.id/CodeSystem/episodeofcare-type',
@@ -168,8 +171,8 @@ class EpisodeOfCareType
         $icdCode = strtoupper(trim($icdCode));
 
         // First pass: try types with non-empty icdFilters using prefix matching
-        // Process in priority order — ANC vs PNC both use O-prefix
-        $priorityOrder = ['ANC', 'PNC', 'TB-SO', 'Neonate', 'CKD', 'CNC', 'cancer',
+        // Process in priority order — PNC before ANC so O80-O84/Z39 hit PNC.
+        $priorityOrder = ['PNC', 'ANC', 'TB-SO', 'Neonate', 'CKD', 'CNC', 'cancer',
                           'HIV', 'EMC', 'ADM', 'CAD', 'CVD', 'diab', 'da'];
 
         foreach ($priorityOrder as $key) {

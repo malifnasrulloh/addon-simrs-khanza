@@ -60,6 +60,19 @@ class SatuSehatPayloadBuilder
         ];
     }
 
+    /**
+     * Reference for a composition section entry: bare SATUSEHAT ids become
+     * "Type/{id}"; values that are already relative/absolute references
+     * (e.g. in-bundle "urn:uuid:...") are passed through untouched.
+     */
+    private static function compositionRef(string $resourceType, string $id): string
+    {
+        if (str_starts_with($id, 'urn:') || str_contains($id, '/')) {
+            return $id;
+        }
+        return $resourceType . '/' . $id;
+    }
+
     private static function getLocationPeriodStart(array $p, string $status): ?string
     {
         // For Ranap, use admission time; for Ralan/IGD use registration time
@@ -259,7 +272,7 @@ class SatuSehatPayloadBuilder
 
         $payload = [
             'resourceType' => 'Encounter',
-            'status' => ($isRanap && $classCode === 'IMP') ? 'in-progress' : $status,
+            'status' => $status,
             'class' => [
                 'system'  => 'http://terminology.hl7.org/CodeSystem/v3-ActCode',
                 'code'    => $classCode,
@@ -765,7 +778,7 @@ class SatuSehatPayloadBuilder
         if ($def['type'] === 'quantity') {
             // standard numeric
             $payload['valueQuantity'] = [
-                'value'  => (float) $val,
+                'value'  => \SatuSehatNumber::parse($val) ?? 0.0,
                 'unit'   => $def['unit_display'],
                 'system' => 'http://unitsofmeasure.org',
                 'code'   => $def['unit']
@@ -799,8 +812,8 @@ class SatuSehatPayloadBuilder
             // Tensi component structure
             // DB format: "120/80"
             $parts = explode('/', $val);
-            $systolic = (float) ($parts[0] ?? 0);
-            $diastolic = (float) ($parts[1] ?? 0);
+            $systolic = \SatuSehatNumber::parse($parts[0] ?? '') ?? 0.0;
+            $diastolic = \SatuSehatNumber::parse($parts[1] ?? '') ?? 0.0;
 
             $payload['component'] = [
                 [
@@ -865,14 +878,16 @@ class SatuSehatPayloadBuilder
             'resourceType' => 'Procedure',
             'status' => 'completed',
             'category' => [
-                'coding' => [
-                    [
-                        'system'  => 'http://snomed.info/sct',
-                        'code'    => '103693007',
-                        'display' => 'Diagnostic procedure'
-                    ]
-                ],
-                'text' => 'Diagnostic procedure'
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://snomed.info/sct',
+                            'code'    => '103693007',
+                            'display' => 'Diagnostic procedure'
+                        ]
+                    ],
+                    'text' => 'Diagnostic procedure'
+                ]
             ],
             'code' => [
                 'coding' => [
@@ -1170,7 +1185,7 @@ class SatuSehatPayloadBuilder
                 ]
             ],
             'doseQuantity' => self::sanitizeUcum([
-                'value' => (float)$imm['jml'],
+                'value' => \SatuSehatNumber::parse($imm['jml']) ?? 0.0,
                 'unit' => $imm['dose_quantity_unit'],
                 'system' => $imm['dose_quantity_system'],
                 'code' => $imm['dose_quantity_code']
@@ -1307,16 +1322,10 @@ class SatuSehatPayloadBuilder
         $aturan = $p['aturan_pakai'] ?? '';
         $parts = explode('x', strtolower($aturan));
         if (isset($parts[0])) {
-            $val = preg_replace('/[^0-9.]/', '', $parts[0]);
-            if (is_numeric($val)) {
-                $signa1 = (float)$val;
-            }
+            $signa1 = \SatuSehatNumber::parse($parts[0]) ?? 1.0;
         }
         if (isset($parts[1])) {
-            $val = preg_replace('/[^0-9.]/', '', $parts[1]);
-            if (is_numeric($val)) {
-                $signa2 = (float)$val;
-            }
+            $signa2 = \SatuSehatNumber::parse($parts[1]) ?? 1.0;
         }
 
         // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
@@ -1329,6 +1338,15 @@ class SatuSehatPayloadBuilder
         $prescVal = $p['no_resep'];
         if ($isRacikan && $noRacik !== '') {
             $prescVal = $p['no_resep'] . '-' . $noRacik;
+        }
+
+        // Official semantics: the prescription-item identifier is
+        // "{no_resep}-{item sequence}" (e.g. A00000111222-1), NOT the local
+        // drug code. The adapter assigns prescription_item_seq per
+        // prescription; legacy rows without it fall back to kode_brng.
+        $itemVal = trim((string) ($p['prescription_item_seq'] ?? ''));
+        if ($itemVal === '') {
+            $itemVal = $p['kode_brng'];
         }
 
         $payload = [
@@ -1345,7 +1363,7 @@ class SatuSehatPayloadBuilder
                 [
                     'system' => 'http://sys-ids.kemkes.go.id/prescription-item/' . $orgId,
                     'use'    => 'official',
-                    'value'  => $p['kode_brng']
+                    'value'  => $itemVal
                 ]
             ],
             'status' => 'completed',
@@ -1468,16 +1486,10 @@ class SatuSehatPayloadBuilder
         $aturan = $p['aturan'] ?? '';
         $parts = explode('x', strtolower($aturan));
         if (isset($parts[0])) {
-            $val = preg_replace('/[^0-9.]/', '', $parts[0]);
-            if (is_numeric($val)) {
-                $signa1 = (float)$val;
-            }
+            $signa1 = \SatuSehatNumber::parse($parts[0]) ?? 1.0;
         }
         if (isset($parts[1])) {
-            $val = preg_replace('/[^0-9.]/', '', $parts[1]);
-            if (is_numeric($val)) {
-                $signa2 = (float)$val;
-            }
+            $signa2 = \SatuSehatNumber::parse($parts[1]) ?? 1.0;
         }
 
         // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
@@ -1506,11 +1518,13 @@ class SatuSehatPayloadBuilder
             ],
             'status' => 'completed',
             'category' => [
-                'coding' => [
-                    [
-                        'system'  => 'http://terminology.hl7.org/fhir/CodeSystem/medicationdispense-category',
-                        'code'    => strtolower($p['status_pemberian']) === 'ranap' ? 'inpatient' : 'outpatient',
-                        'display' => strtolower($p['status_pemberian']) === 'ranap' ? 'Inpatient' : 'Outpatient'
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/fhir/CodeSystem/medicationdispense-category',
+                            'code'    => strtolower($p['status_pemberian']) === 'ranap' ? 'inpatient' : 'outpatient',
+                            'display' => strtolower($p['status_pemberian']) === 'ranap' ? 'Inpatient' : 'Outpatient'
+                        ]
                     ]
                 ]
             ],
@@ -1532,10 +1546,6 @@ class SatuSehatPayloadBuilder
                         'display'   => $p['nama']
                     ]
                 ]
-            ],
-            'location' => [
-                'reference' => 'Location/' . $p['id_lokasi_satusehat'],
-                'display'   => $p['nm_bangsal']
             ],
             'quantity' => self::sanitizeUcum([
                 'value'  => $p['jml'],
@@ -1587,8 +1597,18 @@ class SatuSehatPayloadBuilder
             ];
         }
 
+        // Rule 10393: location is only emitted when the depo mapping exists —
+        // a bare "Location/" reference is always rejected.
+        $locId = trim((string) ($p['id_lokasi_satusehat'] ?? ''));
+        if ($locId !== '') {
+            $payload['location'] = [
+                'reference' => 'Location/' . $locId,
+                'display'   => (string) ($p['nm_bangsal'] ?? ''),
+            ];
+        }
+
         // Add daysSupply if available (from prescription or calculated)
-        $jml = floatval($p['jml'] ?? 0);
+        $jml = \SatuSehatNumber::parse($p['jml'] ?? '') ?? 0.0;
         $supplyDays = 0;
         if ($jml > 0 && $signa1 > 0) {
             // Calculate days supply: total qty / dose per day
@@ -1634,16 +1654,10 @@ class SatuSehatPayloadBuilder
         $aturan = $p['aturan_pakai'] ?? '';
         $parts = explode('x', strtolower($aturan));
         if (isset($parts[0])) {
-            $val = preg_replace('/[^0-9.]/', '', $parts[0]);
-            if (is_numeric($val)) {
-                $signa1 = (float)$val;
-            }
+            $signa1 = \SatuSehatNumber::parse($parts[0]) ?? 1.0;
         }
         if (isset($parts[1])) {
-            $val = preg_replace('/[^0-9.]/', '', $parts[1]);
-            if (is_numeric($val)) {
-                $signa2 = (float)$val;
-            }
+            $signa2 = \SatuSehatNumber::parse($parts[1]) ?? 1.0;
         }
 
         // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
@@ -1672,11 +1686,13 @@ class SatuSehatPayloadBuilder
             ],
             'status' => 'completed',
             'category' => [
-                'coding' => [
-                    [
-                        'system'  => 'http://terminology.hl7.org/CodeSystem/medication-statement-category',
-                        'code'    => strtolower($p['status_lanjut']) === 'ranap' ? 'inpatient' : 'outpatient',
-                        'display' => strtolower($p['status_lanjut']) === 'ranap' ? 'Inpatient' : 'Outpatient'
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://terminology.hl7.org/CodeSystem/medication-statement-category',
+                            'code'    => strtolower($p['status_lanjut']) === 'ranap' ? 'inpatient' : 'outpatient',
+                            'display' => strtolower($p['status_lanjut']) === 'ranap' ? 'Inpatient' : 'Outpatient'
+                        ]
                     ]
                 ]
             ],
@@ -2276,7 +2292,7 @@ class SatuSehatPayloadBuilder
             ],
             'encounter' => [
                 'reference' => 'Encounter/' . $p['id_encounter'],
-                'display'   => 'Hasil Pemeriksaan Radiologi ' . $p['nm_perawatan'] . ' No.Rawat ' . $p['no_rawat'] . ', Atas Nama Pasien ' . $p['nm_pasien'] . ', Pada Tanggal ' . $p['tgl_hasil'] . ' ' . $time
+                'display'   => 'Hasil Pemeriksaan Radiologi ' . $p['nm_perawatan'] . ' No.Rawat ' . $p['no_rawat'] . ', Atas Nama Pasien ' . $p['nm_pasien'] . ', Pada Tanggal ' . $p['tgl_hasil'] . ' ' . ($p['jam_hasil'] ?? '')
             ],
             'effectiveDateTime' => $dateTimeStr,
             'issued'            => $dateTimeStr,
@@ -2471,6 +2487,12 @@ class SatuSehatPayloadBuilder
         $valueString = str_replace(["\r\n", "\r", "\n"], '<br>', $valueString);
         $valueString = str_replace("\t", ' ', $valueString);
 
+        // Numeric results become valueQuantity (official SATUSEHAT lab
+        // pattern) instead of narrative text; text results (culture/growth,
+        // qualitative) keep valueString.
+        $numeric = \SatuSehatNumber::parse($p['nilai'] ?? '');
+        $ucumCode = self::mapLabUnit((string) ($p['satuan'] ?? ''));
+
         $payload = [
             'resourceType' => 'Observation',
             'identifier' => [
@@ -2516,14 +2538,47 @@ class SatuSehatPayloadBuilder
                 'reference' => 'Specimen/' . $p['id_specimen']
             ],
             'effectiveDateTime' => $dateTimeStr,
-            'valueString'       => $valueString
         ];
+
+        if ($numeric !== null) {
+            $qty = ['value' => $numeric];
+            if ($ucumCode !== null) {
+                $qty['unit'] = (string) ($p['satuan'] ?? '');
+                $qty['system'] = 'http://unitsofmeasure.org';
+                $qty['code'] = $ucumCode;
+            }
+            $payload['valueQuantity'] = $qty;
+        } else {
+            $payload['valueString'] = $valueString;
+        }
 
         if (!empty($idObservation) && $idObservation !== '-') {
             $payload['id'] = $idObservation;
         }
 
         return $payload;
+    }
+
+    /**
+     * Map a SIMRS lab unit string to its UCUM representation for
+     * valueQuantity.system (http://unitsofmeasure.org). Unknown units return
+     * null and the quantity is emitted without system/code.
+     */
+    private static function mapLabUnit(string $unit): ?string
+    {
+        $unit = strtolower(preg_replace('/\s+/', '', $unit) ?: '');
+        $map = [
+            'mg/dl' => 'mg/dL', 'g/dl' => 'g/dL', 'g/l' => 'g/L', 'mg/l' => 'mg/L',
+            'ng/dl' => 'ng/dL', 'ng/ml' => 'ng/mL', 'pg/ml' => 'pg/mL', 'µg/ml' => 'ug/mL',
+            'mmol/l' => 'mmol/L', 'µmol/l' => 'umol/L', 'mcmol/l' => 'umol/L',
+            'u/l' => 'U/L', 'iu/l' => 'IU/L', 'iu/ml' => 'IU/mL', 'miu/ml' => 'mIU/mL',
+            'meq/l' => 'meq/L', 'mmhg' => 'mm[Hg]', 'mm/hg' => 'mm[Hg]',
+            '%' => '%', 'µl' => 'uL', 'ul' => 'uL', 'ml' => 'mL', 'l' => 'L',
+            'fl' => 'fL', 'pg' => 'pg', 'mg' => 'mg', 'g' => 'g', 'µg' => 'ug',
+            '10^3/µl' => '10*3/uL', '10^3/ul' => '10*3/uL', 'sel/µl' => '10*3/uL',
+            'ratio' => '{ratio}', 'index' => '{index}',
+        ];
+        return $map[$unit] ?? null;
     }
 
     public static function diagnosticReportLab(
@@ -2622,7 +2677,7 @@ class SatuSehatPayloadBuilder
         string $idEncounter,
         array $refs,
         string $idComposition = '',
-        string $status = 'preliminary'
+        string $status = 'final'
     ): array {
         $finishedWaktu = self::sanitizeDateTime($p['waktu_pulang'] ?? null, null, $p);
 
@@ -2632,7 +2687,7 @@ class SatuSehatPayloadBuilder
         $anamnesisEntries = [];
         if (!empty($refs['AllergyIntolerance'])) {
             foreach ($refs['AllergyIntolerance'] as $id) {
-                $anamnesisEntries[] = ['reference' => 'AllergyIntolerance/' . $id];
+                $anamnesisEntries[] = ['reference' => self::compositionRef('AllergyIntolerance', $id)];
             }
         }
         if (!empty($anamnesisEntries)) {
@@ -2655,7 +2710,7 @@ class SatuSehatPayloadBuilder
         if (!empty($refs['Observation'])) {
             $obsEntries = [];
             foreach ($refs['Observation'] as $id) {
-                $obsEntries[] = ['reference' => 'Observation/' . $id];
+                $obsEntries[] = ['reference' => self::compositionRef('Observation', $id)];
             }
             $sections[] = [
                 'title' => 'Pemeriksaan Fisik',
@@ -2676,7 +2731,7 @@ class SatuSehatPayloadBuilder
         if (!empty($refs['Condition'])) {
             $condEntries = [];
             foreach ($refs['Condition'] as $id) {
-                $condEntries[] = ['reference' => 'Condition/' . $id];
+                $condEntries[] = ['reference' => self::compositionRef('Condition', $id)];
             }
             $sections[] = [
                 'title' => 'Diagnosis',
@@ -2697,7 +2752,7 @@ class SatuSehatPayloadBuilder
         if (!empty($refs['Procedure'])) {
             $procEntries = [];
             foreach ($refs['Procedure'] as $id) {
-                $procEntries[] = ['reference' => 'Procedure/' . $id];
+                $procEntries[] = ['reference' => self::compositionRef('Procedure', $id)];
             }
             $sections[] = [
                 'title' => 'Tindakan/Prosedur Medis',
@@ -2718,12 +2773,12 @@ class SatuSehatPayloadBuilder
         $pharmacyEntries = [];
         if (!empty($refs['MedicationRequest'])) {
             foreach ($refs['MedicationRequest'] as $id) {
-                $pharmacyEntries[] = ['reference' => 'MedicationRequest/' . $id];
+                $pharmacyEntries[] = ['reference' => self::compositionRef('MedicationRequest', $id)];
             }
         }
         if (!empty($refs['MedicationDispense'])) {
             foreach ($refs['MedicationDispense'] as $id) {
-                $pharmacyEntries[] = ['reference' => 'MedicationDispense/' . $id];
+                $pharmacyEntries[] = ['reference' => self::compositionRef('MedicationDispense', $id)];
             }
         }
         if (!empty($pharmacyEntries)) {
@@ -2746,12 +2801,12 @@ class SatuSehatPayloadBuilder
         $planEntries = [];
         if (!empty($refs['ClinicalImpression'])) {
             foreach ($refs['ClinicalImpression'] as $id) {
-                $planEntries[] = ['reference' => 'ClinicalImpression/' . $id];
+                $planEntries[] = ['reference' => self::compositionRef('ClinicalImpression', $id)];
             }
         }
         if (!empty($refs['CarePlan'])) {
             foreach ($refs['CarePlan'] as $id) {
-                $planEntries[] = ['reference' => 'CarePlan/' . $id];
+                $planEntries[] = ['reference' => self::compositionRef('CarePlan', $id)];
             }
         }
         if (!empty($planEntries)) {
@@ -2774,12 +2829,12 @@ class SatuSehatPayloadBuilder
         $supportEntries = [];
         if (!empty($refs['DiagnosticReport'])) {
             foreach ($refs['DiagnosticReport'] as $id) {
-                $supportEntries[] = ['reference' => 'DiagnosticReport/' . $id];
+                $supportEntries[] = ['reference' => self::compositionRef('DiagnosticReport', $id)];
             }
         }
         if (!empty($refs['Specimen'])) {
             foreach ($refs['Specimen'] as $id) {
-                $supportEntries[] = ['reference' => 'Specimen/' . $id];
+                $supportEntries[] = ['reference' => self::compositionRef('Specimen', $id)];
             }
         }
         if (!empty($supportEntries)) {
@@ -2818,6 +2873,12 @@ class SatuSehatPayloadBuilder
         $payload = [
             'resourceType' => 'Composition',
             'status' => $status,
+            // Rule 10464: the composition identifier is required by SATUSEHAT
+            // (the official example: sys-ids.kemkes.go.id/composition/{org}).
+            'identifier' => [
+                'system' => 'http://sys-ids.kemkes.go.id/composition/' . $orgId,
+                'value'  => (string) ($p['no_rawat'] ?? '')
+            ],
             'type' => [
                 'coding' => [
                     [
@@ -2937,7 +2998,7 @@ class SatuSehatPayloadBuilder
 
         $res = [];
         if ($value !== null && $value !== '') {
-            $res['value'] = (float)$value;
+            $res['value'] = \SatuSehatNumber::parse($value) ?? 0.0;
         }
         if ($unit !== '') {
             $res['unit'] = $unit;
@@ -2952,6 +3013,16 @@ class SatuSehatPayloadBuilder
         return $res;
     }
 
+    /**
+     * Timezone-correct, semantic date formatting.
+     *
+     * Delegates to SatuSehatDateTime: parses SIMRS wall-clock values as
+     * Asia/Jakarta, accepts future dates (vaccine expirationDate,
+     * pre-registered visits), and NEVER invents timestamps — when nothing
+     * valid is available (zero-dates etc.) the registration date is the last
+     * fallback, otherwise '' is returned (callers emit no timestamp instead
+     * of a wrong one).
+     */
     public static function sanitizeDateTime(
         ?string $datePart,
         ?string $timePart = null,
@@ -2959,64 +3030,26 @@ class SatuSehatPayloadBuilder
         array $fallbackPreferences = [],
         bool $dateOnly = false
     ): string {
-        $datePart = $datePart !== null ? trim($datePart) : '';
-        $timePart = $timePart !== null ? trim($timePart) : '';
+        $dt = \SatuSehatDateTime::parse($datePart, $timePart);
 
-        if ($timePart === '' && strpos($datePart, ' ') !== false) {
-            $parts = explode(' ', $datePart, 2);
-            $datePart = trim($parts[0]);
-            $timePart = trim($parts[1]);
-        }
-
-        $isValidDate = function(?string $d, ?string $t) {
-            $d = $d !== null ? trim($d) : '';
-            $t = $t !== null ? trim($t) : '';
-            if ($d === '' || $d === '0000-00-00' || $d === '0000-00-00 00:00:00') {
-                return false;
-            }
-            $year = (int)substr($d, 0, 4);
-            if ($year < 2014) {
-                return false;
-            }
-            $timeStr = ($t !== '' && $t !== '00:00:00') ? $t : '00:00:00';
-            $ts = @strtotime($d . ' ' . $timeStr);
-            if ($ts === false || $ts <= 0 || $ts > time()) {
-                return false;
-            }
-            return true;
-        };
-
-        if ($isValidDate($datePart, $timePart)) {
-            $timeStr = ($timePart !== '' && $timePart !== '00:00:00') ? $timePart : '00:00:00';
-            $ts = strtotime($datePart . ' ' . $timeStr);
-        } else {
-            $ts = null;
+        if ($dt === null) {
             foreach ($fallbackPreferences as $pref) {
-                $fDate = $row[$pref[0]] ?? null;
-                $fTime = $row[$pref[1]] ?? null;
-                if ($isValidDate($fDate, $fTime)) {
-                    $timeStr = ($fTime !== '' && $fTime !== '00:00:00') ? $fTime : '00:00:00';
-                    $ts = strtotime($fDate . ' ' . $timeStr);
+                $dt = \SatuSehatDateTime::parse($row[$pref[0]] ?? null, $row[$pref[1]] ?? null);
+                if ($dt !== null) {
                     break;
                 }
             }
-
-            if ($ts === null) {
-                $regDate = $row['tgl_registrasi'] ?? null;
-                $regTime = $row['jam_reg'] ?? null;
-                if ($isValidDate($regDate, $regTime)) {
-                    $timeStr = ($regTime !== '' && $regTime !== '00:00:00') ? $regTime : '00:00:00';
-                    $ts = strtotime($regDate . ' ' . $timeStr);
-                } else {
-                    $ts = time();
-                }
-            }
         }
 
-        if ($dateOnly) {
-            return date('Y-m-d', $ts);
+        if ($dt === null) {
+            $dt = \SatuSehatDateTime::parse($row['tgl_registrasi'] ?? null, $row['jam_reg'] ?? null);
         }
-        return date('Y-m-d\TH:i:s', $ts) . '+07:00';
+
+        if ($dt === null) {
+            return '';
+        }
+
+        return \SatuSehatDateTime::formatLocal($dt, $dateOnly) . ($dateOnly ? '' : '+07:00');
     }
 }
 

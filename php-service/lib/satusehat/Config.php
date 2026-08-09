@@ -26,6 +26,12 @@ class SatuSehatConfig
     public readonly int    $batchSize;
     public readonly string $memoryLimit;
     public readonly bool   $verbosePayload;
+    /**
+     * TLS peer verification for SATUSEHAT API calls. Env: SATUSEHAT_VERIFY_TLS
+     * (default 'false' — legacy CLI behavior). The panel opts in via its own
+     * .env.example (SATUSEHAT_VERIFY_TLS=true).
+     */
+    public readonly bool   $verifyTls;
 
     // ─── Database ──────────────────────────────────────────────────────────
     public readonly string $dbHost;
@@ -55,13 +61,23 @@ class SatuSehatConfig
     public readonly string $dicomRouterAe;
     public readonly string $simrsWebappsUrl;
 
-    public function __construct(string $envPath)
+    /**
+     * @param string $envPath       .env file path; pass '' when $envOverrides
+     *                              carries the full variable set (no file IO).
+     * @param array  $envOverrides  extra variables merged ON TOP of the file
+     *                              (if given). Used by consumers that resolve
+     *                              credentials from multiple sources.
+     */
+    public function __construct(string $envPath, array $envOverrides = [])
     {
-        if (!file_exists($envPath)) {
+        if ($envPath !== '' && !file_exists($envPath)) {
             throw new \RuntimeException(".env file not found at: {$envPath}");
         }
 
-        $this->env = self::parseEnvFile($envPath);
+        $this->env = $envOverrides;
+        if ($envPath !== '') {
+            $this->env = array_merge(self::parseEnvFile($envPath), $envOverrides);
+        }
 
         $this->timezone = $this->get('TIMEZONE', 'Asia/Jakarta');
         date_default_timezone_set($this->timezone);
@@ -100,6 +116,7 @@ class SatuSehatConfig
         $this->batchSize      = (int) $this->get('SATUSEHAT_BATCH_SIZE', '500');
         $this->memoryLimit    = $this->get('SATUSEHAT_MEMORY_LIMIT', '512M');
         $this->verbosePayload = $this->get('SATUSEHAT_VERBOSE_PAYLOAD', 'false') === 'true';
+        $this->verifyTls      = $this->get('SATUSEHAT_VERIFY_TLS', 'false') === 'true';
 
         $logDir = $this->get('LOG_DIR', 'logs');
         if (!str_starts_with($logDir, '/')) {

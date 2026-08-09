@@ -75,7 +75,7 @@ class Logger
         $keys = 'nik|nohp|nomorkartu|nomorpeserta|no_peserta|no_ktp|no_tlp';
         $pattern = '/(["\']?(?:' . $keys . ')(?:_bpjs)?["\']?\s*[:=]\s*["\']?)([^"\'\s,;\}]+)(["\']?)/i';
 
-        return preg_replace_callback($pattern, function($matches) {
+        $message = preg_replace_callback($pattern, function($matches) {
             $prefix = $matches[1];
             $val    = $matches[2];
             $suffix = $matches[3];
@@ -88,6 +88,19 @@ class Logger
             }
             return $prefix . $masked . $suffix;
         }, $message);
+
+        // URL-encoded IHS lookup form: ...id/nik|3333061211890001... — the
+        // NIK sits after a pipe (the "key: value" regex above cannot see it).
+        $message = preg_replace_callback(
+            '/(?:\bnik\|)(\d{12,16})/i',
+            function ($m) {
+                return 'nik|' . substr($m[1], 0, 4) . str_repeat('*', max(4, strlen($m[1]) - 8)) . substr($m[1], -4);
+            },
+            $message
+        );
+
+        // Standalone 16-digit IDs (raw NIKs in payloads/URLs).
+        return preg_replace('/\b\d{16}\b/', '****************', $message);
     }
 
     public function write(string $level, string $message): void

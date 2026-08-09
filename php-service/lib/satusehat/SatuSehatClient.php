@@ -12,11 +12,13 @@ class SatuSehatClient
 {
     private string $clientId;
     private string $secretKey;
+    private string $orgId;
     private string $authUrl;
     private string $baseUrl;
     private int    $tokenTimeout;
     private int    $delayMs;
     private bool   $verbosePayload;
+    private bool   $verifyTls;
     private Logger $log;
     private string $tokenCacheFile;
     private string $permissionCacheFile;
@@ -26,6 +28,14 @@ class SatuSehatClient
      */
     private \DateTimeZone $sourceTimezone;
 
+    /**
+     * Optional transport override for tests/proxies: callable receiving
+     * (string $url, string $method, array $headers, ?string $body) and
+     * returning [string $body, int $httpCode, string $error].
+     * When set, cURL is bypassed entirely.
+     */
+    public ?\Closure $transport = null;
+
     private const CONNECT_TIMEOUT = 10;
     private const REQUEST_TIMEOUT = 30;
 
@@ -33,11 +43,13 @@ class SatuSehatClient
     {
         $this->clientId        = $config->clientId;
         $this->secretKey       = $config->secretKey;
+        $this->orgId           = $config->orgId;
         $this->authUrl         = $config->authUrl;
         $this->baseUrl         = $config->baseUrl;
         $this->tokenTimeout    = $config->tokenTimeout;
         $this->delayMs         = $config->delayMs;
         $this->verbosePayload  = $config->verbosePayload;
+        $this->verifyTls       = $config->verifyTls;
         $this->log             = $log;
 
         $this->tokenCacheFile     = $config->logDir . '/satusehat_token.json';
@@ -120,8 +132,8 @@ class SatuSehatClient
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_TIMEOUT        => self::REQUEST_TIMEOUT,
                 CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
-                CURLOPT_SSL_VERIFYPEER => false,
-                CURLOPT_SSL_VERIFYHOST => 0,
+                CURLOPT_SSL_VERIFYPEER => $this->verifyTls,
+                CURLOPT_SSL_VERIFYHOST => $this->verifyTls ? 2 : 0,
                 CURLOPT_HTTPHEADER     => [
                     'Content-Type: application/x-www-form-urlencoded'
                 ]
@@ -173,12 +185,9 @@ class SatuSehatClient
             $token = $data['access_token'];
             $this->log->info("[AUTH] Token retrieved successfully (Attempts: {$attempt}).");
 
-            // Save to cache
-            $cacheData = [
-                'token'      => $token,
-                'expires_at' => time() + $this->tokenTimeout
-            ];
+            // Save to cache (0600 — the file holds a live OAuth token).
             file_put_contents($this->tokenCacheFile, json_encode($cacheData));
+            @chmod($this->tokenCacheFile, 0600);
 
             return $token;
         }
@@ -248,6 +257,24 @@ class SatuSehatClient
             ];
         }
 
+        // Ownership pre-check: a resource created by ANOTHER fasyankes
+        // (referral, external pharmacy/lab) cannot be edited — the server
+        // answers "You don't have permission to edit resource". Detect that
+        // locally first so the operator gets a clear Indonesian message
+        // instead of a misleading generic 403 + permanent-denial cache.
+        $ownership = $this->checkEditOwnership($endpoint);
+        if ($ownership !== null) {
+            $this->log->warning("[UPDATE] {$endpoint}: {$ownership['message']}");
+            return [
+                'success'          => true,
+                'code'             => 200,
+                'message'          => $ownership['message'],
+                'data'             => [],
+                'ownership_skip'   => true,
+                'owner_org'        => $ownership['owner_org'],
+            ];
+        }
+
         // PUT: full resource replacement
         $result = $this->request('PUT', $endpoint, $putPayload);
         if ($result['success']) {
@@ -262,13 +289,124 @@ class SatuSehatClient
             return [
                 'success'          => true,
                 'code'             => 200,
-                'message'          => 'Permission denied (cached)',
+                'message'          => 'Permission denied (cached): "You don\'t have permission to edit resource". Resource kemungkinan dimiliki fasyankes lain (rujukan/apotek luar/lab luar) atau Organization ID di konfigurasi berbeda dengan pembuat resource. Resource milik fasyankes lain tidak dapat diedit — kirim resource baru di bawah Encounter sendiri.',
                 'data'             => [],
                 'permission_skip'  => true,
             ];
         }
 
         return $result;
+    }
+
+    /**
+     * Ownership fields that define WHICH Organization created a resource,
+     * grounded in the official SATUSEHAT examples. Medication.manufacturer
+     * is deliberately EXCLUDED — it is the drug company, always foreign.
+     */
+    private const OWNERSHIP_FIELDS = [
+        'Encounter'         => ['serviceProvider'],
+        'Composition'       => ['custodian'],
+        'DiagnosticReport'  => ['performer'],
+        'ServiceRequest'    => ['performer'],
+        'MedicationRequest' => [],
+        'MedicationDispense'=> [],
+        'Medication'        => [],
+        'Specimen'          => [],
+        'Observation'       => [],
+        'Immunization'      => [],
+        'Condition'         => [],
+        'CarePlan'          => [],
+        'EpisodeOfCare'     => [],
+        'AllergyIntolerance'=> [],
+        'ClinicalImpression'=> [],
+        'QuestionnaireResponse' => [],
+    ];
+
+    /**
+     * Pre-update ownership check.
+     *
+     * GETs the existing resource and compares the org-scoped references
+     * against this client's Organization ID. Returns an array describing the
+     * skip when the resource is demonstrably owned by ANOTHER organization;
+     * returns null when the resource is ours, has no org refs, or ownership
+     * cannot be determined (missing read scope etc. — the server decides).
+     */
+    private function checkEditOwnership(string $endpoint): ?array
+    {
+        $parts = explode('/', trim($endpoint, '/'));
+        $resourceType = $parts[0] ?? '';
+        $resourceId = $parts[1] ?? '';
+        if ($resourceType === '' || $resourceId === '') {
+            return null;
+        }
+        $fields = self::OWNERSHIP_FIELDS[$resourceType] ?? [];
+        if (empty($fields)) {
+            return null; // no reliable ownership field for this type
+        }
+
+        $result = $this->request('GET', '/' . $resourceType . '/' . $resourceId, null);
+        if (!$result['success']) {
+            if (($result['code'] ?? 0) === 404) {
+                return [
+                    'message'   => "SKIP: {$resourceType}/{$resourceId} tidak ditemukan di SATUSEHAT (404) — tidak ada yang bisa di-update.",
+                    'owner_org' => null,
+                ];
+            }
+            // read scope missing / transient — cannot verify, let the server decide
+            $this->log->warning("[UPDATE] {$endpoint}: ownership pre-check GET gagal ({$result['message']}) — lanjut tanpa pemeriksaan.");
+            return null;
+        }
+
+        $resource = $result['data'] ?? [];
+        if (!is_array($resource) || empty($resource)) {
+            return null;
+        }
+
+        $orgRefs = self::collectOrgRefs($resource);
+        if (empty($orgRefs)) {
+            return null;
+        }
+
+        $mine = trim((string) $this->orgId);
+        $mineFound = false;
+        $foreign = [];
+        foreach ($orgRefs as $ref) {
+            $refId = preg_replace('#^Organization/#', '', trim((string) $ref));
+            if ($refId === $mine) {
+                $mineFound = true;
+            } elseif ($refId !== '') {
+                $foreign[] = $refId;
+            }
+        }
+        // Our org appears anywhere in the ownership refs → the resource is
+        // ours (multi-org performers, e.g. hospital + external lab).
+        if ($mineFound) {
+            return null;
+        }
+        if (empty($foreign)) {
+            return null; // nothing to compare — the server decides
+        }
+        // Every org ref is foreign → owned by another fasyankes.
+        return [
+            'message'   => "SKIP: {$resourceType}/{$resourceId} dimiliki Organization {$foreign[0]} (bukan {$mine}). Resource milik fasyankes lain (rujukan / apotek luar / lab luar) tidak dapat diedit — kirim resource baru di bawah Encounter sendiri, atau periksa Organization ID di konfigurasi.",
+            'owner_org' => $foreign[0],
+        ];
+    }
+
+    /**
+     * Deep-collect "Organization/..." reference values (handles both
+     * {"reference": "Organization/x"} and nested {"actor": {...}} forms).
+     */
+    private static function collectOrgRefs(array $node, array &$refs = []): array
+    {
+        foreach ($node as $key => $value) {
+            if (is_array($value)) {
+                self::collectOrgRefs($value, $refs);
+            } elseif ($key === 'reference' && is_string($value) && str_starts_with($value, 'Organization/')) {
+                $refs[] = $value;
+            }
+        }
+        return $refs;
     }
 
     /**
@@ -374,66 +512,68 @@ class SatuSehatClient
             $payload = $this->convertPayloadDatesToUtc($payload);
         }
 
-        $maxAttempts = 3;
-        $baseDelaySeconds = 1.5;
-
-        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-            $ch = curl_init($url);
-            curl_setopt_array($ch, [
-                CURLOPT_CUSTOMREQUEST  => $method,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_TIMEOUT        => self::REQUEST_TIMEOUT,
-                CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
-                CURLOPT_SSL_VERIFYPEER => false,
-                CURLOPT_SSL_VERIFYHOST => 0,
-                CURLOPT_HTTPHEADER     => $headers,
-            ]);
-
-            if ($payload !== null) {
-                $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
-                curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-                if ($attempt === 1) {
-                    if ($this->verbosePayload) {
-                        $this->log->info("[API] {$method} {$url}");
-                        $this->log->info("[API] Request body:");
-                        foreach (explode("\n", $body) as $line) {
-                            $this->log->info("  " . $line);
-                        }
-                    } else {
-                        $this->log->debug("[API] {$method} {$url} | Body: " . substr($body, 0, 500));
-                    }
+        // Serialize the request body once (used by both transport modes).
+        $body = null;
+        if ($payload !== null) {
+            $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+            if ($this->verbosePayload) {
+                $this->log->info("[API] {$method} {$url}");
+                $this->log->info("[API] Request body:");
+                foreach (explode("\n", $body) as $line) {
+                    $this->log->info("  " . $line);
                 }
             } else {
-                if ($attempt === 1) {
-                    $msg = "[API] {$method} {$url}";
-                    if ($this->verbosePayload) {
-                        $this->log->info($msg);
-                    } else {
-                        $this->log->debug($msg);
-                    }
+                $this->log->debug("[API] {$method} {$url} | Body: " . substr($body, 0, 500));
+            }
+        } else {
+            $this->log->debug("[API] {$method} {$url}");
+        }
+
+        $maxAttempts = 3;
+        $baseDelaySeconds = 1.5;
+        $tokenRefreshed = false;
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            if ($this->transport !== null) {
+                [$response, $httpCode, $error] = ($this->transport)($url, $method, $headers, $body ?? null);
+            } else {
+                $ch = curl_init($url);
+                curl_setopt_array($ch, [
+                    CURLOPT_CUSTOMREQUEST  => $method,
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_TIMEOUT        => self::REQUEST_TIMEOUT,
+                    CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
+                    CURLOPT_SSL_VERIFYPEER => $this->verifyTls,
+                    CURLOPT_SSL_VERIFYHOST => $this->verifyTls ? 2 : 0,
+                    CURLOPT_HTTPHEADER     => $headers,
+                ]);
+
+                if ($body !== null) {
+                    curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
                 }
+
+                $response = curl_exec($ch);
+                $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $error    = curl_error($ch);
+                curl_close($ch);
             }
 
-            $response = curl_exec($ch);
-            $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $error    = curl_error($ch);
-            curl_close($ch);
-
-            // Determine if request failed due to transient issues
+            // ── Retry policy ──────────────────────────────────────────
+            // Only HTTP 429 is retried: the server definitively did NOT
+            // process the request. Timeouts, empty responses and 5xx are
+            // treated as UNCERTAIN — the server may have committed the
+            // request, so re-POSTing the identical bundle risks duplicates
+            // (rule 20002). Callers handle uncertain outcomes via
+            // idempotency/reconciliation instead.
             $isTransientError = false;
             $errorReason = '';
 
-            if ($error) {
-                $isTransientError = true;
-                $errorReason = "cURL error: {$error}";
-            } elseif ($httpCode === 429) {
+            if ($httpCode === 429) {
                 $isTransientError = true;
                 $errorReason = "HTTP 429 Too Many Requests (Rate Limited)";
-            } elseif ($httpCode >= 500 && $httpCode <= 599) {
-                $isTransientError = true;
-                $errorReason = "HTTP {$httpCode} Server Error";
-            } elseif ($response === false || $response === '') {
-                $isTransientError = true;
+            } elseif ($httpCode === 0 && $error !== '') {
+                $errorReason = "cURL error: {$error}";
+            } elseif ($httpCode === 0) {
                 $errorReason = "Empty response";
             }
 
@@ -441,21 +581,33 @@ class SatuSehatClient
                 // Calculate backoff time with jitter
                 $jitter = rand(100, 1000) / 1000; // 0.1 to 1.0s jitter
                 $delaySeconds = (pow(2, $attempt - 1) * $baseDelaySeconds) + $jitter;
-                
+
                 $this->log->warning("[API] Attempt {$attempt} failed ({$errorReason}). Retrying in " . round($delaySeconds, 2) . "s...");
                 usleep((int)($delaySeconds * 1000000));
                 continue;
             }
 
-            // Standard response processing
-            if ($error) {
-                $this->log->error("[API] cURL error: {$error} after {$attempt} attempts");
-                return ['success' => false, 'code' => 0, 'message' => "cURL error: {$error}", 'data' => []];
+            // ── 401 → refresh the cached token once and retry ─────────
+            // A token can be revoked between cache-write and use; without
+            // this the first request after revocation fails permanently.
+            if ($httpCode === 401 && !$tokenRefreshed) {
+                $tokenRefreshed = true;
+                @unlink($this->tokenCacheFile);
+                $freshToken = $this->getToken();
+                if ($freshToken !== null) {
+                    $this->log->warning("[API] HTTP 401 — token refreshed, retrying request once.");
+                    $headers = [
+                        'Authorization: Bearer ' . $freshToken,
+                        'Content-Type: ' . ($contentType ?? 'application/json'),
+                        'Accept: application/json'
+                    ];
+                    continue;
+                }
             }
 
-            if ($response === false || $response === '') {
-                $this->log->error("[API] Empty or invalid response from Satu Sehat (HTTP {$httpCode}) after {$attempt} attempts");
-                return ['success' => false, 'code' => $httpCode, 'message' => 'Empty or invalid response from API', 'data' => []];
+            if ($httpCode === 0) {
+                $this->log->error("[API] {$errorReason} after {$attempt} attempts");
+                return ['success' => false, 'code' => 0, 'message' => $errorReason === 'Empty response' ? 'Empty or invalid response from API' : $errorReason, 'data' => []];
             }
 
             $data = json_decode($response, true);
