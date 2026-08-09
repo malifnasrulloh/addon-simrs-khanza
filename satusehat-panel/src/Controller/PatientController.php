@@ -188,16 +188,46 @@ class PatientController
         $placeholders = implode(',', array_fill(0, count($noRawatList), '?'));
 
         $tables = [
-            'Encounter' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_encounter WHERE no_rawat IN ({$placeholders}) GROUP BY no_rawat",
-            'Condition' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_condition WHERE no_rawat IN ({$placeholders}) GROUP BY no_rawat",
-            'Procedure' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_procedure WHERE no_rawat IN ({$placeholders}) GROUP BY no_rawat",
+            'Encounter' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_encounter WHERE no_rawat IN ({$placeholders}) AND id_encounter NOT IN ('', '-') GROUP BY no_rawat",
+            'Condition' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_condition WHERE no_rawat IN ({$placeholders}) AND id_condition NOT IN ('', '-') GROUP BY no_rawat",
+            'Procedure' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_procedure WHERE no_rawat IN ({$placeholders}) AND id_procedure NOT IN ('', '-') GROUP BY no_rawat",
             'MedicationDispense' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_medicationdispense WHERE no_rawat IN ({$placeholders}) AND id_medicationdispanse NOT IN ('', '-') GROUP BY no_rawat",
-            'CarePlan' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_careplan WHERE no_rawat IN ({$placeholders}) GROUP BY no_rawat",
-            'ClinicalImpression' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_clinicalimpression WHERE no_rawat IN ({$placeholders}) GROUP BY no_rawat",
-            'Composition' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_composition WHERE no_rawat IN ({$placeholders}) GROUP BY no_rawat",
-            'AllergyIntolerance' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_allergy_intolerance WHERE no_rawat IN ({$placeholders}) GROUP BY no_rawat",
-            'Immunization' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_immunization WHERE no_rawat IN ({$placeholders}) GROUP BY no_rawat",
+            'CarePlan' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_careplan WHERE no_rawat IN ({$placeholders}) AND id_careplan NOT IN ('', '-') GROUP BY no_rawat",
+            'ClinicalImpression' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_clinicalimpression WHERE no_rawat IN ({$placeholders}) AND id_clinicalimpression NOT IN ('', '-') GROUP BY no_rawat",
+            'Composition' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_composition WHERE no_rawat IN ({$placeholders}) AND id_composition NOT IN ('', '-') GROUP BY no_rawat",
+            'AllergyIntolerance' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_allergy_intolerance WHERE no_rawat IN ({$placeholders}) AND id_allergy_intolerance NOT IN ('', '-') GROUP BY no_rawat",
+            'Immunization' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_immunization WHERE no_rawat IN ({$placeholders}) AND id_immunization NOT IN ('', '-') GROUP BY no_rawat",
+            'MedicationRequest' => "SELECT ro.no_rawat, COUNT(*) as cnt FROM resep_obat ro
+                INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                INNER JOIN satu_sehat_medicationrequest ssmr ON ssmr.no_resep = rd.no_resep AND ssmr.kode_brng = rd.kode_brng
+                WHERE ro.no_rawat IN ({$placeholders}) AND ssmr.id_medicationrequest NOT IN ('', '-') GROUP BY ro.no_rawat",
+            'MedicationStatement' => "SELECT ro.no_rawat, COUNT(*) as cnt FROM resep_obat ro
+                INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                INNER JOIN satu_sehat_medicationstatement ssms ON ssms.no_resep = rd.no_resep AND ssms.kode_brng = rd.kode_brng
+                WHERE ro.no_rawat IN ({$placeholders}) AND ssms.id_medicationstatement NOT IN ('', '-') GROUP BY ro.no_rawat",
+            'Medication' => "SELECT ro.no_rawat, COUNT(DISTINCT ssm.kode_brng) as cnt FROM resep_obat ro
+                INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = rd.kode_brng
+                WHERE ro.no_rawat IN ({$placeholders}) AND ssm.id_medication NOT IN ('', '-') GROUP BY ro.no_rawat",
+            'EpisodeOfCare' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_episode_of_care WHERE no_rawat IN ({$placeholders}) AND id_episode_of_care NOT IN ('', '-') GROUP BY no_rawat",
         ];
+
+        // Lab pipeline counts: per-type UNION over the pk/mb/rad variants,
+        // each joined to its order header so counts stay visit-scoped.
+        $labTables = [
+            'ServiceRequest' => ['satu_sehat_servicerequest_lab', 'satu_sehat_servicerequest_lab_mb', 'satu_sehat_servicerequest_radiologi', 'id_servicerequest'],
+            'Specimen' => ['satu_sehat_specimen_lab', 'satu_sehat_specimen_lab_mb', 'satu_sehat_specimen_radiologi', 'id_specimen'],
+            'Observation' => ['satu_sehat_observation_lab', 'satu_sehat_observation_lab_mb', 'satu_sehat_observation_radiologi', 'id_observation'],
+            'DiagnosticReport' => ['satu_sehat_diagnosticreport_lab', 'satu_sehat_diagnosticreport_lab_mb', 'satu_sehat_diagnosticreport_radiologi', 'id_diagnosticreport'],
+        ];
+        foreach ($labTables as $resType => [$tLab, $tMb, $tRad, $idCol]) {
+            $unions = [
+                "SELECT pl.no_rawat AS nr FROM permintaan_lab pl INNER JOIN {$tLab} ss ON ss.noorder = pl.noorder WHERE pl.no_rawat IN ({$placeholders}) AND ss.{$idCol} NOT IN ('', '-')",
+                "SELECT pl.no_rawat AS nr FROM permintaan_labmb pl INNER JOIN {$tMb} ss ON ss.noorder = pl.noorder WHERE pl.no_rawat IN ({$placeholders}) AND ss.{$idCol} NOT IN ('', '-')",
+                "SELECT pr.no_rawat AS nr FROM permintaan_radiologi pr INNER JOIN {$tRad} ss ON ss.noorder = pr.noorder WHERE pr.no_rawat IN ({$placeholders}) AND ss.{$idCol} NOT IN ('', '-')",
+            ];
+            $tables[$resType] = "SELECT nr, COUNT(*) as cnt FROM (" . implode(' UNION ALL ', $unions) . ") t GROUP BY nr";
+        }
 
         foreach ($tables as $resType => $sql) {
             try {
@@ -237,6 +267,25 @@ class PatientController
             }
         };
 
+        // Coverage check: a multi-instance type is only "sent" when EVERY
+        // source instance has a real SATUSEHAT id. Any rejected entry (the
+        // A1 bug) leaves the type partially sent and therefore re-sendable.
+        $allCovered = function (string $sourceSql, array $sourceParams, string $mappedSql, array $mappedParams) use ($db): bool {
+            try {
+                $src = $db->prepare($sourceSql);
+                $src->execute($sourceParams);
+                $nSrc = (int) $src->fetchColumn();
+                if ($nSrc <= 0) {
+                    return false;
+                }
+                $map = $db->prepare($mappedSql);
+                $map->execute($mappedParams);
+                return ((int) $map->fetchColumn()) >= $nSrc;
+            } catch (\Throwable $e) {
+                return false;
+            }
+        };
+
         // 1. Encounter — always exists for a registration
         $manifest[] = [
             'type' => 'Encounter',
@@ -244,18 +293,33 @@ class PatientController
             'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_encounter WHERE no_rawat = ?", [$noRawat]),
         ];
 
-        // 2. Condition — from diagnosa_pasien
+        // 2. Condition — diagnoses + chief complaints (keluhan utama). Sent only
+        //    when ALL instances of the visit carry a real id.
         $manifest[] = [
             'type' => 'Condition',
-            'available' => $hasData("SELECT COUNT(*) FROM diagnosa_pasien WHERE no_rawat = ?", [$noRawat]),
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_condition WHERE no_rawat = ?", [$noRawat]),
+            'available' => $hasData("SELECT COUNT(*) FROM diagnosa_pasien WHERE no_rawat = ?", [$noRawat])
+                || $hasData("SELECT COUNT(*) FROM pemeriksaan_ralan WHERE no_rawat = ? AND keluhan IS NOT NULL AND keluhan != ''", [$noRawat])
+                || $hasData("SELECT COUNT(*) FROM pemeriksaan_ranap WHERE no_rawat = ? AND keluhan IS NOT NULL AND keluhan != ''", [$noRawat]),
+            'sent' => $allCovered(
+                "SELECT (SELECT COUNT(*) FROM diagnosa_pasien WHERE no_rawat = ?)
+                     + (SELECT COUNT(*) FROM pemeriksaan_ralan WHERE no_rawat = ? AND keluhan IS NOT NULL AND keluhan != '')
+                     + (SELECT COUNT(*) FROM pemeriksaan_ranap WHERE no_rawat = ? AND keluhan IS NOT NULL AND keluhan != '')",
+                [$noRawat, $noRawat, $noRawat],
+                "SELECT COUNT(*) FROM satu_sehat_condition WHERE no_rawat = ? AND id_condition NOT IN ('', '-')",
+                [$noRawat]
+            ),
         ];
 
-        // 3. Procedure — from prosedur_pasien + icd9 (CLI source)
+        // 3. Procedure — from prosedur_pasien + icd9 (CLI source). All-or-nothing.
         $manifest[] = [
             'type' => 'Procedure',
             'available' => $hasData("SELECT COUNT(*) FROM prosedur_pasien WHERE no_rawat = ?", [$noRawat]),
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_procedure WHERE no_rawat = ?", [$noRawat]),
+            'sent' => $allCovered(
+                "SELECT COUNT(*) FROM prosedur_pasien WHERE no_rawat = ?",
+                [$noRawat],
+                "SELECT COUNT(*) FROM satu_sehat_procedure WHERE no_rawat = ? AND id_procedure NOT IN ('', '-')",
+                [$noRawat]
+            ),
         ];
 
         // 4. AllergyIntolerance — from pemeriksaan_ralan/ranap.alergi (CLI source,
@@ -277,12 +341,16 @@ class PatientController
         $manifest[] = [
             'type' => 'MedicationRequest',
             'available' => $hasMeds,
-            'sent' => $hasData("
-                SELECT COUNT(*) FROM resep_obat ro
-                INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
-                INNER JOIN satu_sehat_medicationrequest ssmr
-                    ON ssmr.no_resep = rd.no_resep AND ssmr.kode_brng = rd.kode_brng
-                WHERE ro.no_rawat = ? AND ssmr.id_medicationrequest NOT IN ('', '-')", [$noRawat]),
+            'sent' => $allCovered(
+                "SELECT COUNT(*) FROM resep_obat ro INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep WHERE ro.no_rawat = ?",
+                [$noRawat],
+                "SELECT COUNT(*) FROM resep_obat ro
+                 INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                 INNER JOIN satu_sehat_medicationrequest ssmr
+                     ON ssmr.no_resep = rd.no_resep AND ssmr.kode_brng = rd.kode_brng
+                 WHERE ro.no_rawat = ? AND ssmr.id_medicationrequest NOT IN ('', '-')",
+                [$noRawat]
+            ),
         ];
         $manifest[] = [
             'type' => 'MedicationDispense',
@@ -292,12 +360,16 @@ class PatientController
         $manifest[] = [
             'type' => 'MedicationStatement',
             'available' => $hasMeds,
-            'sent' => $hasData("
-                SELECT COUNT(*) FROM resep_obat ro
-                INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
-                INNER JOIN satu_sehat_medicationstatement ssms
-                    ON ssms.no_resep = rd.no_resep AND ssms.kode_brng = rd.kode_brng
-                WHERE ro.no_rawat = ? AND ssms.id_medicationstatement NOT IN ('', '-')", [$noRawat]),
+            'sent' => $allCovered(
+                "SELECT COUNT(*) FROM resep_obat ro INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep WHERE ro.no_rawat = ?",
+                [$noRawat],
+                "SELECT COUNT(*) FROM resep_obat ro
+                 INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+                 INNER JOIN satu_sehat_medicationstatement ssms
+                     ON ssms.no_resep = rd.no_resep AND ssms.kode_brng = rd.kode_brng
+                 WHERE ro.no_rawat = ? AND ssms.id_medicationstatement NOT IN ('', '-')",
+                [$noRawat]
+            ),
         ];
 
         // 6. CarePlan — from pemeriksaan_ralan/ranap.rtl (CLI source; nota_jalan
@@ -326,69 +398,75 @@ class PatientController
         $hasLabMb = $hasData("SELECT COUNT(*) FROM permintaan_labmb WHERE no_rawat = ?", [$noRawat]);
         $hasRad  = $hasData("SELECT COUNT(*) FROM permintaan_radiologi WHERE no_rawat = ?", [$noRawat]);
 
+        // Lab coverage per variant: source request-detail pairs vs mapped
+        // rows with real ids. All variants with data must be fully covered.
+        $labSource = [
+            'pk'  => "SELECT COUNT(*) FROM permintaan_lab pl INNER JOIN permintaan_detail_permintaan_lab dl ON dl.noorder = pl.noorder WHERE pl.no_rawat = ?",
+            'mb'  => "SELECT COUNT(*) FROM permintaan_labmb pl INNER JOIN permintaan_detail_permintaan_labmb dl ON dl.noorder = pl.noorder WHERE pl.no_rawat = ?",
+            'rad' => "SELECT COUNT(*) FROM permintaan_radiologi pr INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder WHERE pr.no_rawat = ?",
+        ];
+        $labMapped = [
+            'pk'  => "SELECT COUNT(*) FROM permintaan_lab pl INNER JOIN permintaan_detail_permintaan_lab dl ON dl.noorder = pl.noorder INNER JOIN {table} ss ON ss.noorder = dl.noorder WHERE pl.no_rawat = ? AND ss.{idCol} NOT IN ('', '-')",
+            'mb'  => "SELECT COUNT(*) FROM permintaan_labmb pl INNER JOIN permintaan_detail_permintaan_labmb dl ON dl.noorder = pl.noorder INNER JOIN {table} ss ON ss.noorder = dl.noorder WHERE pl.no_rawat = ? AND ss.{idCol} NOT IN ('', '-')",
+            'rad' => "SELECT COUNT(*) FROM permintaan_radiologi pr INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder INNER JOIN {table} ss ON ss.noorder = ppr.noorder WHERE pr.no_rawat = ? AND ss.{idCol} NOT IN ('', '-')",
+        ];
+        $allLabCovered = function (array $tables, string $idCol) use ($db, $labSource, $labMapped, $noRawat): bool {
+            try {
+                foreach ($labSource as $variant => $sql) {
+                    $src = $db->prepare($sql);
+                    $src->execute([$noRawat]);
+                    $nSrc = (int) $src->fetchColumn();
+                    if ($nSrc <= 0) {
+                        continue;
+                    }
+                    $mapSql = str_replace(['{table}', '{idCol}'], [$tables[$variant], $idCol], $labMapped[$variant]);
+                    $map = $db->prepare($mapSql);
+                    $map->execute([$noRawat]);
+                    if (((int) $map->fetchColumn()) < $nSrc) {
+                        return false;
+                    }
+                }
+                return true;
+            } catch (\Throwable $e) {
+                return false;
+            }
+        };
+
         $manifest[] = [
             'type' => 'ServiceRequest',
             'available' => $hasLabPk || $hasLabMb || $hasRad,
-            'sent' => $hasData("
-                SELECT 1 FROM permintaan_lab pl
-                INNER JOIN satu_sehat_servicerequest_lab sssr ON sssr.noorder = pl.noorder
-                WHERE pl.no_rawat = ? AND sssr.id_servicerequest NOT IN ('', '-')", [$noRawat])
-                || $hasData("
-                SELECT 1 FROM permintaan_labmb pl
-                INNER JOIN satu_sehat_servicerequest_lab_mb sssr ON sssr.noorder = pl.noorder
-                WHERE pl.no_rawat = ? AND sssr.id_servicerequest NOT IN ('', '-')", [$noRawat])
-                || $hasData("
-                SELECT 1 FROM permintaan_radiologi pl
-                INNER JOIN satu_sehat_servicerequest_radiologi sssr ON sssr.noorder = pl.noorder
-                WHERE pl.no_rawat = ? AND sssr.id_servicerequest NOT IN ('', '-')", [$noRawat]),
+            'sent' => $allLabCovered([
+                'pk' => 'satu_sehat_servicerequest_lab',
+                'mb' => 'satu_sehat_servicerequest_lab_mb',
+                'rad' => 'satu_sehat_servicerequest_radiologi',
+            ], 'id_servicerequest'),
         ];
         $manifest[] = [
             'type' => 'Specimen',
             'available' => $hasLabPk || $hasLabMb || $hasRad,
-            'sent' => $hasData("
-                SELECT 1 FROM permintaan_lab pl
-                INNER JOIN satu_sehat_specimen_lab sssp ON sssp.noorder = pl.noorder
-                WHERE pl.no_rawat = ? AND sssp.id_specimen NOT IN ('', '-')", [$noRawat])
-                || $hasData("
-                SELECT 1 FROM permintaan_labmb pl
-                INNER JOIN satu_sehat_specimen_lab_mb sssp ON sssp.noorder = pl.noorder
-                WHERE pl.no_rawat = ? AND sssp.id_specimen NOT IN ('', '-')", [$noRawat])
-                || $hasData("
-                SELECT 1 FROM permintaan_radiologi pl
-                INNER JOIN satu_sehat_specimen_radiologi sssp ON sssp.noorder = pl.noorder
-                WHERE pl.no_rawat = ? AND sssp.id_specimen NOT IN ('', '-')", [$noRawat]),
+            'sent' => $allLabCovered([
+                'pk' => 'satu_sehat_specimen_lab',
+                'mb' => 'satu_sehat_specimen_lab_mb',
+                'rad' => 'satu_sehat_specimen_radiologi',
+            ], 'id_specimen'),
         ];
         $manifest[] = [
             'type' => 'Observation',
             'available' => $hasLabPk || $hasLabMb || $hasRad,
-            'sent' => $hasData("
-                SELECT 1 FROM permintaan_lab pl
-                INNER JOIN satu_sehat_observation_lab sso ON sso.noorder = pl.noorder
-                WHERE pl.no_rawat = ? AND sso.id_observation NOT IN ('', '-')", [$noRawat])
-                || $hasData("
-                SELECT 1 FROM permintaan_labmb pl
-                INNER JOIN satu_sehat_observation_lab_mb sso ON sso.noorder = pl.noorder
-                WHERE pl.no_rawat = ? AND sso.id_observation NOT IN ('', '-')", [$noRawat])
-                || $hasData("
-                SELECT 1 FROM permintaan_radiologi pl
-                INNER JOIN satu_sehat_observation_radiologi sso ON sso.noorder = pl.noorder
-                WHERE pl.no_rawat = ? AND sso.id_observation NOT IN ('', '-')", [$noRawat]),
+            'sent' => $allLabCovered([
+                'pk' => 'satu_sehat_observation_lab',
+                'mb' => 'satu_sehat_observation_lab_mb',
+                'rad' => 'satu_sehat_observation_radiologi',
+            ], 'id_observation'),
         ];
         $manifest[] = [
             'type' => 'DiagnosticReport',
             'available' => $hasLabPk || $hasLabMb || $hasRad,
-            'sent' => $hasData("
-                SELECT 1 FROM permintaan_lab pl
-                INNER JOIN satu_sehat_diagnosticreport_lab ssdr ON ssdr.noorder = pl.noorder
-                WHERE pl.no_rawat = ? AND ssdr.id_diagnosticreport NOT IN ('', '-')", [$noRawat])
-                || $hasData("
-                SELECT 1 FROM permintaan_labmb pl
-                INNER JOIN satu_sehat_diagnosticreport_lab_mb ssdr ON ssdr.noorder = pl.noorder
-                WHERE pl.no_rawat = ? AND ssdr.id_diagnosticreport NOT IN ('', '-')", [$noRawat])
-                || $hasData("
-                SELECT 1 FROM permintaan_radiologi pl
-                INNER JOIN satu_sehat_diagnosticreport_radiologi ssdr ON ssdr.noorder = pl.noorder
-                WHERE pl.no_rawat = ? AND ssdr.id_diagnosticreport NOT IN ('', '-')", [$noRawat]),
+            'sent' => $allLabCovered([
+                'pk' => 'satu_sehat_diagnosticreport_lab',
+                'mb' => 'satu_sehat_diagnosticreport_lab_mb',
+                'rad' => 'satu_sehat_diagnosticreport_radiologi',
+            ], 'id_diagnosticreport'),
         ];
 
         // 9. Medication — keyed by kode_brng (KFA lookup). sent iff a drug on
@@ -434,12 +512,9 @@ class PatientController
                 WHERE ro.no_rawat = ? AND ssqr.id_questionresponse NOT IN ('', '-')", [$noRawat]),
         ];
 
-        // 13. Patient — available if pasien has valid NIK and IHS not mapped yet
-        $manifest[] = [
-            'type' => 'Patient',
-            'available' => $hasData("SELECT COUNT(*) FROM pasien WHERE no_rkm_medis = ? AND no_ktp REGEXP '^[0-9]{16}$'", [$patient['no_rkm_medis']]),
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_ihs_patient WHERE nikpasien = ? AND ihspasien NOT IN ('', '-')", [$patient['no_ktp']]),
-        ];
+        // 13. Patient — REMOVED (the old entry was a metadata stub, not a FHIR
+        // resource, and silently dropped at send). Patients are registered
+        // via the CLI / SATUSEHAT portal; the panel only looks up IHS ids.
 
         // 14. EpisodeOfCare — requires diagnosis + Encounter + Condition.
         // sent = a row exists with a real id (the CLI stores raw status
