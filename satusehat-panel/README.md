@@ -123,4 +123,97 @@ satusehat-panel/
 | GET | `/api/patients/{noRawat}` | Detail pasien + manifest resource |
 | GET | `/api/patients/{noRawat}/resources/{resource}` | Preview payload FHIR |
 | POST | `/api/patients/{noRawat}/send` | Kirim Bundle transaction |
-| GET | `/api/audit` | Audit log pengiriman |
+| GET | `/api/audit` | Audit log pengiriman (filter + pagination) |
+| GET | `/api/audit/{id}` | Detail audit + outcome per entri + pesan rule |
+| GET | `/api/audit/stats` | Statistik: tingkat sukses harian + top rule error |
+| GET | `/api/audit/export` | Export CSV sesuai filter aktif |
+| GET | `/api/settings` · POST `/api/settings` | Kredensial SATUSEHAT |
+
+## Pengembangan (Composer + PHPUnit)
+
+```bash
+composer install          # PHP >= 8.1
+composer test             # PHPUnit 9.x — 70+ tes payload/outcome/idempotensi
+bash scripts/ci.sh        # lint + sync check + suite (gate CI)
+```
+
+### Sinkronisasi library bersama (`scripts/sync-lib.php`)
+
+`php-service/lib/satusehat/` adalah **sumber kebenaran** untuk
+`PayloadBuilder`, `SatuSehatClient`, dictionary, `DateTimeUtil`, `NumberUtil`,
+`Logger`. Panel TIDAK fork kode itu:
+
+```bash
+php scripts/sync-lib.php --verify    # gagal (exit 1) jika ada drift
+php scripts/sync-lib.php --dry-run   # laporan perubahan
+php scripts/sync-lib.php --apply     # salin dari php-service + update manifest
+```
+
+Setelah perbaikan payload di php-service: perbaiki di sana dulu, lalu `--apply`.
+
+## Lingkungan SATUSEHAT (dev / sandbox / production)
+
+URL host API dipusatkan di `config/satusehat_environments.php` — satu-satunya
+tempat definisi. `.env.example` default ke **sandbox**; produksi dipilih lewat
+UI Pengaturan (environment) atau `SATUSEHAT_ENVIRONMENT=production` di `.env`.
+
+## Kamus Rule Number (pesan error resmi)
+
+`config/rule_numbers.php` berisi 558 deskripsi error resmi Kemenkes
+(Indonesian). Dibangkitkan dari CSV resmi:
+
+```bash
+php scripts/import-rule-numbers.php \
+  --source="/path/to/[PUBLISHED] Dokumen Kamus Rule Number (Error Code) - V2.0.csv"
+```
+
+Tampil otomatis di detail audit (kolom "Keterangan") dan statistik top-rules.
+
+## Keamanan
+
+- Semua `POST` (kecuali login) wajib token CSRF (header `X-CSRF-Token`).
+- Login: 5 percobaan gagal / 15 menit per IP+username (429 + Retry-After);
+  sesi idle otomatis logout (`PANEL_SESSION_TTL`, default 1800 dtk).
+- Kredensial di `config/satusehat_credential.json` (tidak di-track git,
+  ditulis atomik, mode 0600). **Rotasi client secret di SATUSEHAT portal jika
+  file itu pernah berisi nilai nyata di riwayat git lama.**
+- `SATUSEHAT_VERIFY_TLS=true` (default) — verifikasi TLS aktif. Set `false`
+  hanya jika proxy internal memakai CA privat.
+- PHI: NIK di-scrub dari log dan payload audit (key:value, `nik|` pipe form,
+  dan deret 16 digit); audit dipangkas otomatis (`AUDIT_RETENTION_DAYS`, 90).
+
+## Troubleshooting
+
+| Gejala | Penyebab umum | Solusi |
+|---|---|---|
+| `IHS ID Pasien tidak ditemukan` | NIK belum terdaftar di SATUSEHAT | Daftarkan pasien via CLI / portal; panel tidak membuat Patient |
+| Rule `20002` duplikat | Kirim ulang bundle yang sudah ter-proses | Panel memblokir otomatis via idempotency; cek audit & verifikasi manual |
+| Timeout / 5xx → "verifikasi manual" | Hasil kirim tidak pasti (server mungkin sudah memproses) | Panel TIDAK auto re-POST; cek audit → verifikasi → kirim lagi |
+| `Sebagian gagal` (partial) | Satu/lebih entri bundle ditolak server | Buka detail audit — entri yang gagal tetap bisa dikirim ulang |
+| `MedicationDispense ... dilewati` | MedicationRequest belum terkirim | Kirim MedicationRequest dulu (dispen butuh authorizing prescription) |
+| `ImagingStudy belum terkirim — dilewati` | Pemeriksaan radiologi belum sinkron | Jalankan CLI ImagingStudy / kirim via CLI pipeline |
+| `You don't have permission to edit resource` | Resource milik fasyankes lain (rujukan/apotek luar/lab luar), atau Organization ID tidak cocok dengan pembuat resource | CLI kini pre-check kepemilikan: resource asing di-SKIP dengan pesan jelas (`ownership_skip` di log) sebelum PUT; resource milik sendiri tetap di-update. Cek Organization ID di konfigurasi vs `serviceProvider`/`custodian`/`performer` resource |
+| Login terkunci | >5 percobaan gagal dalam 15 menit | Tunggu window; sesi lama dihapus otomatis |
+
+## Struktur
+
+```
+satusehat-panel/
+├── index.php          # Drop-in entry (shell + API via ?r=/api/...)
+├── .htaccess          # Apache: block config/src/storage/.env
+├── public/
+│   ├── index.php      # Front controller (API routes, docroot mode)
+│   ├── index.html     # SPA shell (hanya markup awal; konten dirender app.js)
+│   ├── router.php     # Dev server router
+│   ├── css/           # tokens.css · base.css · layout.css (v2, tanpa app.css)
+│   ├── fonts/         # Geist + Geist Mono (OFL), offline-safe
+│   └── js/app.js      # Logika SPA (routing, render, tema, a11y, palette)
+├── src/
+│   ├── Core/          # Router, Config, Database (SQLite + MySQL), ErrorHandler, Auth
+│   ├── Controller/    # Patient, Resource, Send, Audit, Settings, AuthController
+│   └── Util/          # Adopted CLI logic + panel logic (PayloadBuilder, ReferenceRegistry,
+│                      #   IdempotencyStore, EntryOutcomeClassifier, RuleNumberResolver, dll.)
+├── config/            # app.php, database.php, satusehat_environments.php, rule_numbers.php
+├── scripts/           # sync-lib.php · extract-fixtures.php · import-rule-numbers.php · ci.sh
+└── .env               # Kredensial (self-contained, tidak referensi luar)
+```

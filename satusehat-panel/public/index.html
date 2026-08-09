@@ -258,13 +258,33 @@
                             <select id="audit-status" class="input">
                                 <option value="all">Semua</option>
                                 <option value="success">Berhasil</option>
+                                <option value="partial">Sebagian gagal</option>
                                 <option value="failed">Gagal</option>
                             </select>
                         </div>
+                        <div class="field audit-rule-field">
+                            <label class="field-label" for="audit-rule">Rule No.</label>
+                            <input type="text" id="audit-rule" class="input" inputmode="numeric" placeholder="contoh: 20002" aria-label="Filter berdasarkan rule number">
+                        </div>
+                        <button class="btn btn-ghost btn-sm" id="btn-audit-export" type="button" title="Unduh CSV sesuai filter">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+                            Export CSV
+                        </button>
+                    </div>
+                    <div class="audit-stats-row" aria-label="Statistik audit">
+                        <div class="audit-stat"><span class="a-k">Total kirim</span><span class="a-v" id="audit-stat-total">-</span></div>
+                        <div class="audit-stat success"><span class="a-k">Berhasil</span><span class="a-v" id="audit-stat-ok">-</span></div>
+                        <div class="audit-stat"><span class="a-k">Tingkat sukses</span><span class="a-v" id="audit-stat-rate">-</span></div>
+                        <div class="audit-top-rules" id="audit-top-rules"></div>
                     </div>
                     <div class="audit-summary" id="audit-summary" hidden aria-label="Ringkasan audit"></div>
                     <div id="audit-list" class="audit-list">
                         <div class="empty-state">Memuat audit log...</div>
+                    </div>
+                    <div class="audit-pager" aria-label="Navigasi halaman audit">
+                        <button class="btn btn-ghost btn-sm" id="audit-prev" type="button">&larr; Sebelumnya</button>
+                        <span id="audit-page-info" class="small muted"></span>
+                        <button class="btn btn-ghost btn-sm" id="audit-next" type="button">Berikutnya &rarr;</button>
                     </div>
                 </div>
 
@@ -375,6 +395,7 @@
                 <button class="btn btn-ghost btn-sm" id="modal-format" type="button">Format JSON</button>
                 <span class="editor-status" id="editor-status"></span>
             </div>
+            <div id="audit-entries" class="audit-entries-box" hidden></div>
             <textarea id="payload-editor" class="editor" spellcheck="false" aria-label="Payload JSON"></textarea>
         </div>
         <footer class="modal-foot">
@@ -401,6 +422,7 @@
         <footer class="modal-foot batch-foot">
             <span id="batch-progress-text" class="muted small" role="status"></span>
             <span id="batch-foot-error" class="batch-foot-error" role="alert"></span>
+            <button class="btn btn-primary" id="batch-retry" type="button" hidden>Ulangi yang gagal</button>
             <button class="btn btn-ghost" id="batch-cancel" type="button">Batalkan</button>
         </footer>
     </div>

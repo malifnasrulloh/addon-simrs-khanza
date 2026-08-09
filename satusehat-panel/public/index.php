@@ -15,29 +15,41 @@ define('PANEL_SRC', PANEL_BASE . '/src');
 require_once PANEL_BASE . '/config/base_path.php';
 define('PANEL_BASE_PATH', panel_base_path());
 
-// ── Simple PSR-4 autoloader (namespaced panel classes) ─────────────
-spl_autoload_register(function (string $class): void {
-    if (!str_starts_with($class, 'SatusehatPanel\\')) {
-        return;
-    }
-    $relative = str_replace('\\', '/', substr($class, strlen('SatusehatPanel\\')));
-    $file = PANEL_SRC . '/' . $relative . '.php';
-    if (file_exists($file)) {
-        require_once $file;
-    }
-});
+// ── Autoloader ─────────────────────────────────────────────────────
+// Prefer composer (dev/CI: vendor/autoload.php); fall back to the legacy
+// loader so drop-in deployments without vendor/ keep working unchanged.
+if (is_file(PANEL_BASE . '/vendor/autoload.php')) {
+    require_once PANEL_BASE . '/vendor/autoload.php';
+} else {
+    spl_autoload_register(function (string $class): void {
+        if (!str_starts_with($class, 'SatusehatPanel\\')) {
+            return;
+        }
+        $relative = str_replace('\\', '/', substr($class, strlen('SatusehatPanel\\')));
+        $file = PANEL_SRC . '/' . $relative . '.php';
+        if (file_exists($file)) {
+            require_once $file;
+        }
+    });
 
-// ── Adopted SATUSEHAT logic (global namespace, kept as-is) ─────────
-require_once PANEL_SRC . '/Util/SatuSehatClient.php';
-require_once PANEL_SRC . '/Util/PayloadBuilder.php';
-require_once PANEL_SRC . '/Util/AllergyDictionary.php';
-require_once PANEL_SRC . '/Util/ObservationTTVDictionary.php';
-require_once PANEL_SRC . '/Util/EpisodeOfCareType.php';
-require_once PANEL_SRC . '/Util/Logger.php';
-require_once PANEL_SRC . '/Util/CredentialLocator.php';
+    // ── Adopted SATUSEHAT logic (global namespace, kept as-is) ─────────
+    require_once PANEL_SRC . '/Util/SatuSehatClient.php';
+    require_once PANEL_SRC . '/Util/PayloadBuilder.php';
+    require_once PANEL_SRC . '/Util/AllergyDictionary.php';
+    require_once PANEL_SRC . '/Util/ObservationTTVDictionary.php';
+    require_once PANEL_SRC . '/Util/EpisodeOfCareType.php';
+    require_once PANEL_SRC . '/Util/Logger.php';
+    require_once PANEL_SRC . '/Util/CredentialLocator.php';
+    require_once PANEL_SRC . '/Util/SatuSehatConfig.php';
+    require_once PANEL_SRC . '/Util/DateTimeUtil.php';
+    require_once PANEL_SRC . '/Util/NumberUtil.php';
+}
 
 use SatusehatPanel\Core\Router;
 use SatusehatPanel\Core\Auth;
+use SatusehatPanel\Core\ErrorHandler;
+
+ErrorHandler::register();
 
 // ── Auth: session start + protect all /api/* except auth endpoints ──
 Auth::start();
@@ -134,6 +146,12 @@ $router->add('GET', '/api/patients/{noRawat:any}', function (array $params) {
 // API: audit log
 $router->add('GET', '/api/audit/{id}', function (array $params) {
     return SatusehatPanel\Controller\AuditController::detail((int) $params['id']);
+});
+$router->add('GET', '/api/audit/stats', function () {
+    return SatusehatPanel\Controller\AuditController::stats();
+});
+$router->add('GET', '/api/audit/export', function () {
+    return SatusehatPanel\Controller\AuditController::export();
 });
 $router->add('GET', '/api/audit', function () {
     return SatusehatPanel\Controller\AuditController::list();

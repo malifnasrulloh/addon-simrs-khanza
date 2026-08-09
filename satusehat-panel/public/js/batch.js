@@ -29,6 +29,19 @@ export function initBatchView() {
     $('batch-backdrop').addEventListener('click', (e) => {
         if (e.target.id === 'batch-backdrop' && !batch.running) hideBatchModal();
     });
+    $('batch-retry').addEventListener('click', () => {
+        if (batch.running) return;
+        const failed = batch.queue.filter(item => (batch.results[item.noRawat]?.status) === 'fail');
+        if (!failed.length) return;
+        batch.queue = failed;
+        batch.results = {};
+        batch.canceled = false;
+        batch.running = true;
+        state.batchRunning = true;
+        $('batch-retry').hidden = true;
+        $('batch-subtitle').textContent = `${failed.length} pasien gagal — dicoba ulang`;
+        runBatch();
+    });
 }
 
 function openBatchModal() {
@@ -46,6 +59,7 @@ function openBatchModal() {
     $('batch-subtitle').textContent = `${batch.queue.length} pasien dipilih - dikirim berurutan`;
     $('batch-progress-text').textContent = 'Menunggu mulai...';
     $('batch-foot-error').textContent = '';
+    if ($('batch-retry')) $('batch-retry').hidden = true;
     $('batch-cancel').disabled = false;
     $('batch-cancel').textContent = 'Batalkan';
     $('batch-modal').hidden = false;
@@ -61,6 +75,8 @@ async function runBatch() {
         const item = batch.queue[i];
         batch.results[item.noRawat] = { status: 'sending' };
         renderBatchList();
+        // Inter-request delay: avoid hammering SATUSEHAT during a run.
+        if (i > 0) await sleep(500);
         try {
             // Fetch patient detail to get accurate available/sent resource list
             const raw = item.noRawat.replace(/\//g, '%2F');
@@ -97,6 +113,8 @@ async function runBatch() {
     const finished = values.filter(r => r.status === 'ok').length;
     const failed = values.filter(r => r.status === 'fail').length;
     const skipped = values.filter(r => r.status === 'skip').length;
+    const retry = $('batch-retry');
+    if (retry) retry.hidden = failed === 0;
     const seg = [`${finished} berhasil`, `${failed} gagal`];
     if (skipped) seg.push(`${skipped} dilewati`);
     $('batch-progress-text').textContent = `${batch.canceled ? 'Dibatalkan' : 'Selesai'}: ${seg.join(', ')}`;
@@ -106,6 +124,10 @@ async function runBatch() {
     state.batchRunning = false;
     updateBatchBar();
     bus.emit('patients:reload');
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function renderBatchList() {

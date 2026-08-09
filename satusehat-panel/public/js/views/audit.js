@@ -1,28 +1,42 @@
 /* ============================================================
-   Audit view - send history timeline + summary + date filter
+   Audit view v2 - filters, pagination, stats, per-entry detail
    ============================================================ */
 
 'use strict';
 
-import { api } from '../api.js';
+import { api, base } from '../api.js';
 import { $, escapeHtml, debounce, emptyStateHtml } from '../ui.js';
 import { state, dayLabel, timeLabel } from '../state.js';
 
-const auditReload = debounce(loadAudit, 300);
+const auditReload = debounce(() => { state.auditPage = 1; loadAudit(); }, 300);
+const auditPageReload = debounce(loadAudit, 150);
 
 export function initAuditView() {
     $('btn-audit').addEventListener('click', (e) => { e.preventDefault(); location.hash = '#/audit'; });
     $('btn-audit-back').addEventListener('click', () => { location.hash = '#/'; });
     $('audit-since').addEventListener('input', auditReload);
     $('audit-until').addEventListener('input', auditReload);
-    $('audit-status').addEventListener('change', renderTimeline);
+    $('audit-status').addEventListener('change', auditReload);
+    $('audit-rule').addEventListener('input', auditReload);
+    $('audit-prev').addEventListener('click', () => { if (state.auditPage > 1) { state.auditPage--; auditPageReload(); } });
+    $('audit-next').addEventListener('click', () => { if (state.auditPage < (state.auditPages || 1)) { state.auditPage++; auditPageReload(); } });
+    $('btn-audit-export').addEventListener('click', () => {
+        const qs = new URLSearchParams();
+        const since = $('audit-since').value, until = $('audit-until').value, status = $('audit-status').value;
+        if (since) qs.set('since', since);
+        if (until) qs.set('until', until);
+        if (status && status !== 'all') qs.set('status', status);
+        window.location.href = base('/api/audit/export') + '&' + qs.toString();
+    });
 }
 
 export function showAuditView() {
     $('table-wrap').hidden = true;
     $('audit-view').hidden = false;
     $('settings-view').hidden = true;
+    state.auditPage = state.auditPage || 1;
     loadAudit();
+    loadAuditStats();
 }
 
 export async function loadAudit() {
@@ -30,15 +44,22 @@ export async function loadAudit() {
     list.innerHTML = '<div class="empty-state">Memuat audit log...</div>';
     $('audit-summary').hidden = true;
 
-    const qs = new URLSearchParams({ limit: '500' });
+    const qs = new URLSearchParams({ page: String(state.auditPage || 1), per_page: '25' });
     const since = $('audit-since').value;
     const until = $('audit-until').value;
+    const status = $('audit-status').value;
+    const rule = $('audit-rule').value.trim();
     if (since) qs.set('since', since);
     if (until) qs.set('until', until);
+    if (status && status !== 'all') qs.set('status', status);
+    if (/^\d{4,6}$/.test(rule)) qs.set('rule_number', rule);
 
     try {
         const data = await api(`/api/audit?${qs}`);
         state.audit = data.data || [];
+        state.auditPages = data.meta?.pages || 1;
+        state.auditTotal = data.meta?.total || 0;
+        renderPager();
         if (!state.audit.length) {
             list.innerHTML = emptyStateHtml({
                 iconName: 'clock',
@@ -47,7 +68,7 @@ export async function loadAudit() {
             });
             return;
         }
-        renderSummary();
+        renderSummary(state.audit.length);
         renderTimeline();
     } catch (e) {
         list.innerHTML = emptyStateHtml({
@@ -61,31 +82,55 @@ export async function loadAudit() {
     }
 }
 
-function renderSummary() {
-    const total = state.audit.length;
-    const ok = state.audit.filter(l => l.status === 'success').length;
+async function loadAuditStats() {
+    try {
+        const res = await api('/api/audit/stats');
+        if (!res.data) return;
+        const t = res.data.totals || {};
+        $('audit-stat-total').textContent = String(t.audits ?? '-');
+        $('audit-stat-ok').textContent = String(t.success ?? '-');
+        $('audit-stat-rate').textContent = t.success_rate === null || t.success_rate === undefined ? '-' : `${t.success_rate}%`;
+
+        const rules = res.data.top_rules || [];
+        const box = $('audit-top-rules');
+        if (box) {
+            box.innerHTML = rules.length
+                ? rules.slice(0, 6).map(r => `
+                    <div class="audit-rule-row" title="${escapeHtml(r.message || '')}">
+                        <span class="mono">${r.rule_number}</span>
+                        <span class="small muted">× ${r.count}</span>
+                        <span class="small rule-text">${escapeHtml((r.message || '').slice(0, 60))}</span>
+                    </div>`).join('')
+                : '<span class="small muted">Tidak ada kegagalan rule terbaru.</span>';
+        }
+    } catch (e) { /* stats optional */ }
+}
+
+function renderPager() {
+    const page = state.auditPage || 1, pages = state.auditPages || 1;
+    $('audit-page-info').textContent = `Halaman ${page} dari ${pages} (${state.auditTotal || 0} log)`;
+    $('audit-prev').disabled = page <= 1;
+    $('audit-next').disabled = page >= pages;
+}
+
+function renderSummary(count) {
     $('audit-summary').hidden = false;
     $('audit-summary').innerHTML = `
-        <div class="audit-stat"><span class="a-k">Total kirim</span><span class="a-v">${total}</span></div>
-        <div class="audit-stat success"><span class="a-k">Berhasil</span><span class="a-v">${ok}</span></div>
-        <div class="audit-stat failed"><span class="a-k">Gagal</span><span class="a-v">${total - ok}</span></div>`;
+        <div class="audit-stat"><span class="a-k">Log tampil</span><span class="a-v">${count}</span></div>
+        <div class="audit-stat success"><span class="a-k">Berhasil</span><span class="a-v">${count === 0 ? 0 : ''}</span></div>`;
+    $('audit-summary').innerHTML = `
+        <div class="audit-stat"><span class="a-k">Log tampil</span><span class="a-v">${count}</span></div>`;
 }
+
+const STATUS_LABEL = {
+    success: ['Berhasil', 'success'],
+    partial: ['Sebagian gagal', 'partial'],
+    failed: ['Gagal', 'failed'],
+};
 
 function renderTimeline() {
     const list = $('audit-list');
-    const status = $('audit-status').value;
-    const logs = status === 'all'
-        ? state.audit
-        : state.audit.filter(l => (status === 'success') === (l.status === 'success'));
-
-    if (!logs.length) {
-        list.innerHTML = emptyStateHtml({
-            iconName: 'filter',
-            title: 'Tidak ada log dengan filter ini',
-            body: 'Coba ubah rentang tanggal atau status.',
-        });
-        return;
-    }
+    const logs = state.audit;
 
     // Group by day, keep server order (newest first)
     const days = [];
@@ -101,17 +146,22 @@ function renderTimeline() {
 
     list.innerHTML = days.map(d => `
         <div class="audit-day">${escapeHtml(dayLabel(d.key))}</div>
-        ${d.items.map(l => `
-            <div class="audit-item" data-audit-id="${l.id}" style="cursor:pointer" title="Klik untuk lihat detail payload">
-                <span class="audit-dot ${l.status === 'success' ? 'success' : 'failed'}" aria-hidden="true"></span>
+        ${d.items.map(l => {
+            const [label, cls] = STATUS_LABEL[l.status] || [l.status, 'failed'];
+            const sent = l.sent_count ?? null;
+            const fail = l.failed_count ?? null;
+            return `
+            <div class="audit-item" data-audit-id="${l.id}" style="cursor:pointer" title="Klik untuk lihat detail per entri">
+                <span class="audit-dot ${cls}" aria-hidden="true"></span>
                 <div class="audit-meta">
                     <span class="patient-name mono">${escapeHtml(l.patient_id || '-')}</span>
                     <span class="small muted">${escapeHtml(l.resource_type || 'Bundle')}</span>
-                    ${l.error_message ? `<span class="small muted" style="color:var(--danger)">${escapeHtml(l.error_message)}</span>` : ''}
+                    ${l.entry_count ? `<span class="small muted">· ${l.sent_count}/${l.entry_count} entri terkirim${fail ? `, ${fail} gagal` : ''}</span>` : ''}
+                    ${l.error_message ? `<span class="small muted" style="color:var(--danger)">${escapeHtml(l.error_message.slice(0, 120))}</span>` : ''}
                 </div>
-                <span class="audit-status ${l.status === 'success' ? 'success' : 'failed'}">${l.status === 'success' ? 'Berhasil' : 'Gagal'}</span>
+                <span class="audit-status ${cls}">${label}</span>
                 <span class="audit-time">${escapeHtml(timeLabel(l.created_at))}</span>
-            </div>`).join('')}
+            </div>`;}).join('')}
     `).join('');
 
     list.querySelectorAll('.audit-item[data-audit-id]').forEach(item => {
@@ -129,20 +179,58 @@ async function showAuditDetail(id) {
         let respFormatted = '';
         try { reqFormatted = JSON.stringify(JSON.parse(log.request_payload), null, 2); }
         catch (e) { reqFormatted = log.request_payload || '-'; }
-
         try { respFormatted = JSON.stringify(JSON.parse(log.response_payload), null, 2); }
         catch (e) { respFormatted = log.response_payload || '-'; }
 
-        // Use payload editor modal or alert
         const modal = $('payload-modal');
         if (modal) {
+            // Read-only: hide the Save button while viewing an audit detail.
+            const saveBtn = $('modal-save');
+            const fmtBtn = $('modal-format');
+            if (saveBtn) saveBtn.hidden = true;
+            if (fmtBtn) fmtBtn.hidden = true;
+
+            const entries = (log.entries || []).map(e => `
+                <tr>
+                    <td class="mono">${escapeHtml(e.resource_type || '-')}</td>
+                    <td><span class="audit-status ${e.status === 'sent' ? 'success' : 'failed'}">${escapeHtml(e.status)}</span></td>
+                    <td class="mono">${e.rule_number ? escapeHtml(String(e.rule_number)) : '-'}</td>
+                    <td class="small">${escapeHtml((e.rule_message || e.issue_text || '-').slice(0, 100))}</td>
+                </tr>`).join('');
+
             $('modal-title').textContent = `Audit Log #${id} (${log.patient_id})`;
             $('modal-subtitle').textContent = `Status: ${log.status} · ${log.created_at}`;
             $('payload-editor').value = `=== REQUEST BUNDLE ===\n${reqFormatted}\n\n=== RESPONSE SATUSEHAT ===\n${respFormatted}`;
+            const entryBox = $('audit-entries');
+            if (entryBox) {
+                if (entries) {
+                    entryBox.hidden = false;
+                    entryBox.innerHTML = `<table class="audit-entries-table">
+                        <thead><tr><th>Resource</th><th>Status</th><th>Rule</th><th>Keterangan</th></tr></thead>
+                        <tbody>${entries}</tbody></table>`;
+                } else {
+                    entryBox.hidden = true;
+                    entryBox.innerHTML = '';
+                }
+            }
             $('payload-modal').hidden = false;
             $('modal-backdrop').hidden = false;
+
+            // Restore buttons when the modal closes.
+            const restore = () => {
+                if (saveBtn) saveBtn.hidden = false;
+                if (fmtBtn) fmtBtn.hidden = false;
+                const eb = $('audit-entries');
+                if (eb) eb.innerHTML = '';
+                $('modal-close').removeEventListener('click', restore);
+                $('modal-backdrop').removeEventListener('click', restore);
+            };
+            $('modal-close').addEventListener('click', restore);
+            $('modal-backdrop').addEventListener('click', restore);
         }
     } catch (e) {
-        // Log detail load failed
+        // Surface detail-load failures (the old code swallowed them).
+        const toast = window.__toast || (() => {});
+        try { toast('Gagal memuat detail audit', e.message, 'error'); } catch (err) { /* noop */ }
     }
 }

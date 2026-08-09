@@ -30,7 +30,12 @@ export function initDrawerView() {
     $('btn-send').addEventListener('click', sendBundle);
 }
 
+let drawerAbort = null;
+
 export async function openDrawer(noRawat) {
+    if (drawerAbort) drawerAbort.abort(); // stale-response race (D4): a newer
+    drawerAbort = new AbortController();   // open wins, older fetch is ignored
+    const seq = drawerAbort;
     state.detailNoRawat = noRawat;
     rememberFocus();
     $('drawer-backdrop').hidden = false;
@@ -45,7 +50,8 @@ export async function openDrawer(noRawat) {
 
     const raw = noRawat.replace(/\//g, '%2F');
     try {
-        const data = await api(`/api/patients/${raw}`);
+        const data = await api(`/api/patients/${raw}`, { signal: drawerAbort.signal });
+        if (drawerAbort !== seq) return; // stale response — a newer drawer opened
         if (!data || !data.data || !data.data.patient) {
             throw new Error(data?.error || 'Data detail pasien tidak ditemukan.');
         }
@@ -53,6 +59,7 @@ export async function openDrawer(noRawat) {
         renderSummary(state.detail.patient);
         renderResourceGroups(state.detail.resources || []);
     } catch (e) {
+        if (e.name === 'AbortError') return; // superseded by a newer request
         $('patient-summary').innerHTML = emptyStateHtml({
             iconName: 'alert',
             title: 'Gagal memuat detail',
