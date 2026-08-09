@@ -21,6 +21,14 @@ class AuthController
             return ['success' => false, 'error' => 'Password required'];
         }
 
+        // Rate limit gate (T24): 5 failures / 15 min per IP+username.
+        $identifier = ($_SERVER['REMOTE_ADDR'] ?? 'cli') . '|' . $username;
+        if (Auth::loginBlocked($identifier)) {
+            http_response_code(429);
+            header('Retry-After: 900');
+            return ['success' => false, 'error' => 'Terlalu banyak percobaan login. Coba lagi dalam 15 menit.'];
+        }
+
         if (Auth::attempt($password, $username)) {
             return [
                 'success' => true,

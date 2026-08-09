@@ -37,6 +37,22 @@ class Router
     {
         $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
+        // ── CSRF enforcement (the A6 fix) ─────────────────────────────
+        // Every state-changing POST needs a session CSRF token, except the
+        // initial login (no session token exists before authentication).
+        // SameSite=Lax is a secondary defense; this is the primary one.
+        if ($requestMethod === 'POST') {
+            $uriForCheck = $this->explicitUri ?? $_SERVER['REQUEST_URI'] ?? '/';
+            $uriForCheck = strtok($uriForCheck, '?') ?: '/';
+            $uriForCheck = rawurldecode($uriForCheck);
+            if ($uriForCheck !== '/api/auth/login' && !Auth::validateCsrf()) {
+                http_response_code(403);
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['success' => false, 'error' => 'CSRF token invalid atau kedaluwarsa. Muat ulang halaman dan coba lagi.']);
+                return;
+            }
+        }
+
         if ($this->explicitUri !== null) {
             $requestUri = $this->explicitUri;
         } else {

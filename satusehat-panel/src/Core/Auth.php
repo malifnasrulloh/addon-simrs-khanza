@@ -12,13 +12,22 @@ class Auth
 {
     public const SESSION_KEY = 'panel_authed';
 
+    public const MAX_LOGIN_ATTEMPTS = 5;
+    public const LOGIN_WINDOW_SECONDS = 900;
+
     public static function start(): void
     {
         if (session_status() === PHP_SESSION_NONE) {
+            // Proxy-aware Secure flag: trust X-Forwarded-Proto only when the
+            // operator opted in (PANEL_TRUST_PROXY=true) — avoids silently
+            // downgrading cookie security on non-TLS setups.
+            $isHttps = !empty($_SERVER['HTTPS'])
+                || (Config::env('PANEL_TRUST_PROXY', 'false') === 'true'
+                    && ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
             session_set_cookie_params([
                 'httponly' => true,
                 'samesite' => 'Lax',
-                'secure'   => !empty($_SERVER['HTTPS']),
+                'secure'   => $isHttps,
             ]);
             session_start();
         }
@@ -27,7 +36,69 @@ class Auth
     public static function check(): bool
     {
         self::start();
-        return !empty($_SESSION[self::SESSION_KEY]);
+        if (empty($_SESSION[self::SESSION_KEY])) {
+            return false;
+        }
+        // Session idle timeout (T24): PANEL_SESSION_TTL seconds, default 30 min.
+        $ttl = max(60, (int) Config::env('PANEL_SESSION_TTL', '1800'));
+        $last = (int) ($_SESSION['last_activity'] ?? 0);
+        if ($last > 0 && (time() - $last) > $ttl) {
+            self::logout();
+            return false;
+        }
+        $_SESSION['last_activity'] = time();
+        return true;
+    }
+
+    /**
+     * True when this identifier (IP + username) is inside its lockout window.
+     */
+    public static function loginBlocked(string $identifier): bool
+    {
+        try {
+            $db = Database::getSqlite();
+            $hash = hash('sha256', $identifier);
+            $stmt = $db->prepare("
+                SELECT attempts FROM login_attempts
+                WHERE identifier_hash = ? AND window_start > ?
+                LIMIT 1
+            ");
+            $stmt->execute([$hash, time() - self::LOGIN_WINDOW_SECONDS]);
+            return ((int) $stmt->fetchColumn()) >= self::MAX_LOGIN_ATTEMPTS;
+        } catch (\Throwable $e) {
+            return false; // store unavailable → fail open on blocking, auth itself still gates
+        }
+    }
+
+    public static function recordLoginFailure(string $identifier): void
+    {
+        try {
+            $db = Database::getSqlite();
+            $hash = hash('sha256', $identifier);
+            $stmt = $db->prepare("
+                INSERT INTO login_attempts (identifier_hash, window_start, attempts)
+                VALUES (?, ?, 1)
+                ON CONFLICT(identifier_hash)
+                DO UPDATE SET attempts = CASE
+                    WHEN window_start > ? THEN attempts + 1
+                    ELSE 1 END,
+                    window_start = CASE WHEN window_start > ? THEN window_start ELSE ? END
+            ");
+            $stmt->execute([$hash, time(), time() - self::LOGIN_WINDOW_SECONDS, time() - self::LOGIN_WINDOW_SECONDS, time()]);
+        } catch (\Throwable $e) {
+            error_log('[PANEL] recordLoginFailure: ' . $e->getMessage());
+        }
+    }
+
+    public static function recordLoginSuccess(string $identifier): void
+    {
+        try {
+            $db = Database::getSqlite();
+            $stmt = $db->prepare("DELETE FROM login_attempts WHERE identifier_hash = ?");
+            $stmt->execute([hash('sha256', $identifier)]);
+        } catch (\Throwable $e) {
+            // non-fatal
+        }
     }
 
     /**
@@ -42,44 +113,55 @@ class Auth
      */
     public static function attempt(string $password, string $username = ''): bool
     {
+        $identifier = ($_SERVER['REMOTE_ADDR'] ?? 'cli') . '|' . $username;
+        if (self::loginBlocked($identifier)) {
+            return false;
+        }
+
         $expected = Config::env('PANEL_AUTH_PASSWORD', '');
 
+        $ok = false;
         if ($expected !== '') {
-            if (hash_equals($expected, $password)) {
+            $ok = hash_equals($expected, $password);
+            if ($ok) {
                 self::start();
                 session_regenerate_id(true);
                 $_SESSION[self::SESSION_KEY] = true;
                 $_SESSION['nama_user'] = $username !== '' ? $username : 'admin';
-                return true;
             }
-            return false;
+        } else {
+            // No .env password -> Khanza login (plug-and-play mode)
+            try {
+                $db = Database::getMysql();
+                $stmt = $db->prepare("
+                    SELECT
+                        AES_DECRYPT(usere, 'nur')       AS usere,
+                        AES_DECRYPT(passworde, 'windi') AS passworde
+                    FROM admin
+                    WHERE AES_DECRYPT(usere, 'nur') = ?
+                    LIMIT 1
+                ");
+                $stmt->execute([$username]);
+                $row = $stmt->fetch();
+                if ($row && $row['passworde'] === $password) {
+                    $ok = true;
+                    self::start();
+                    session_regenerate_id(true);
+                    $_SESSION[self::SESSION_KEY] = true;
+                    $_SESSION['nama_user'] = $username;
+                }
+            } catch (\Throwable $e) {
+                $ok = false; // DB unavailable — login fails closed
+            }
         }
 
-        // No .env password -> Khanza login (plug-and-play mode)
-        try {
-            $db = Database::getMysql();
-            $stmt = $db->prepare("
-                SELECT
-                    AES_DECRYPT(usere, 'nur')       AS usere,
-                    AES_DECRYPT(passworde, 'windi') AS passworde
-                FROM admin
-                WHERE AES_DECRYPT(usere, 'nur') = ?
-                LIMIT 1
-            ");
-            $stmt->execute([$username]);
-            $row = $stmt->fetch();
-            if (!$row || $row['passworde'] !== $password) {
-                return false;
-            }
-        } catch (\Throwable $e) {
-            return false; // DB unavailable — login fails closed
+        if ($ok) {
+            $_SESSION['last_activity'] = time();
+            self::recordLoginSuccess($identifier);
+        } else {
+            self::recordLoginFailure($identifier);
         }
-
-        self::start();
-        session_regenerate_id(true);
-        $_SESSION[self::SESSION_KEY] = true;
-        $_SESSION['nama_user'] = $username;
-        return true;
+        return $ok;
     }
 
     public static function logout(): void

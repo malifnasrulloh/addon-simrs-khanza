@@ -9,31 +9,36 @@
  * config/satusehat_credential.json (masked on load, JSON_PRETTY_PRINT on
  * save) — the same file-based pattern as mapping_satu_sehat.
  *
- * Resolution order for building a SatuSehatConfig:
- *   1. panel root .env            (existing deployments / dev override)
- *   2. config/satusehat_credential.json  (plug-and-play, written via UI)
+ * Resolution order (per key):
+ *   1. panel root .env (existing deployments / dev override), non-empty wins
+ *   2. config/satusehat_credential.json (plug-and-play, written via UI)
  *
- * JSON -> SatuSehatConfig is bridged by rendering the creds into a
- * temporary .env-format file under storage/ (protected from the web under
- * Nginx) so the adopted CLI SatuSehatConfig parser sees exactly the keys it
- * requires, unchanged.
+ * The merged variable set is handed to SatuSehatConfig in-memory — no
+ * temporary env file is ever written to disk.
  */
 
 class CredentialLocator
 {
+    /** @internal — test-only path overrides (null = default locations) */
+    private static ?string $envPathOverride = null;
+    private static ?string $jsonPathOverride = null;
+
     // Paths computed at runtime (PHP 7.3+ compatible — __DIR__ in const
     // requires PHP 8.3+, which most Khanza installations don't have yet).
     private static function jsonPath(): string
     {
-        return __DIR__ . '/../../config/satusehat_credential.json';
+        return self::$jsonPathOverride ?? (__DIR__ . '/../../config/satusehat_credential.json');
     }
     private static function envPath(): string
     {
-        return __DIR__ . '/../../.env';
+        return self::$envPathOverride ?? (__DIR__ . '/../../.env');
     }
-    private static function kfEnv(): string
+
+    /** @internal — make path resolution controllable from tests. */
+    public static function setPathsForTesting(?string $envPath, ?string $jsonPath): void
     {
-        return __DIR__ . '/../../storage/.satusehat_env.tmp';
+        self::$envPathOverride = $envPath;
+        self::$jsonPathOverride = $jsonPath;
     }
 
     /** Read the credential JSON (all values, raw). */
@@ -59,77 +64,139 @@ class CredentialLocator
         if ($json === false) {
             return false;
         }
-        return @file_put_contents(self::jsonPath(), $json) !== false;
+
+        $path = self::jsonPath();
+        $dir = dirname($path);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+
+        // Atomic write: temp file + flock + rename, mode 0600.
+        $tmp = $path . '.tmp.' . getmypid();
+        $fh = @fopen($tmp, 'w');
+        if ($fh === false) {
+            return false;
+        }
+        if (!flock($fh, LOCK_EX)) {
+            fclose($fh);
+            @unlink($tmp);
+            return false;
+        }
+        fwrite($fh, $json);
+        fflush($fh);
+        @chmod($tmp, 0600);
+        flock($fh, LOCK_UN);
+        fclose($fh);
+
+        if (!@rename($tmp, $path)) {
+            @unlink($tmp);
+            return false;
+        }
+        @chmod($path, 0600);
+        return true;
     }
 
     /**
      * Build a SatuSehatConfig for the send/preview path.
-     * Prefers the panel .env; falls back to the JSON credential file.
      *
-     * @throws \RuntimeException if neither source has the required keys.
+     * Merged resolution — the .env (if present) is read for DB + panel
+     * settings; SATUSEHAT keys come from .env ONLY when non-empty, otherwise
+     * from config/satusehat_credential.json. Nothing is written to disk.
+     *
+     * @throws \RuntimeException if neither source provides the required keys.
      */
     public static function buildSatuSehatConfig(): \SatuSehatConfig
     {
+        $envVars = [];
         if (is_file(self::envPath())) {
-            return new \SatuSehatConfig(self::envPath());
+            $envVars = \SatuSehatConfig::parseEnvFile(self::envPath());
         }
-
         $cred = self::loadCredential();
-        if ($cred === null || trim((string) ($cred['client_id'] ?? '')) === '') {
+
+        $orgId   = self::pick($envVars, 'SATUSEHAT_ORG_ID', $cred, 'organization_id');
+        $clientId = self::pick($envVars, 'SATUSEHAT_CLIENT_ID', $cred, 'client_id');
+        $secret   = self::pick($envVars, 'SATUSEHAT_SECRET_KEY', $cred, 'client_secret');
+
+        if ($orgId === '' || $clientId === '' || $secret === '') {
             throw new \RuntimeException(
                 'Kredensial SATUSEHAT belum diatur. Buka panel → Pengaturan (#/settings) lalu isi Organization ID, Client ID, Client Secret.'
             );
         }
 
-        $env = $cred['environment'] ?? 'production';
-        $authUrl = 'https://api-satusehat-stg.dto.kemkes.go.id/oauth2/v1';
-        $baseUrl = 'https://api-satusehat-stg.dto.kemkes.go.id/fhir-r4/v1';
-        if ($env === 'production') {
-            $authUrl = 'https://api-satusehat.kemkes.go.id/oauth2/v1';
-            $baseUrl = 'https://api-satusehat.kemkes.go.id/fhir-r4/v1';
+        // URL selection: .env wins; otherwise derive from the credential's
+        // environment flag via the single environment table (T33).
+        $authUrl = trim($envVars['SATUSEHAT_AUTH_URL'] ?? '');
+        $baseUrl = trim($envVars['SATUSEHAT_BASE_URL'] ?? '');
+        if ($authUrl === '' || $baseUrl === '') {
+            $envName = strtolower(trim((string) ($cred['environment'] ?? '')));
+            if ($envName !== 'production' && $envName !== 'sandbox') {
+                $envName = strtolower(trim((string) ($envVars['SATUSEHAT_ENVIRONMENT'] ?? '')));
+            }
+            if ($envName !== 'production') {
+                $envName = 'sandbox';
+            }
+            $envTable = require __DIR__ . '/../../config/satusehat_environments.php';
+            $authUrl = $envTable[$envName]['auth_url'];
+            $baseUrl = $envTable[$envName]['base_url'];
         }
 
-        $lines = [
-            'DB_HOST=localhost',
-            'DB_PORT=3306',
-            'DB_NAME=sik',
-            'DB_USER=root',
-            'DB_PASS=',
-            'SATUSEHAT_ORG_ID=' . trim((string) ($cred['organization_id'] ?? '')),
-            'SATUSEHAT_CLIENT_ID=' . trim((string) ($cred['client_id'] ?? '')),
-            'SATUSEHAT_SECRET_KEY=' . trim((string) ($cred['client_secret'] ?? '')),
-            'SATUSEHAT_AUTH_URL=' . $authUrl,
-            'SATUSEHAT_BASE_URL=' . $baseUrl,
-            'SATUSEHAT_TOKEN_TIMEOUT=3000',
-            'SATUSEHAT_DELAY_MS=500',
-            'SATUSEHAT_LOOKBACK_DAYS=0',
-            'SATUSEHAT_BATCH_SIZE=500',
-            'SATUSEHAT_MEMORY_LIMIT=512M',
-            'SATUSEHAT_VERBOSE_PAYLOAD=false',
-            'TIMEZONE=Asia/Jakarta',
-            'LOG_DIR=storage',
-            'LOG_LEVEL=INFO',
-            'LOG_RETENTION_DAYS=30',
-            'WEBHOOK_USER=user_webhook_rs',
-            'WEBHOOK_PASSWORD=password_webhook_rs',
-            'ORTHANC_URL=http://localhost',
-            'ORTHANC_PORT=8042',
-            'ORTHANC_USER=admin',
-            'ORTHANC_PASS=password',
-            'DICOM_CONVERTER_URL=http://localhost',
-            'DICOM_CONVERTER_PORT=8080',
-            'DICOM_ROUTER_AE=DCMROUTER',
-            'SIMRS_WEBAPPS_URL=http://localhost/webapps',
-        ];
+        // Defaults mirror the old temp-env rendering (kept for parity).
+        $merged = array_merge([
+            'DB_HOST'                  => 'localhost',
+            'DB_PORT'                  => '3306',
+            'DB_NAME'                  => 'sik',
+            'DB_USER'                  => 'root',
+            'DB_PASS'                  => '',
+            'SATUSEHAT_TOKEN_TIMEOUT'  => '3000',
+            'SATUSEHAT_DELAY_MS'       => '500',
+            'SATUSEHAT_LOOKBACK_DAYS'  => '0',
+            'SATUSEHAT_BATCH_SIZE'     => '500',
+            'SATUSEHAT_MEMORY_LIMIT'   => '512M',
+            'SATUSEHAT_VERBOSE_PAYLOAD' => 'false',
+            'TIMEZONE'                 => 'Asia/Jakarta',
+            'LOG_DIR'                  => 'storage',
+            'LOG_LEVEL'                => 'INFO',
+            'LOG_RETENTION_DAYS'       => '30',
+            'WEBHOOK_USER'             => 'user_webhook_rs',
+            'WEBHOOK_PASSWORD'         => 'password_webhook_rs',
+            'ORTHANC_URL'              => 'http://localhost',
+            'ORTHANC_PORT'             => '8042',
+            'ORTHANC_USER'             => 'admin',
+            'ORTHANC_PASS'             => 'password',
+            'DICOM_CONVERTER_URL'      => 'http://localhost',
+            'DICOM_CONVERTER_PORT'     => '8080',
+            'DICOM_ROUTER_AE'          => 'DCMROUTER',
+            'SIMRS_WEBAPPS_URL'        => 'http://localhost/webapps',
+            // The panel verifies TLS by default (unlike the legacy CLI).
+            'SATUSEHAT_VERIFY_TLS'     => 'true',
+        ], $envVars, [
+            'SATUSEHAT_ORG_ID'     => $orgId,
+            'SATUSEHAT_CLIENT_ID'   => $clientId,
+            'SATUSEHAT_SECRET_KEY'  => $secret,
+            'SATUSEHAT_AUTH_URL'    => $authUrl,
+            'SATUSEHAT_BASE_URL'    => $baseUrl,
+            'SATUSEHAT_VERIFY_TLS'  => 'true',
+        ]);
 
-        $dir = dirname(self::kfEnv());
-        if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
-        }
-        if (@file_put_contents(self::kfEnv(), implode("\n", $lines) . "\n") === false) {
-            throw new \RuntimeException('Gagal menulis berkas kredensial sementara di storage/.');
+        // One-time cleanup of the legacy temp env file (no longer written).
+        $legacyTmp = __DIR__ . '/../../storage/.satusehat_env.tmp';
+        if (is_file($legacyTmp)) {
+            @unlink($legacyTmp);
         }
 
-        return new \SatuSehatConfig(self::kfEnv());
+        return new \SatuSehatConfig('', $merged);
+    }
+
+    /**
+     * Non-empty value from the .env vars, else non-empty from the credential
+     * JSON, else ''.
+     */
+    private static function pick(array $envVars, string $envKey, ?array $cred, string $jsonKey): string
+    {
+        $fromEnv = trim((string) ($envVars[$envKey] ?? ''));
+        if ($fromEnv !== '') {
+            return $fromEnv;
+        }
+        return trim((string) ($cred[$jsonKey] ?? ''));
     }
 }

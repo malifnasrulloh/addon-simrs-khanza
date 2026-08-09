@@ -9,13 +9,21 @@ class Database
 {
     private static ?PDO $sqlite = null;
     private static ?PDO $mysql = null;
+    private static ?string $sqlitePathOverride = null;
+
+    /** @internal — point the SQLite store at a temp file from tests. */
+    public static function setSqlitePathForTesting(?string $path): void
+    {
+        self::$sqlitePathOverride = $path;
+        self::$sqlite = null;
+    }
 
     public static function getSqlite(): PDO
     {
         if (self::$sqlite === null) {
             $path = __DIR__ . '/../../config/database.php';
             $config = require $path;
-            $sqlitePath = $config['sqlite']['path'];
+            $sqlitePath = self::$sqlitePathOverride ?? $config['sqlite']['path'];
 
             // Ensure directory exists
             $dir = dirname($sqlitePath);
@@ -113,12 +121,49 @@ class Database
                 key_hash VARCHAR(64) NOT NULL UNIQUE,
                 patient_id VARCHAR(50) NOT NULL,
                 resource_type VARCHAR(50) NOT NULL,
+                status VARCHAR(20) DEFAULT 'unknown',
                 resource_id VARCHAR(100),
                 response_data TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 expires_at DATETIME
             )
         ");
+        // Upgrade existing deployments created before the status column.
+        $idemCols = $db->query("PRAGMA table_info(idempotency_keys)")->fetchAll(PDO::FETCH_COLUMN, 1);
+        if (!in_array('status', $idemCols, true)) {
+            $db->exec("ALTER TABLE idempotency_keys ADD COLUMN status VARCHAR(20) DEFAULT 'unknown'");
+        }
+
+        // Per-entry outcome of send attempts — the truth behind "sent":
+        // a bundle with failed entries is NEVER reported as plain success,
+        // and per-instance sent flags prevent permanent data loss of the
+        // entries that were rejected (the A1 bug).
+        $db->exec("
+            CREATE TABLE IF NOT EXISTS send_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                audit_id INTEGER,
+                patient_id VARCHAR(50) NOT NULL,
+                resource_type VARCHAR(50) NOT NULL,
+                key_hash VARCHAR(64),
+                status VARCHAR(20) NOT NULL, -- sent | failed_rule | invalid_code | privacy_error | failed | network_unknown
+                rule_number INTEGER,
+                issue_text TEXT,
+                satusehat_id VARCHAR(100),
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+
+        // Login rate limiting (T24): max 5 failures per identifier per 15 min.
+        $db->exec("
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                identifier_hash VARCHAR(64) NOT NULL,
+                window_start INTEGER NOT NULL,
+                attempts INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_login_identifier ON login_attempts(identifier_hash)");
 
         // Indexes
         $db->exec("CREATE INDEX IF NOT EXISTS idx_audit_patient ON audit_logs(patient_id)");
@@ -126,5 +171,7 @@ class Database
         $db->exec("CREATE INDEX IF NOT EXISTS idx_retry_status ON retry_queue(status)");
         $db->exec("CREATE INDEX IF NOT EXISTS idx_retry_patient ON retry_queue(patient_id)");
         $db->exec("CREATE INDEX IF NOT EXISTS idx_idempotency_key ON idempotency_keys(key_hash)");
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_send_entries_audit ON send_entries(audit_id)");
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_send_entries_patient ON send_entries(patient_id, resource_type)");
     }
 }
