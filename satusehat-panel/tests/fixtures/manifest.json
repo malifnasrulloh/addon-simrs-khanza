@@ -1,0 +1,155 @@
+{
+    "extracted_at": "2026-08-09T00:46:46+00:00",
+    "fixtures": {
+        "patient-create": {
+            "source": "00. FHIR Resource - Contoh Penggunaan.json",
+            "path": [
+                "Resource",
+                "Patient",
+                "POST Create Patient",
+                "Patient - Create by NIK"
+            ],
+            "resourceType": "Patient",
+            "sha256": "313df293bedb1c9df64a771b17cba47dd9c28a87df8be94cdba075d3c11c21d4"
+        },
+        "encounter-create": {
+            "source": "00. FHIR Resource - Contoh Penggunaan.json",
+            "path": [
+                "Resource",
+                "Encounter",
+                "Encounter - Create"
+            ],
+            "resourceType": "Encounter",
+            "sha256": "5c5071ae8935e3cc3c1509d4f303eb2c24d09e143fe49990340aeb02e70d762b"
+        },
+        "encounter-finished": {
+            "source": "00. FHIR Resource - Contoh Penggunaan.json",
+            "path": [
+                "Resource",
+                "Encounter",
+                "Encounter - Update Finished"
+            ],
+            "resourceType": "Encounter",
+            "sha256": "4ee4f7bbc12f17294ae66c2ffefcf1496614913451eb5f46b4a6e42474d2b7cd"
+        },
+        "condition-diagnosis": {
+            "source": "00. FHIR Resource - Contoh Penggunaan.json",
+            "path": [
+                "Resource",
+                "Condition",
+                "Condition - Diagnosis"
+            ],
+            "resourceType": "Condition",
+            "sha256": "ab88d1e4fd12ae099d6377cb36f0c2149f3f21b655fc64dab25b6dae610a3445"
+        },
+        "observation-ttv-create": {
+            "source": "00. FHIR Resource - Contoh Penggunaan.json",
+            "path": [
+                "Resource",
+                "Observation - TTV",
+                "Observation - Create"
+            ],
+            "resourceType": "Observation",
+            "sha256": "5c3ae7454fccb79a945b86060e55f014e91da4750d9a60ec311fa123755bafb0"
+        },
+        "composition-edukasi-diet": {
+            "source": "00. FHIR Resource - Contoh Penggunaan.json",
+            "path": [
+                "Resource",
+                "Composition",
+                "Composition - Edukasi Diet"
+            ],
+            "resourceType": "Composition",
+            "sha256": "0b9a334c49272bf9d4e5037180f70b74be76b6c0dcc67e94c19ee3a06daabeaf"
+        },
+        "medication-create": {
+            "source": "00. FHIR Resource - Contoh Penggunaan.json",
+            "path": [
+                "Resource",
+                "Medication",
+                "Medication - Create"
+            ],
+            "resourceType": "Medication",
+            "sha256": "43f21dc35c98255758ad3ccdb4d8eab945a0de89462ac59e72e825fc66baba9b"
+        },
+        "medicationrequest-create": {
+            "source": "00. FHIR Resource - Contoh Penggunaan.json",
+            "path": [
+                "Resource",
+                "MedicationRequest",
+                "MedicationRequest - Create"
+            ],
+            "resourceType": "MedicationRequest",
+            "sha256": "9c2142176b593d2ed602b8d2ce615b796b311bd2db2f3eb31b0d16441f1c48b1"
+        },
+        "medicationdispense-create": {
+            "source": "00. FHIR Resource - Contoh Penggunaan.json",
+            "path": [
+                "Resource",
+                "MedicationDispense",
+                "MedicationDispense - Create"
+            ],
+            "resourceType": "MedicationDispense",
+            "sha256": "9ae1f72cf3ac8c28b0823246953de0e47141a93104726f98fd7e567150f0d6e0"
+        },
+        "allergyintolerance-create": {
+            "source": "00. FHIR Resource - Contoh Penggunaan.json",
+            "path": [
+                "Resource",
+                "AllergyIntolerance",
+                "AllergyIntolerance - Create"
+            ],
+            "resourceType": "AllergyIntolerance",
+            "sha256": "e8a8c9faadf2ec2cd8f3ff7b0ad6c3480b45e4199f6e5ad76690e94aa5821f46"
+        },
+        "episodeofcare-create": {
+            "source": "00. FHIR Resource - Contoh Penggunaan.json",
+            "path": [
+                "Resource",
+                "EpisodeOfCare",
+                "EpisodeOfCare - Create"
+            ],
+            "resourceType": "EpisodeOfCare",
+            "sha256": "84f13d5518a17714e445e02ee30426ae51066148097f396ad530967ef34d35a5"
+        },
+        "rajal-encounter-create": {
+            "source": "01. Pelayanan - Rawat Jalan.json",
+            "path": [
+                "02. Pendaftaran Kunjungan Rawat Jalan",
+                "Pembuatan Kunjungan Baru",
+                "Encounter - Kunjungan Baru"
+            ],
+            "resourceType": "Encounter",
+            "sha256": "36445a417ea754bafdb09c8c106c0035b28bb216ede605452e70041f7a458b3d"
+        },
+        "rajal-keluhan-utama": {
+            "source": "01. Pelayanan - Rawat Jalan.json",
+            "path": [
+                "03. Anamnesis",
+                "Keluhan Utama",
+                "Condition  - Keluhan Utama"
+            ],
+            "resourceType": "Condition",
+            "sha256": "06757893aa3786495e0f013b79f887e76c9b478bfe0c7eb2ad8514ad705b874d"
+        },
+        "rajal-condition-dengue": {
+            "source": "01. Pelayanan - Rawat Jalan.json",
+            "path": [
+                "12. Diagnosis",
+                "Condition - Primary Dengue"
+            ],
+            "resourceType": "Condition",
+            "sha256": "e5106c8863f87a61f5cb6948b9668983c97d027c0277a39270e3a5565d5aee5f"
+        },
+        "farmasi-peresepan-paracetamol": {
+            "source": "04. Pelayanan - Farmasi.json",
+            "path": [
+                "02. Peresepan Obat oleh Fasyankes",
+                "03. Peresepan Obat",
+                "MedicationRequest - Resep Obat Non Racik Generik - Paracetamol"
+            ],
+            "resourceType": "MedicationRequest",
+            "sha256": "a7e9025b40ff15ded057109068a79743f3bc02a694e48837126b15de843e1118"
+        }
+    }
+}

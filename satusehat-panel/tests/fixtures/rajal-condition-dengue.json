@@ -1,0 +1,56 @@
+{
+    "resourceType": "Condition",
+    "clinicalStatus": {
+        "coding": [
+            {
+                "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+                "code": "active",
+                "display": "Active"
+            }
+        ]
+    },
+    "category": [
+        {
+            "coding": [
+                {
+                    "system": "http://terminology.hl7.org/CodeSystem/condition-category",
+                    "code": "encounter-diagnosis",
+                    "display": "Encounter Diagnosis"
+                }
+            ]
+        }
+    ],
+    "code": {
+        "coding": [
+            {
+                "system": "http://hl7.org/fhir/sid/icd-10",
+                "code": "A91",
+                "display": "Dengue haemorrhagic fever"
+            },
+            {
+                "system": "http://snomed.info/sct",
+                "code": "20927009",
+                "display": "Dengue hemorrhagic fever"
+            }
+        ],
+        "text": "Diagnosis primer Demam Berdarah (DHF)"
+    },
+    "subject": {
+        "reference": "Patient/{{Patient_id}}",
+        "display": "{{Patient_Name}}"
+    },
+    "encounter": {
+        "reference": "Encounter/{{Encounter_id}}"
+    },
+    "onsetDateTime": "2023-06-04T08:30:00+00:00",
+    "recordedDate": "2023-06-04T08:30:00+00:00",
+    "stage": [
+        {
+            "assessment": [
+                {
+                    "reference": "ClinicalImpression/{{Rasional_Klinis}}"
+                }
+            ]
+        }
+    ]
+}

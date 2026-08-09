@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         colors="true"
+         cacheResult="false"
+         failOnWarning="true"
+         failOnNotice="true">
+    <testsuites>
+        <testsuite name="satusehat-panel">
+            <directory>tests</directory>
+        </testsuite>
+    </testsuites>
+    <php>
+        <env name="APP_DEBUG" value="false"/>
+        <env name="PANEL_AUTH_PASSWORD" value="test-only-password"/>
+        <const name="PHPUNIT_TESTSUITE" value="1"/>
+    </php>
+</phpunit>

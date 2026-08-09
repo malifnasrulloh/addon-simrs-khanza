@@ -9,3 +9,11 @@ storage/.satusehat_env.tmp
 # OS / editor
 .DS_Store
 *.swp
+vendor/
+
+# Credential store — contains the client secret, never track it.
+config/satusehat_credential.json
+config/satusehat_credential.json.*
+
+# Sync manifest (runtime artifact)
+storage/lib-manifest.json
