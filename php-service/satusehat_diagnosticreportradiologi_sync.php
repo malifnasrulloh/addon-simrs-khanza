@@ -98,6 +98,8 @@ require_once BASE_DIR . '/lib/satusehat/SatuSehatClient.php';
 require_once BASE_DIR . '/lib/satusehat/BatchCursor.php';
 require_once BASE_DIR . '/lib/satusehat/Database.php';
 require_once BASE_DIR . '/lib/satusehat/PayloadBuilder.php';
+require_once BASE_DIR . '/lib/satusehat/DateTimeUtil.php';
+require_once BASE_DIR . '/lib/satusehat/NumberUtil.php';
 require_once BASE_DIR . '/lib/satusehat/Supervisor.php';
 require_once BASE_DIR . '/lib/satusehat/DiagnosticReportRadiologiProcessor.php';
 
