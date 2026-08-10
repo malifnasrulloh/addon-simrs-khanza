@@ -1,3 +1,7 @@
 *.pyc
 graphify-out/
 .playwright-mcp/
+
+# Local agent/planning docs — never committed
+AGENTS.md
+tasks/
