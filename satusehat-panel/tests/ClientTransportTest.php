@@ -110,6 +110,29 @@ final class ClientTransportTest extends TestCase
         $this->assertSame('enc-1', $result['data']['entry'][0]['resource']['id']);
     }
 
+    public function testPermissionDeniedCacheExpiresAfterTTL(): void
+    {
+        // A config fix must not be permanently locked out: a fresh denial
+        // skips the PUT; an expired denial (older than the TTL window)
+        // retries it once.
+        $cacheFile = $this->logDir . '/satusehat_permission_denied.json';
+
+        // Fresh denial → PUT must never fire.
+        file_put_contents($cacheFile, json_encode(['/Medication/med-x' => time()]));
+        $this->calls = 0;
+        $this->responses = ['{}', 200, ''];
+        $result = $this->client()->patch('/Medication/med-x', [], ['resourceType' => 'Medication']);
+        $this->assertSame(0, $this->calls, 'fresh denial must skip the PUT');
+        $this->assertTrue(!empty($result['permission_skip']));
+
+        // Expired denial (8 days old) → PUT fires once.
+        file_put_contents($cacheFile, json_encode(['/Medication/med-x' => time() - 8 * 86400]));
+        $this->calls = 0;
+        $result = $this->client()->patch('/Medication/med-x', [], ['resourceType' => 'Medication']);
+        $this->assertSame(1, $this->calls, 'expired denial must be retried');
+        $this->assertTrue($result['success']);
+    }
+
     public function testTokenFetchWritesValidCacheOnce(): void
     {
         // Regression: the token-fetch path used its own curl block (not the

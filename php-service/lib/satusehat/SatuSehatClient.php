@@ -475,12 +475,28 @@ class SatuSehatClient
     }
 
     /**
-     * Check if an endpoint is permanently permission-denied.
+     * Check if an endpoint is permission-denied (within the cache window).
+     *
+     * Denials are cached with a finite TTL: a configuration fix (wrong
+     * org/client/environment) must not permanently lock resources out —
+     * after the window the endpoint is retried once.
      */
+    private const PERMISSION_CACHE_TTL_SECONDS = 7 * 86400;
+
     private function isPermissionDenied(string $endpoint): bool
     {
         $cache = $this->getPermissionCache();
-        return isset($cache[$endpoint]);
+        if (!isset($cache[$endpoint])) {
+            return false;
+        }
+        $deniedAt = (int) $cache[$endpoint];
+        if ($deniedAt > 0 && time() - $deniedAt >= self::PERMISSION_CACHE_TTL_SECONDS) {
+            unset($cache[$endpoint]);
+            $this->savePermissionCache($cache);
+            $this->log->warning("[PERMISSION] {$endpoint}: cache expired (denied " . date('Y-m-d H:i:s', $deniedAt) . ") — will retry once; if still foreign/unauthorized it will be re-cached.");
+            return false;
+        }
+        return true;
     }
 
     /**
