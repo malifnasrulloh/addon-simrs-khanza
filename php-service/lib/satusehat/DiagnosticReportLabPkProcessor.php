@@ -100,6 +100,10 @@ class SatuSehatDiagnosticReportLabPkProcessor
                 continue;
             }
 
+            // Phase-1 create: no prior id — initialize before the builder call
+            // (was undefined → TypeError crashed the whole run on first record).
+            $idDiagnosticReport = '';
+
             $payload = SatuSehatPayloadBuilder::diagnosticReportLab(
                 $p,
                 $idPasien,
@@ -118,7 +122,7 @@ class SatuSehatDiagnosticReportLabPkProcessor
                 $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Created Diagnostic Report {$idDiagnosticReport}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 
                 $isDuplicate = (
                     stripos($errorMessage, 'duplicate') !== false || 
@@ -221,7 +225,7 @@ $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /DiagnosticReport/
                 $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Updated Diagnostic Report {$idDiagnosticReport}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 $isTerminologyError = (
                     $result['code'] === 400 && (
                         stripos($errorMessage, 'Code not found') !== false ||

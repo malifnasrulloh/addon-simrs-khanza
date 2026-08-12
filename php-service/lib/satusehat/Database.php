@@ -665,8 +665,12 @@ class SatuSehatDatabase
             LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
             LEFT JOIN kamar_inap ki ON ki.no_rawat = rp.no_rawat
             LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.kd_penyakit = dp.kd_penyakit
-            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
-              AND rp.no_rawat NOT IN (SELECT no_rawat FROM satu_sehat_episode_of_care)
+            WHERE CASE
+                    WHEN rp.status_lanjut = 'Ralan' THEN nj.tanggal
+                    WHEN rp.status_lanjut = 'Ranap' THEN ni.tanggal
+                    ELSE NULL
+                  END BETWEEN :df AND :dt
+              AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
          ORDER BY no_rawat ASC
         ";
         

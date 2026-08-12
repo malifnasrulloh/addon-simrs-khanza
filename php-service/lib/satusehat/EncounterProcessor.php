@@ -113,7 +113,7 @@ class SatuSehatEncounterProcessor
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created Encounter {$idEncounter} ({$targetStatus})");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
                 // Duplicate Handling Fallback
                 if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
@@ -221,7 +221,7 @@ class SatuSehatEncounterProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to in-progress via PATCH");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . \SatuSehatClient::extractErrorMsg($result));
                 $this->failCount++;
             }
         }
@@ -445,7 +445,7 @@ class SatuSehatEncounterProcessor
                 $this->log->info("[PHASE 3] {$noRawat}: ✓ Updated to finished via PATCH");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 3] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $this->log->warning("[PHASE 3] {$noRawat}: ✗ Failed -> " . \SatuSehatClient::extractErrorMsg($result));
                 $this->failCount++;
             }
         }

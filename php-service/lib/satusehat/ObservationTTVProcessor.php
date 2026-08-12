@@ -138,7 +138,7 @@ class SatuSehatObservationTTVProcessor
                 $this->log->info("    ✓ Created {$idObservation}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 
                 // Duplicate handling for Observation
                 if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {

@@ -133,6 +133,29 @@ final class ClientTransportTest extends TestCase
         $this->assertTrue($result['success']);
     }
 
+        public function testCurlFalseBodyWithHttpCodeDoesNotCrash(): void
+    {
+        // Regression: curl can return false with a non-zero HTTP code
+        // ("transfer closed with outstanding read data remaining") — the
+        // client must return a clean network-unknown failure instead of
+        // json_decode(false) → TypeError → FATAL run crash.
+        $this->calls = 0;
+        $this->responses = [false, 200, 'transfer closed with outstanding read data remaining'];
+        $result = $this->client()->post('/', ['resourceType' => 'Bundle']);
+        $this->assertFalse($result['success']);
+        $this->assertSame(0, $result['code']);
+        $this->assertSame('Empty or invalid response from API', $result['message']);
+    }
+
+    public function testEmptyBodyWithHttpCodeIsCleanFailure(): void
+    {
+        $this->calls = 0;
+        $this->responses = ['', 200, ''];
+        $result = $this->client()->post('/', ['resourceType' => 'Bundle']);
+        $this->assertFalse($result['success']);
+        $this->assertSame(0, $result['code']);
+    }
+
     public function testTokenFetchWritesValidCacheOnce(): void
     {
         // Regression: the token-fetch path used its own curl block (not the

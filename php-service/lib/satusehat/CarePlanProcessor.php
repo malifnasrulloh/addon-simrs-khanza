@@ -137,7 +137,7 @@ class SatuSehatCarePlanProcessor
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created CarePlan {$idCarePlan}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
                 // Fallback check on conflict or potential duplicate error
                 if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
@@ -220,12 +220,12 @@ class SatuSehatCarePlanProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated CarePlan {$idCarePlan} via PATCH");
                 $this->successCount++;
             } else {
-                $errorMessage = ($result['data']['issue'][0]['diagnostics'] ?? $result['message']);
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
                 // Cache permanent API failures
                 $isPerm = (stripos($errorMessage, 'permission') !== false || stripos($errorMessage, 'forbidden') !== false || stripos($errorMessage, 'not authorized') !== false);
-                $isPrivacy = (!$isPerm && (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false));
-                $isRule = (!$isPerm && !$isPrivacy && (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false));
+$isPrivacy = \SatuSehatClient::classifyError($result) === 'privacy_error';
+$isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
 
                 if ($isPerm) {
                     $this->db->updateCarePlanLocalState($noRawat, $tglPerawatan, $jamRawat, $statusLanjut, 'failed_rule');

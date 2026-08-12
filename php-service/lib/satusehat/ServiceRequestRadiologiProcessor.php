@@ -109,7 +109,7 @@ class SatuSehatServiceRequestRadiologiProcessor
                 $this->log->info("[PHASE 1] {$noorder} [{$kdJenisPrw}]: ✓ Created ServiceRequest {$idServiceRequest}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 
                 // Duplicate Handling Fallback using deterministic ACSN
                 $isDuplicate = false;
@@ -216,7 +216,7 @@ class SatuSehatServiceRequestRadiologiProcessor
                 $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: ✓ Updated ServiceRequest {$idServiceRequest}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 $this->log->warning("[PHASE 2] {$noorder} [{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
                 
                 // Categorize and cache permanent/terminal failures

@@ -66,11 +66,52 @@ final class CompositionAndDispenseTest extends TestCase
         ];
         $p = \SatuSehatPayloadBuilder::medicationDispense('1000000001', $row, 'ihs-1', 'ihs-dok', 'MR-1');
 
-        $category = $p['category'][0]['coding'][0]['code'] ?? null;
-        $this->assertSame('inpatient', $category);
+        // category is 0..1 CodeableConcept → OBJECT (official fixture shape;
+        // the list form was rejected with "expected a CodeableConcept object").
+        $this->assertSame(
+            'inpatient',
+            $p['category']['coding'][0]['code'] ?? null,
+            'category must be an OBJECT {"coding":[...]} matching the official example'
+        );
+        $this->assertArrayNotHasKey(0, $p['category'], 'list form must not be used for a 0..1 field');
         $this->assertSame('Location/loc-1', $p['location']['reference'] ?? '');
         $this->assertSame('Melati', $p['location']['display'] ?? '');
         $this->assertSame('MedicationRequest/MR-1', $p['authorizingPrescription'][0]['reference'] ?? '');
+    }
+
+    public function testStatementCategoryIsObjectShape(): void
+    {
+        // MedicationStatement.category is also 0..1 → object, mirroring the
+        // dispense fixture; regression for the same server rejection.
+        $row = [
+            'no_resep' => 'R-2', 'kode_brng' => 'C-002', 'no_rawat' => 'V-1',
+            'id_medication' => 'med-2', 'obat_display' => 'Captopril',
+            'tgl_peresepan' => '2026-08-08', 'jam_peresepan' => '10:00:00',
+            'tgl_perawatan' => '2026-08-08', 'jam' => '11:00:00',
+            'status_lanjut' => 'Ralan', 'jml' => 1,
+            'nm_pasien' => 'NAPSA', 'id_encounter' => 'enc-uuid', 'nama' => 'Dr. X',
+        ];
+        $p = \SatuSehatPayloadBuilder::medicationStatement('1000000001', $row, 'ihs-1', null);
+        $this->assertSame(
+            'outpatient',
+            $p['category']['coding'][0]['code'] ?? null,
+            'statement category must be an OBJECT {"coding":[...]}'
+        );
+    }
+
+    public function testMedicationRequestCategoryStaysListShape(): void
+    {
+        // MedicationRequest.category is 0..* → LIST (official fixture).
+        $row = [
+            'no_resep' => 'R-3', 'kode_brng' => 'P-003', 'no_rawat' => 'V-1',
+            'id_medication' => 'med-3', 'obat_display' => 'Paracetamol',
+            'tgl_peresepan' => '2026-08-08', 'jam_peresepan' => '10:00:00',
+            'jml' => 2, 'is_racikan' => false, 'aturan_pakai' => '3 x 1 tablet',
+            'status_lanjut' => 'Ralan', 'nm_pasien' => 'NAPSA', 'id_encounter' => 'enc-uuid',
+            'nama' => 'Dr. X', 'no_racik' => '',
+        ];
+        $p = \SatuSehatPayloadBuilder::medicationRequest('1000000001', $row, 'ihs-1', 'ihs-dok', null);
+        $this->assertSame('outpatient', $p['category'][0]['coding'][0]['code'] ?? null);
     }
 
     public function testDispenseOutpatientCategoryAndNoLocationWhenMissing(): void
@@ -85,7 +126,7 @@ final class CompositionAndDispenseTest extends TestCase
             'nm_pasien' => 'NAPSA', 'id_encounter' => 'enc-uuid', 'nama' => 'Dr. X',
         ];
         $p = \SatuSehatPayloadBuilder::medicationDispense('1000000001', $row, 'ihs-1', 'ihs-dok', 'MR-2');
-        $this->assertSame('outpatient', $p['category'][0]['coding'][0]['code'] ?? null);
+        $this->assertSame('outpatient', $p['category']['coding'][0]['code'] ?? null);
         $this->assertArrayNotHasKey('location', $p);
     }
 }

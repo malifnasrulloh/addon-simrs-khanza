@@ -109,7 +109,7 @@ class SatuSehatClinicalImpressionProcessor
                 $this->log->info("[PHASE 1] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✓ Created ClinicalImpression {$idClinImp}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 
                 $isValidationError = (stripos($errorMessage, 'Code not found') !== false || 
                                        stripos($errorMessage, 'invalid') !== false || 
@@ -133,8 +133,8 @@ class SatuSehatClinicalImpressionProcessor
                         $this->failCount++;
                     }
                 } else {
-                    $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
-                    $isRule = (stripos($errorMessage, 'Rule Number') !== false || stripos($errorMessage, 'rule violation') !== false);
+$isPrivacy = \SatuSehatClient::classifyError($result) === 'privacy_error';
+$isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
 
                     if ($isPrivacy) {
                         $this->db->updateClinicalImpressionLocalState($noRawat, $tglPerawatan, $jamRawat, $status, 'privacy_error', $kdPenyakit);
@@ -203,13 +203,13 @@ class SatuSehatClinicalImpressionProcessor
                 $this->log->info("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✓ Updated ClinicalImpression {$idClinImp} via PATCH");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
                 $isValidationError = (stripos($errorMessage, 'Code not found') !== false ||
                                        stripos($errorMessage, 'invalid') !== false ||
                                        stripos($errorMessage, 'incorrect') !== false);
-                $isPrivacy = (!$isValidationError && (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false));
-                $isRule = (!$isValidationError && (stripos($errorMessage, 'Rule Number') !== false || stripos($errorMessage, 'rule violation') !== false));
+$isPrivacy = \SatuSehatClient::classifyError($result) === 'privacy_error';
+$isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
 
                 if ($isValidationError) {
                     $this->log->warning("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: ✗ Skipped -> Invalid ICD-10 Code '{$kdPenyakit}' (Satu Sehat Terminology rejected it on update)");

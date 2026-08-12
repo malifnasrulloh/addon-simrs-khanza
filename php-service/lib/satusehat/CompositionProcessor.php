@@ -142,9 +142,9 @@ class SatuSehatCompositionProcessor
                     $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $issueText);
 
                     // Cache permanent API failures
-                    $isPrivacy = (stripos($issueText, 'consent') !== false || stripos($issueText, 'privacy') !== false);
-                    $isRule = (stripos($issueText, 'rule') !== false || stripos($issueText, 'RuleNumber') !== false);
-                    $isCode = (stripos($issueText, 'code') !== false || stripos($issueText, 'system') !== false || stripos($issueText, 'terminology') !== false);
+$isPrivacy = \SatuSehatClient::classifyError($result) === 'privacy_error';
+$isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
+$isCode = \SatuSehatClient::classifyError($result) === 'invalid_code';
 
                     if ($isPrivacy) {
                         $this->db->updateCompositionLocalState($noRawat, 'privacy_error');

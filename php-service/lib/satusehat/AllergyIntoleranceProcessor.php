@@ -129,7 +129,7 @@ class SatuSehatAllergyIntoleranceProcessor
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created AllergyIntolerance {$idAllergy}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 
                 // Duplicate Handling Fallback
                 if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
@@ -147,8 +147,8 @@ class SatuSehatAllergyIntoleranceProcessor
                     }
                 } else {
                     // Cache permanent API failures to avoid retries
-                    $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
-                    $isRule = (stripos($errorMessage, 'Rule Number') !== false || stripos($errorMessage, 'rule violation') !== false);
+$isPrivacy = \SatuSehatClient::classifyError($result) === 'privacy_error';
+$isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
                     $isInvalidCode = (stripos($errorMessage, 'not found in value set') !== false || stripos($errorMessage, 'invalid code') !== false || stripos($errorMessage, 'incorrect') !== false || stripos($errorMessage, 'Code not found') !== false);
 
                     if ($isPrivacy) {
@@ -235,7 +235,7 @@ class SatuSehatAllergyIntoleranceProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated AllergyIntolerance {$idAllergy} via PATCH");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . \SatuSehatClient::extractErrorMsg($result));
                 $this->failCount++;
             }
         }

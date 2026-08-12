@@ -123,7 +123,7 @@ class SatuSehatImmunizationProcessor
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created Immunization {$idImmunization}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 
                 // Duplicate Handling Fallback
                 if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
@@ -141,8 +141,8 @@ class SatuSehatImmunizationProcessor
                     }
                 } else {
                     // Cache permanent API failures
-                    $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
-                    $isRule = (stripos($errorMessage, 'Rule Number') !== false || stripos($errorMessage, 'rule violation') !== false);
+$isPrivacy = \SatuSehatClient::classifyError($result) === 'privacy_error';
+$isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
                     $isInvalidCode = (stripos($errorMessage, 'not found in value set') !== false || stripos($errorMessage, 'invalid code') !== false);
 
                     if ($isPrivacy) {
@@ -204,11 +204,11 @@ class SatuSehatImmunizationProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Immunization {$idImmunization} via PATCH");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
                 // Cache permanent API failures
-                $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
-                $isRule = (stripos($errorMessage, 'Rule Number') !== false || stripos($errorMessage, 'rule violation') !== false);
+$isPrivacy = \SatuSehatClient::classifyError($result) === 'privacy_error';
+$isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
                 $isInvalidCode = (stripos($errorMessage, 'not found in value set') !== false || stripos($errorMessage, 'invalid code') !== false);
 
                 if ($isPrivacy) {

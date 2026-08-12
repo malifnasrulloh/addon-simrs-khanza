@@ -137,9 +137,7 @@ class SatuSehatEpisodeOfCareProcessor
                 $this->successCount++;
                 $processedNoRawat[$noRawat] = $idEpisode;
             } else {
-                $errorMessage = $result['data']['issue'][0]['details']['text'] 
-                    ?? $result['data']['issue'][0]['diagnostics'] 
-                    ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 
                 // Duplicate Handling Fallback
                 if (stripos($errorMessage, 'found duplicated') !== false || stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
@@ -244,6 +242,12 @@ class SatuSehatEpisodeOfCareProcessor
                     $this->log->warning("[PHASE 2] {$noRawat}: Cannot parse start → fallback to NOW ({$dischargeWaktu})");
                 }
             }
+            // Guard: sanitizeDateTime returns '' for unparseable dates — an
+            // empty period.start breaks the server's FHIRPath constraint
+            // (the merge_failed errors). Never emit an empty period field.
+            if ($startWaktu === '') {
+                $startWaktu = $dischargeWaktu;
+            }
 
             // ── Build PATCH operations (dynamic ─ only include what we have) ──
             $ops = [];
@@ -332,9 +336,7 @@ class SatuSehatEpisodeOfCareProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to finished via PATCH");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['details']['text']
-                    ?? $result['data']['issue'][0]['diagnostics']
-                    ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
                 if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
                     $this->db->updateEocLocalState($noRawat, 'privacy_error');
@@ -424,9 +426,7 @@ class SatuSehatEpisodeOfCareProcessor
                     if ($patchResult['success']) {
                         $this->log->info("[RECOVERY] {$noRawat}: ✓ PATCH {$eocId} → {$targetStatus}");
                     } else {
-                        $patchError = $patchResult['data']['issue'][0]['details']['text']
-                            ?? $patchResult['data']['issue'][0]['diagnostics']
-                            ?? $patchResult['message'];
+                        $patchError = \SatuSehatClient::extractErrorMsg($patchResult);
                         $this->log->error("[RECOVERY] {$noRawat}: PATCH {$eocId} failed → {$patchError}");
                     }
                 }
@@ -537,9 +537,7 @@ class SatuSehatEpisodeOfCareProcessor
         $patchResult = $this->api->patch("/EpisodeOfCare/{$eocId}", $operations);
 
         if (!$patchResult['success']) {
-            $patchError = $patchResult['data']['issue'][0]['details']['text']
-                ?? $patchResult['data']['issue'][0]['diagnostics']
-                ?? $patchResult['message'];
+            $patchError = \SatuSehatClient::extractErrorMsg($patchResult);
             $this->log->error("[RECOVERY] {$noRawat}: PATCH {$eocId} to '{$newStatus}' failed → {$patchError}");
             return null;
         }
@@ -556,9 +554,7 @@ class SatuSehatEpisodeOfCareProcessor
             return $newId;
         }
 
-        $postError = $postResult['data']['issue'][0]['details']['text']
-            ?? $postResult['data']['issue'][0]['diagnostics']
-            ?? $postResult['message'];
+        $postError = \SatuSehatClient::extractErrorMsg($postResult);
         $this->log->error("[RECOVERY] {$noRawat}: Re-POST failed → {$postError}");
         return null;
     }

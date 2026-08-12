@@ -123,12 +123,12 @@ class SatuSehatProcedureProcessor
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created Procedure {$idProcedure}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
                 // Cache permanent API failures
-                $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
-                $isRule = (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false);
-                $isCode = (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false);
+$isPrivacy = \SatuSehatClient::classifyError($result) === 'privacy_error';
+$isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
+$isCode = \SatuSehatClient::classifyError($result) === 'invalid_code';
 
                 if ($isPrivacy) {
                     $this->db->updateProcedureLocalState($noRawat, $kode, 'privacy_error');
@@ -201,7 +201,7 @@ class SatuSehatProcedureProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Procedure {$idProcedure} via PATCH");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . ($result['data']['issue'][0]['diagnostics'] ?? $result['message']));
+                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . \SatuSehatClient::extractErrorMsg($result));
                 $this->failCount++;
             }
         }

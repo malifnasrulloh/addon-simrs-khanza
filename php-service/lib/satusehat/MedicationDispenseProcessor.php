@@ -136,7 +136,7 @@ class SatuSehatMedicationDispenseProcessor
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created MedicationDispense {$idDispense}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
                 if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("[PHASE 1] {$noRawat}: Duplicated MedicationDispense detected. Searching existing records...");
@@ -152,9 +152,9 @@ class SatuSehatMedicationDispenseProcessor
                         $this->failCount++;
                     }
                 } else {
-                    $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
-                    $isRule = (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false);
-                    $isCode = (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false);
+$isPrivacy = \SatuSehatClient::classifyError($result) === 'privacy_error';
+$isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
+$isCode = \SatuSehatClient::classifyError($result) === 'invalid_code';
 
                     if ($isPrivacy) {
                         $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'privacy_error');
@@ -249,10 +249,10 @@ class SatuSehatMedicationDispenseProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated MedicationDispense {$idDispense}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
-                $isPrivacy = (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false);
-                $isRule = (stripos($errorMessage, 'rule') !== false || stripos($errorMessage, 'RuleNumber') !== false);
-                $isCode = (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false);
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
+$isPrivacy = \SatuSehatClient::classifyError($result) === 'privacy_error';
+$isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
+$isCode = \SatuSehatClient::classifyError($result) === 'invalid_code';
 
                 if ($isPrivacy) {
                     $this->db->updateMedicationDispenseLocalState($noRawat, $tglPerawatan, $jam, $kodeBrng, $noBatch, $noFaktur, 'privacy_error');

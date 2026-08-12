@@ -110,7 +110,7 @@ class SatuSehatServiceRequestLabMbProcessor
                 $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Created ServiceRequest {$idServiceRequest}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 
                 // Duplicate Handling Fallback using identifier
                 $isDuplicate = false;
@@ -224,7 +224,7 @@ $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /ServiceRequest/{$
                 $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Updated ServiceRequest {$idServiceRequest}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 $this->log->warning("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
                 
                 // Categorize and cache permanent/terminal failures

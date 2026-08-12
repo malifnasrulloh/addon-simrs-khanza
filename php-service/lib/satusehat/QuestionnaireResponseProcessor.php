@@ -135,7 +135,7 @@ class SatuSehatQuestionnaireResponseProcessor
                 $this->log->info("[PHASE 1] {$noResep}: ✓ Created QuestionnaireResponse {$newId}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
                 // Self-healing: check if duplicate error from Satu Sehat
                 $isDuplicate = false;
@@ -241,7 +241,7 @@ class SatuSehatQuestionnaireResponseProcessor
                 $this->log->info("[PHASE 2] {$noResep}: ✓ Updated QuestionnaireResponse {$idQR}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 $this->log->warning("[PHASE 2] {$noResep}: ✗ Failed -> " . $errorMessage);
 
                 // Categorize and cache permanent/terminal failures

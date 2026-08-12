@@ -1332,7 +1332,7 @@ class SatuSehatPayloadBuilder
         $authoredOn = self::sanitizeDateTime($p['tgl_peresepan'] ?? null, $p['jam_peresepan'] ?? null, $p);
 
         // Identifiers
-        $isRacikan = (bool)$p['is_racikan'];
+        $isRacikan = (bool)($p['is_racikan'] ?? false);
         $noRacik = $p['no_racik'] ?? '';
         
         $prescVal = $p['no_resep'];
@@ -1373,8 +1373,8 @@ class SatuSehatPayloadBuilder
                     'coding' => [
                         [
                             'system'  => 'http://terminology.hl7.org/CodeSystem/medicationrequest-category',
-                            'code'    => strtolower($p['status_lanjut']) === 'ranap' ? 'inpatient' : 'outpatient',
-                            'display' => strtolower($p['status_lanjut']) === 'ranap' ? 'Inpatient' : 'Outpatient'
+                            'code'    => strtolower((string)($p['status_lanjut'] ?? '')) === 'ranap' ? 'inpatient' : 'outpatient',
+                            'display' => strtolower((string)($p['status_lanjut'] ?? '')) === 'ranap' ? 'Inpatient' : 'Outpatient'
                         ]
                     ]
                 ]
@@ -1517,14 +1517,15 @@ class SatuSehatPayloadBuilder
                 ]
             ],
             'status' => 'completed',
+            // category is 0..1 CodeableConcept → OBJECT form (official
+            // fixture; list form was rejected with "expected a CodeableConcept
+            // object" → rule 10480-class 400s on every dispense).
             'category' => [
-                [
-                    'coding' => [
-                        [
-                            'system'  => 'http://terminology.hl7.org/fhir/CodeSystem/medicationdispense-category',
-                            'code'    => strtolower($p['status_pemberian']) === 'ranap' ? 'inpatient' : 'outpatient',
-                            'display' => strtolower($p['status_pemberian']) === 'ranap' ? 'Inpatient' : 'Outpatient'
-                        ]
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/fhir/CodeSystem/medicationdispense-category',
+                        'code'    => strtolower((string)($p['status_pemberian'] ?? '')) === 'ranap' ? 'inpatient' : 'outpatient',
+                        'display' => strtolower((string)($p['status_pemberian'] ?? '')) === 'ranap' ? 'Inpatient' : 'Outpatient'
                     ]
                 ]
             ],
@@ -1667,7 +1668,7 @@ class SatuSehatPayloadBuilder
         // System: http://sys-ids.kemkes.go.id/medicationstatement/{orgId}
         // Value non-racikan: {no_resep}-{kode_brng}
         // Value racikan: {no_resep}-{kode_brng}-{no_racik}
-        $isRacikan = (bool)$p['is_racikan'];
+        $isRacikan = (bool)($p['is_racikan'] ?? false);
         $noRacik = $p['no_racik'] ?? '';
         
         $valIdentifier = $p['no_resep'] . '-' . $p['kode_brng'];
@@ -1685,16 +1686,20 @@ class SatuSehatPayloadBuilder
                 ]
             ],
             'status' => 'completed',
+            // category is 0..1 CodeableConcept → OBJECT form (mirrors
+            // MedicationDispense; list form was rejected by the server).
             'category' => [
-                [
-                    'coding' => [
-                        [
-                            'system'  => 'http://terminology.hl7.org/CodeSystem/medication-statement-category',
-                            'code'    => strtolower($p['status_lanjut']) === 'ranap' ? 'inpatient' : 'outpatient',
-                            'display' => strtolower($p['status_lanjut']) === 'ranap' ? 'Inpatient' : 'Outpatient'
-                        ]
+                'coding' => [
+                    [
+                        'system'  => 'http://terminology.hl7.org/fhir/CodeSystem/medication-statement-category',
+                        'code'    => strtolower((string) ($p['status_lanjut'] ?? '')) === 'ranap' ? 'inpatient' : 'outpatient',
+                        'display' => strtolower((string) ($p['status_lanjut'] ?? '')) === 'ranap' ? 'Inpatient' : 'Outpatient'
                     ]
                 ]
+            ],
+            'medicationReference' => [
+                'reference' => 'Medication/' . $p['id_medication'],
+                'display'   => $p['obat_display']
             ],
             'medicationReference' => [
                 'reference' => 'Medication/' . $p['id_medication'],
@@ -1728,9 +1733,14 @@ class SatuSehatPayloadBuilder
                             'doseQuantity' => self::sanitizeUcum([
                                 'value'  => $signa1,
                                 'unit'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null,
-                                // system intentionally null — SATUSEHAT rejects http://unitsofmeasure.org
-                                // on MedicationStatement doseQuantity (RuleNumber 10480)
-                                'system' => null,
+                                // system must be present when code is present
+                                // (RuleNumber 10480 rejects a missing/empty
+                                // system — the earlier "intentionally null"
+                                // workaround was the actual cause of the
+                                // 512-record infinite retry loop).
+                                'system' => isset($p['denominator_system']) && trim((string) $p['denominator_system']) !== ''
+                                    ? trim((string) $p['denominator_system'])
+                                    : 'http://unitsofmeasure.org',
                                 'code'   => isset($p['denominator_code']) ? trim($p['denominator_code']) : null
                             ])
                         ]
@@ -2994,6 +3004,11 @@ class SatuSehatPayloadBuilder
         // If code is empty, we must not include system to avoid validation errors
         if ($code === '') {
             $system = '';
+        } elseif ($system === '') {
+            // FHIR Quantity: a coded unit needs system+code together; UCUM is
+            // the standard default. A missing system previously triggered
+            // RuleNumber 10480 ("Invalid coding system") on every statement.
+            $system = 'http://unitsofmeasure.org';
         }
 
         $res = [];

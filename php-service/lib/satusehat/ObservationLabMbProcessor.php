@@ -117,7 +117,7 @@ class SatuSehatObservationLabMbProcessor
                 $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Created Observation {$idObservation}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 
                 // Duplicate Handling Fallback using identifier
                 if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
@@ -213,7 +213,7 @@ $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Observation/{$idO
                 $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Updated Observation {$idObservation}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 $this->log->warning("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
                 
                 // Categorize and cache permanent/terminal failures

@@ -115,7 +115,7 @@ class SatuSehatSpecimenRadiologiProcessor
                 $this->log->info("[PHASE 1] {$noorder} [{$kdJenisPrw}]: ✓ Created Specimen {$idSpecimen}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 
                 // Duplicate Handling Fallback using identifier
                 $isDuplicate = false;
@@ -227,7 +227,7 @@ class SatuSehatSpecimenRadiologiProcessor
                 $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: ✓ Updated Specimen {$idSpecimen}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['details']['text'] ?? $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
                 $this->log->warning("[PHASE 2] {$noorder} [{$kdJenisPrw}]: ✗ Failed -> " . $errorMessage);
                 
                 // Categorize and cache permanent/terminal failures

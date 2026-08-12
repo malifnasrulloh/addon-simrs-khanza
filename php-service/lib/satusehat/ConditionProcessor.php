@@ -126,7 +126,7 @@ class SatuSehatConditionProcessor
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created Condition {$idCondition}");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
                 $isValidationError = (stripos($errorMessage, 'Code not found') !== false ||
                                        stripos($errorMessage, 'invalid') !== false ||
@@ -210,7 +210,7 @@ class SatuSehatConditionProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Condition {$idCondition} via PATCH");
                 $this->successCount++;
             } else {
-                $errorMessage = $result['data']['issue'][0]['diagnostics'] ?? $result['message'];
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
                 $isValidationError = (stripos($errorMessage, 'Code not found') !== false ||
                                        stripos($errorMessage, 'invalid') !== false ||

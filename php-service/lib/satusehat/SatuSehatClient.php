@@ -247,6 +247,18 @@ class SatuSehatClient
      */
     public function patch(string $endpoint, array $operations, ?array $putPayload = null): array
     {
+        // ── Denial cap: stop hammering after N denials this run ───────
+        if (self::$denialCount >= self::PERMISSION_DENIAL_CAP) {
+            $this->log->warning("[UPDATE] {$endpoint}: Skipped — permission-denial cap ({self::PERMISSION_DENIAL_CAP}) reached this run. Periksa konfigurasi Organization ID / client, lalu reset state yang terkena.");
+            return [
+                'success'          => true,
+                'code'             => 200,
+                'message'          => 'Permission-denial cap reached this run',
+                'data'             => [],
+                'permission_cap'   => true,
+            ];
+        }
+
         // ── Mode B: Hand-crafted PATCH (no PUT payload) ──────────────
         if ($putPayload === null) {
             return $this->request('PATCH', $endpoint, $operations, 'application/json-patch+json');
@@ -419,9 +431,10 @@ class SatuSehatClient
 
     /**
      * Extract the best human-readable error message from an API response.
-     * Prefers details.text (used by SATUSEHAT), then diagnostics, then message.
+     * SATUSEHAT puts the message in issue[0].details.text (NOT diagnostics —
+     * processors reading only diagnostics silently got "API Error").
      */
-    private static function extractErrorMsg(array $result): string
+    public static function extractErrorMsg(array $result): string
     {
         // SATUSEHAT typically wraps the message in issue[0].details.text
         if (isset($result['data']['issue'][0]['details']['text'])) {
@@ -433,6 +446,40 @@ class SatuSehatClient
         }
         // Generic message
         return $result['message'] ?? 'Unknown error';
+    }
+
+    /**
+     * Classify an API failure into a terminal state, RuleNumber-first.
+     *
+     * Replaces the keyword-hack (stripos 'code'/'system'/'consent') that
+     * misclassified errors and, worse, saw "API Error" when details.text was
+     * not read. Priority:
+     *   duplicate  → 'duplicate'          (409 / "Found duplicate")
+     *   RuleNumber 10xxx → 'invalid_code' (payload/terminology rules)
+     *   RuleNumber 20xxx → 'failed_rule'  (permission/org/conflict rules)
+     *   privacy/consent/forbidden keywords → 'privacy_error'
+     *   otherwise  → 'generic'            (retryable — no terminal state)
+     */
+    public static function classifyError(array $result): string
+    {
+        $msg = self::extractErrorMsg($result);
+        if (stripos($msg, 'duplicate') !== false || ($result['code'] ?? 0) === 409) {
+            return 'duplicate';
+        }
+        if (preg_match('/RuleNumber\s*:?\s*(\d{3,6})/i', $msg, $m)) {
+            $rule = (int) $m[1];
+            if ($rule >= 10000 && $rule < 20000) {
+                return 'invalid_code';
+            }
+            return 'failed_rule';
+        }
+        // NOTE: 'consent' alone is deliberately NOT a privacy signal —
+        // clinical text like "Inform consent" appears in payloads; real
+        // SATUSEHAT privacy denials carry 'privacy'/'forbidden' wording.
+        if (preg_match('/privacy|forbidden|not authorized|permission/i', $msg)) {
+            return 'privacy_error';
+        }
+        return 'generic';
     }
 
     /**
@@ -483,6 +530,16 @@ class SatuSehatClient
      */
     private const PERMISSION_CACHE_TTL_SECONDS = 7 * 86400;
 
+    /**
+     * Cap on permission-denied PUT/PATCH attempts per process run — a whole
+     * pipeline must never hammer the API thousands of times (observed:
+     * 10,923 denied specimen updates in one run before caching kicked in).
+     * After the cap, remaining updates short-circuit with a summary.
+     */
+    private const PERMISSION_DENIAL_CAP = 50;
+
+    private static int $denialCount = 0;
+
     private function isPermissionDenied(string $endpoint): bool
     {
         $cache = $this->getPermissionCache();
@@ -504,10 +561,12 @@ class SatuSehatClient
      */
     private function markPermissionDenied(string $endpoint): void
     {
+        self::$denialCount++;
         $cache = $this->getPermissionCache();
         $cache[$endpoint] = time();
         $this->savePermissionCache($cache);
-        $this->log->warning("[PERMISSION] Cached {$endpoint} — will not retry on future runs");
+        $remaining = self::PERMISSION_DENIAL_CAP - self::$denialCount;
+        $this->log->warning("[PERMISSION] Cached {$endpoint} — will not retry on future runs (denials this run: " . self::$denialCount . ", cap " . self::PERMISSION_DENIAL_CAP . ", {$remaining} remaining before short-circuit).");
     }
 
     /**
@@ -632,6 +691,15 @@ class SatuSehatClient
             if ($httpCode === 0) {
                 $this->log->error("[API] {$errorReason} after {$attempt} attempts");
                 return ['success' => false, 'code' => 0, 'message' => $errorReason === 'Empty response' ? 'Empty or invalid response from API' : $errorReason, 'data' => []];
+            }
+
+            // Curl can return false / an empty body while a non-zero HTTP code
+            // was recorded (e.g. "transfer closed with outstanding read data
+            // remaining") — treat as an uncertain network failure, never feed
+            // it to json_decode (was a FATAL TypeError on the live server).
+            if ($response === false || $response === '') {
+                $this->log->error("[API] Empty or invalid response from Satu Sehat (HTTP {$httpCode}) after {$attempt} attempts");
+                return ['success' => false, 'code' => 0, 'message' => 'Empty or invalid response from API', 'data' => []];
             }
 
             $data = json_decode($response, true);
