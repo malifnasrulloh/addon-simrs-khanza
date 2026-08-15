@@ -956,13 +956,23 @@ class SatuSehatDatabase
 
     public function fetchDiagnoses(string $noRawat): array
     {
+        // Diagnoses for ONE visit's Encounter. Must scope diagnosa_pasien to
+        // the visit: the old join keyed only on kd_penyakit, multiplying by
+        // EVERY historical diagnosis of that code (a common code with
+        // thousands of historical rows inflated Encounter.diagnosis and its
+        // FHIR rank to 1000++ — rank must stay 1..N for the encounter).
+        // Status is intentionally NOT part of the join: a visit that was
+        // Ralan then Ranap may list the same disease under both statuses in
+        // satu_sehat_condition while diagnosa_pasien keeps one row for it.
         $sql = "
-            SELECT 
-                ssc.id_condition, p.nm_penyakit, dp.prioritas 
+            SELECT
+                ssc.id_condition, p.nm_penyakit, dp.prioritas
             FROM satu_sehat_condition ssc
-            INNER JOIN penyakit p ON ssc.kd_penyakit = p.kd_penyakit 
-            INNER JOIN diagnosa_pasien dp ON ssc.kd_penyakit = dp.kd_penyakit 
-            WHERE ssc.no_rawat = :nr 
+            INNER JOIN penyakit p ON ssc.kd_penyakit = p.kd_penyakit
+            INNER JOIN diagnosa_pasien dp
+                ON dp.no_rawat = ssc.no_rawat
+               AND dp.kd_penyakit = ssc.kd_penyakit
+            WHERE ssc.no_rawat = :nr
             ORDER BY dp.prioritas ASC
         ";
         $stmt = $this->mysql->prepare($sql);
