@@ -131,30 +131,31 @@ $batchSize = $config->batchSize;
 $processor = new SatuSehatObservationTTVProcessor($db, $client, $config, $log);
 $totalSuccess = 0; $totalFail = 0; $totalSkip = 0;
 
-// Process each TTV type independently with its own BatchCursor
-$log->info("[BATCH] Processing " . count($definitions) . " TTV type(s) with batch size $batchSize");
-foreach ($definitions as $ttvType => $def) {
-    $cursor = new SatuSehatBatchCursor(
-        $db,
-        'fetchPendingObservations',
-        [$ttvType, $def, $dateFrom, $dateTo],
-        $batchSize,
-        $log,
-        $ttvType
-    );
+// Single-pass: one keyset-paginated query returns every vital-sign column per
+// pemeriksaan row (10 types x Ralan/Ranap in one scan, instead of 20 scans).
+$log->info("[BATCH] Single-pass TTV sync (" . count($definitions) . " types per row) with batch size $batchSize");
+$cursor = new SatuSehatBatchCursor(
+    $db,
+    'fetchPendingObservationsAll',
+    [$dateFrom, $dateTo],
+    $batchSize,
+    $log,
+    'ttv'
+);
 
-    foreach ($cursor->batches() as $batch) {
-        $stats = $processor->run([$ttvType => $batch]);
-        $totalSuccess += $stats['success'];
-        $totalFail += $stats['fail'];
-        $totalSkip += $stats['skip'];
-        $cursor->tick();
+foreach ($cursor->batches() as $batch) {
+    foreach ($batch as $row) {
+        $d = $processor->runRow($row);
+        $totalSuccess += $d['success'];
+        $totalFail += $d['fail'];
+        $totalSkip += $d['skip'];
     }
+    $cursor->tick();
 }
 
 $elapsed = round(microtime(true) - $startTime, 2);
 $log->info("══════════════════════════════════════════════════════════════");
-$log->info("[SUMMARY] Success: {$totalSuccess} | Failed: {$totalFail}");
+$log->info("[SUMMARY] Success: {$totalSuccess} | Failed: {$totalFail} | Skipped: {$totalSkip}");
 $log->info("[SUMMARY] Elapsed: {$elapsed}s");
 $log->info("[DONE] Finished at " . date('Y-m-d H:i:s T'));
 $log->info("══════════════════════════════════════════════════════════════");

@@ -3,7 +3,10 @@
 /**
  * ObservationTTVProcessor - Orchestrator for Satu Sehat Observation TTV sync.
  *
- * Runs through a dictionary of vital signs and pushes pending observations to the API.
+ * Single-pass model: the sync script streams one keyset-paginated query that
+ * returns every vital-sign column per pemeriksaan row (Ralan + Ranap). Each
+ * row may carry up to 10 pending observations; runRow() fans the row out to
+ * the matching vital-sign types, sharing the IHS lookups across all of them.
  *
  * @author malifnasrulloh (converted from Java by Antigravity)
  */
@@ -19,10 +22,6 @@ class SatuSehatObservationTTVProcessor
     private SatuSehatConfig $config;
     private Logger $log;
 
-    private int $successCount = 0;
-    private int $failCount    = 0;
-    private int $skipCount    = 0;
-
     public function __construct(SatuSehatDatabase $db, SatuSehatClient $api, SatuSehatConfig $config, Logger $log)
     {
         $this->db     = $db;
@@ -31,140 +30,101 @@ class SatuSehatObservationTTVProcessor
         $this->log    = $log;
     }
 
-    public function run(?array $preFetchedObservations = null): array
+    /**
+     * Process ONE pemeriksaan row: for every vital-sign type that carries a
+     * pending (unsynced, non-empty) value, POST the Observation.
+     *
+     * Returns per-run deltas: ['success' => int, 'fail' => int, 'skip' => int].
+     */
+    public function runRow(array $row): array
     {
-        $this->successCount = 0;
-        $this->failCount    = 0;
-        $this->skipCount    = 0;
+        $delta = ['success' => 0, 'fail' => 0, 'skip' => 0];
 
-        if ($this->config->lookbackDays > 0) {
-            $dateTo = date('Y-m-d', strtotime('-1 day'));
-            $dateFrom = date('Y-m-d', strtotime('-' . $this->config->lookbackDays . ' days', strtotime(date('Y-m-d'))));
-            $this->log->info("  Date Range: {$dateFrom} to {$dateTo} (Lookback: {$this->config->lookbackDays} days)");
-        } else {
-            $dateFrom = $this->config->dateFrom;
-            $dateTo = $this->config->dateTo;
-            $this->log->info("  Date Range: {$dateFrom} to {$dateTo} (Configured)");
-        }
+        $noRawat = $row['no_rawat'];
+        $tglObs  = $row['tgl_observasi'];
+        $jamObs  = $row['jam_observasi'];
 
-        $definitions = ObservationTTVDictionary::getDefinitions();
+        // IHS lookups are shared by all 10 types of this row (memoized in DB).
+        $idPasien = $this->db->getIhsPatient($row['no_ktp'] ?? '');
+        $idDokter = $this->db->getIhsPractitioner($row['ktpdokter'] ?? '');
+        $missingIhs = (!$idPasien || !$idDokter);
 
-        // When pre-fetched observations are provided, only process those types
-        // (the entry script iterates per-type and passes one type at a time).
-        // When null, process all definitions (original full-sync fallback).
-        if ($preFetchedObservations !== null) {
-            foreach ($preFetchedObservations as $ttvType => $records) {
-                $def = $definitions[$ttvType] ?? null;
-                if ($def === null) {
-                    $this->log->warning("[SYNC] Unknown TTV type '{$ttvType}' skipped.");
-                    continue;
-                }
-                $this->log->info("──────────────────────────────────────────────────────────────");
-                $this->log->info("[SYNC] Processing Observation: " . strtoupper($ttvType));
-                $this->processObservation($ttvType, $def, $dateFrom, $dateTo, $records);
+        foreach (ObservationTTVDictionary::getDefinitions() as $ttvType => $def) {
+            $dbCol = $def['db_column'];
+            $value = $row[$dbCol] ?? '';
+            if ($value === null || trim((string) $value) === '' || $value === '-') {
+                continue; // this row carries no value for this type
             }
-        } else {
-            foreach ($definitions as $ttvType => $def) {
-                $this->log->info("──────────────────────────────────────────────────────────────");
-                $this->log->info("[SYNC] Processing Observation: " . strtoupper($ttvType));
-                $this->processObservation($ttvType, $def, $dateFrom, $dateTo, null);
+
+            if (!empty($row[$ttvType . '_synced'])) {
+                continue; // already sent in a previous run
             }
-        }
 
-        return [
-            'success' => $this->successCount,
-            'fail'    => $this->failCount,
-            'skip'    => $this->skipCount,
-        ];
-    }
-
-    private function processObservation(string $ttvTypeKey, array $def, string $dateFrom, string $dateTo, ?array $patients = null): void
-    {
-        if ($patients === null) {
-            $patients = $this->db->fetchPendingObservations($ttvTypeKey, $def, $dateFrom, $dateTo);
-        }
-        
-        if (empty($patients)) {
-            $this->log->info("  No pending {$ttvTypeKey} records.");
-            return;
-        }
-
-        $this->log->info("  Found " . count($patients) . " pending {$ttvTypeKey} record(s).");
-
-        foreach ($patients as $p) {
-            $noRawat = $p['no_rawat'];
-            $tglObs  = $p['tgl_observasi'];
-            $jamObs  = $p['jam_observasi'];
-
-            $localState = $this->db->getObservationLocalState($ttvTypeKey, $noRawat, $tglObs, $jamObs);
+            $localState = $this->db->getObservationLocalState($ttvType, $noRawat, $tglObs, $jamObs);
             if ($localState === 'sent' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
-                $this->skipCount++;
+                $delta['skip']++;
                 continue;
             }
 
-            $nik = $p['no_ktp'];
-            $nikDokter = $p['ktpdokter'];
-
-            $idPasien = $this->db->getIhsPatient($nik);
-            $idDokter = $this->db->getIhsPractitioner($nikDokter);
-
-            if (!$idPasien || !$idDokter) {
-                $this->log->warning("  [SKIP] {$noRawat}: Missing IHS ID for Patient or Doctor.");
-                $this->skipCount++;
+            if ($missingIhs) {
+                $this->log->warning("  [SKIP] {$noRawat} / {$ttvType}: Missing IHS ID for Patient or Doctor.");
+                $delta['skip']++;
                 continue;
             }
 
-            $payload = SatuSehatPayloadBuilder::observationTTV($p, $idPasien, $idDokter, $def);
+            $payload = SatuSehatPayloadBuilder::observationTTV(
+                $row + ['value' => $value],
+                $idPasien,
+                $idDokter,
+                $def
+            );
 
-            $this->log->info("  [POST] {$noRawat} / {$ttvTypeKey} = {$p['value']}");
+            $this->log->info("  [POST] {$noRawat} / {$ttvType} = {$value}");
             $result = $this->api->post('/Observation', $payload);
 
             if ($result['success'] && isset($result['data']['id'])) {
                 $idObservation = $result['data']['id'];
-                
-                // Save to DB
+
                 $this->db->saveObservationTTV(
-                    $def['state_table'], 
-                    $def['state_id_col'] ?? 'id_observation', 
-                    $noRawat, 
-                    $tglObs, 
-                    $jamObs, 
-                    $p['status'], 
+                    $def['state_table'],
+                    $def['state_id_col'] ?? 'id_observation',
+                    $noRawat,
+                    $tglObs,
+                    $jamObs,
+                    $row['status'],
                     $idObservation
                 );
-
-                // Update Tracker
-                $this->db->updateObservationLocalState($ttvTypeKey, $noRawat, $tglObs, $jamObs, 'sent');
+                $this->db->updateObservationLocalState($ttvType, $noRawat, $tglObs, $jamObs, 'sent');
                 $this->log->info("    ✓ Created {$idObservation}");
-                $this->successCount++;
+                $delta['success']++;
             } else {
                 $errorMessage = \SatuSehatClient::extractErrorMsg($result);
-                
+
                 // Duplicate handling for Observation
                 if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("    ! Duplicated. Attempting to recover...");
-                    $idObservation = $this->resolveDuplicateObservation($idPasien, $p['id_encounter'], $def['code']);
+                    $idObservation = $this->resolveDuplicateObservation($idPasien, $row['id_encounter'] ?? '', $def['code']);
 
                     if ($idObservation) {
                         $this->db->saveObservationTTV(
-                            $def['state_table'], 
-                            $def['state_id_col'] ?? 'id_observation', 
-                            $noRawat, 
-                            $tglObs, 
-                            $jamObs, 
-                            $p['status'], 
+                            $def['state_table'],
+                            $def['state_id_col'] ?? 'id_observation',
+                            $noRawat,
+                            $tglObs,
+                            $jamObs,
+                            $row['status'],
                             $idObservation
                         );
-                        $this->db->updateObservationLocalState($ttvTypeKey, $noRawat, $tglObs, $jamObs, 'sent');
+                        $this->db->updateObservationLocalState($ttvType, $noRawat, $tglObs, $jamObs, 'sent');
                         $this->log->info("    ✓ Recovered {$idObservation} from Server");
-                        $this->successCount++;
+                        $delta['success']++;
                     } else {
                         $this->log->error("    ✗ Failed to recover duplicate.");
-                        $this->failCount++;
+                        $delta['fail']++;
                     }
                 } else {
                     $this->log->warning("    ✗ Failed -> " . $errorMessage);
-                    
+
                     // Categorize and cache permanent/terminal failures
                     $state = 'fail';
                     if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
@@ -174,12 +134,14 @@ class SatuSehatObservationTTVProcessor
                     } elseif (stripos($errorMessage, 'code') !== false || stripos($errorMessage, 'system') !== false || stripos($errorMessage, 'terminology') !== false) {
                         $state = 'invalid_code';
                     }
-                    
-                    $this->db->updateObservationLocalState($ttvTypeKey, $noRawat, $tglObs, $jamObs, $state);
-                    $this->failCount++;
+
+                    $this->db->updateObservationLocalState($ttvType, $noRawat, $tglObs, $jamObs, $state);
+                    $delta['fail']++;
                 }
             }
         }
+
+        return $delta;
     }
 
     /**

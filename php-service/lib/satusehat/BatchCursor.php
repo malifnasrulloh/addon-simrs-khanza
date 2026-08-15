@@ -37,6 +37,9 @@ class SatuSehatBatchCursor
     private bool $dryRun = false;
     private ?Logger $log = null;
     private string $label;
+    private bool $keysetMode = false;
+    private array $keysetRowKeys = [];
+    private array $currentAfterKey = [];
 
     /**
      * @param object  $db          SatuSehatDatabase instance
@@ -70,6 +73,14 @@ class SatuSehatBatchCursor
         $this->batchSize = max(1, $batchSize);
         $this->log = $log;
         $this->label = $label ?: $method;
+
+        // Keyset pagination: when the DB layer supports it for this method
+        // (and the user has not disabled it), the cursor pages by key tuple
+        // instead of OFFSET — O(N) instead of O(N^2) on large windows.
+        if (method_exists($db, 'usesKeyset') && $db->usesKeyset($method)) {
+            $this->keysetMode = true;
+            $this->keysetRowKeys = $db->keysetRowKeys($method);
+        }
     }
 
     /**
@@ -99,6 +110,7 @@ class SatuSehatBatchCursor
         $this->currentOffset = 0;
         $this->totalProcessed = 0;
         $this->batchCount = 0;
+        $this->currentAfterKey = [];
 
         // Set memory limit once before iteration (not on every batch)
         $this->maybeSetMemoryLimit('512M');
@@ -114,10 +126,15 @@ class SatuSehatBatchCursor
                 );
             }
 
-            // Build argument list: params + (limit, offset) + extraParams
+            // Build argument list: params + (limit, offset|afterKey|null) + extraParams
             $args = $this->params;
             $args[] = $this->batchSize;
-            $args[] = $this->currentOffset;
+            if ($this->keysetMode) {
+                // null = first page (keyset ORDER BY, no seek); tuple after that.
+                $args[] = $this->currentAfterKey ?: null;
+            } else {
+                $args[] = $this->currentOffset;
+            }
             foreach ($this->extraParams as $ep) {
                 $args[] = $ep;
             }
@@ -144,7 +161,25 @@ class SatuSehatBatchCursor
             yield $rows;
 
             $this->totalProcessed += $batchCount;
-            $this->currentOffset += $this->batchSize;
+
+            if ($this->keysetMode) {
+                // Advance the cursor past the last returned row. Any missing
+                // NULL key column would silently drop rows — abort instead.
+                $last = $rows[count($rows) - 1];
+                $after = [];
+                foreach ($this->keysetRowKeys as $rk) {
+                    $v = $last[$rk] ?? null;
+                    if ($v === null) {
+                        throw new \RuntimeException(
+                            "Keyset row key column '{$rk}' is missing/NULL in the last row of '{$this->method}' — aborting to prevent silent row skipping."
+                        );
+                    }
+                    $after[] = $v;
+                }
+                $this->currentAfterKey = $after;
+            } else {
+                $this->currentOffset += $this->batchSize;
+            }
 
             // If this batch returned fewer rows than requested, we're done
             if ($batchCount < $this->batchSize) {
@@ -203,6 +238,7 @@ class SatuSehatBatchCursor
         $this->currentOffset = 0;
         $this->totalProcessed = 0;
         $this->batchCount = 0;
+        $this->currentAfterKey = [];
     }
 
     /**
