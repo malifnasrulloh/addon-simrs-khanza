@@ -395,6 +395,46 @@ class SatuSehatDatabase
         'fetchPendingCompositionUpdate' => ['mode' => 'plain', 'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
         'fetchPendingImagingStudies' => ['mode' => 'plain', 'cols' => 'prad.tgl_periksa, prad.no_rawat, prad.kd_jenis_prw, prad.jam', 'keys' => ['tgl_periksa', 'no_rawat', 'kd_jenis_prw', 'jam_periksa']],
         'fetchPendingPatients'       => ['mode' => 'plain', 'cols' => 'p.no_rkm_medis', 'keys' => ['no_rkm_medis']],
+        'fetchPendingEocActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingEocFinished' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingConditionActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingConditionUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingProcedureActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingProcedureUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingInProgress' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingFinished' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingDiagnosticReportRadiologiActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingDiagnosticReportRadiologiUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingSpecimenRadiologiActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingSpecimenRadiologiUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingObservationRadiologiActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingObservationRadiologiUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingServiceRequestLabPKActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingServiceRequestLabPKUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingServiceRequestLabMBActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingServiceRequestLabMBUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingSpecimenLabPKActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingSpecimenLabPKUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingSpecimenLabMBActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingSpecimenLabMBUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingObservationLabPKActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingObservationLabPKUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingObservationLabMBActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingObservationLabMBUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingDiagnosticReportLabPKActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingDiagnosticReportLabPKUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingDiagnosticReportLabMBActive' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingDiagnosticReportLabMBUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingCarePlanActive' => ['phase' => 'visit', 'mode' => 'derived',  'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingCarePlanUpdate' => ['phase' => 'visit', 'mode' => 'derived',  'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingAllergyActive' => ['phase' => 'visit', 'mode' => 'derived',  'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingAllergyUpdate' => ['phase' => 'visit', 'mode' => 'derived',  'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingMedicationRequestActive' => ['phase' => 'visit', 'mode' => 'union',    'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingMedicationRequestUpdate' => ['phase' => 'visit', 'mode' => 'union',    'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingMedicationDispenseActive' => ['phase' => 'visit', 'mode' => 'union',    'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingMedicationDispenseUpdate' => ['phase' => 'visit', 'mode' => 'union',    'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingMedicationStatementActive' => ['phase' => 'visit', 'mode' => 'union',    'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingMedicationStatementUpdate' => ['phase' => 'visit', 'mode' => 'union',    'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
         // Self-managed keyset cursor (mode 'custom': applyTail is not used).
         'fetchPendingObservationsAll' => ['mode' => 'custom', 'cols' => '', 'keys' => ['tgl_observasi', 'no_rawat', 'jam_observasi']],
     ];
@@ -511,6 +551,190 @@ class SatuSehatDatabase
         unset($row);
 
         return $rows;
+    }
+
+
+    /**
+     * Fetch dispatcher for paginated methods. Handles three pagination modes:
+     *   - legacy OFFSET (keyset disabled, or plain int offset)
+     *   - direct keyset (single-query families; tuple == a real index)
+     *   - visit-phase keyset (child-multiplied families: distinct-visit
+     *     keyset over the window, then materialize the children of the page's
+     *     visits with a single per-page IN-lookup — no filesort, no O(N^2)).
+     */
+    private function paginatedFetch(string $method, string $sql, array $params, int|array|null $offsetOrAfter, ?int $limit): array
+    {
+        $cfg = self::KEYSET_COLUMNS[$method] ?? null;
+        $keyset = $this->config->keysetPagination && $cfg !== null
+            && ($offsetOrAfter === null || is_array($offsetOrAfter));
+
+        if ($keyset && ($cfg['phase'] ?? 'direct') === 'visit') {
+            return $this->visitPhaseFetch($method, $cfg, $sql, $params, $offsetOrAfter, $limit);
+        }
+
+        $this->applyTail($method, $sql, $params, $offsetOrAfter, $limit);
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Two-phase keyset pagination for queries whose rows multiply per visit
+     * (pemeriksaan/diagnosa/prosedur/resep/lab-detail joins).
+     *
+     * Phase A: paginate DISTINCT visits over the window, index-aligned on
+     * (rp.tgl_registrasi, rp.no_rawat) — O(N), no filesort. Every page ends on
+     * a visit boundary, so no visit group is ever split across pages.
+     * Phase B: run the original query restricted to the page's visits via
+     * `no_rawat IN (...)` to retrieve all child rows for exactly those visits.
+     */
+    private function visitPhaseFetch(string $method, array $cfg, string $sql, array $params, int|array|null $offsetOrAfter, ?int $limit): array
+    {
+        if ($limit === null) {
+            $stmt = $this->mysql->prepare($sql);
+            $stmt->execute($params);
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+
+        $cut = strrpos($sql, 'ORDER BY ');
+        $base0 = $cut === false ? $sql : substr($sql, 0, $cut);
+        $after = is_array($offsetOrAfter) ? $offsetOrAfter : null;
+
+        $visits = $this->visitKeysetQueries($cfg['mode'], $base0, $params, $after, $limit);
+
+        if ($visits === []) {
+            return [];
+        }
+
+        $in = [];
+        $extra = [];
+        foreach ($visits as $i => $v) {
+            $in[] = ":visit{$i}";
+            $extra["visit{$i}"] = $v['no_rawat'];
+        }
+        // Order matters: the cursor derives its after-key from the LAST row,
+        // so the page must end on the maximum visit tuple (else already-served
+        // visits get re-fetched on the next page → duplicates).
+        $phaseB = "SELECT * FROM ( {$base0} ) _t WHERE _t.no_rawat IN (" . implode(',', $in) . ")"
+            . " ORDER BY _t.tgl_registrasi ASC, _t.no_rawat ASC";
+        $bind = array_intersect_key(array_merge($params, $extra), $this->namedPlaceholders($phaseB));
+        $stmt = $this->mysql->prepare($phaseB);
+        $stmt->execute($bind);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Phase A: distinct-visit keyset query(-ies) over the window.
+     */
+    private function visitKeysetQueries(string $mode, string $base0, array &$params, ?array $after, int $limit): array
+    {
+        $sources = $this->visitSourceBranches($mode, $base0);
+
+        $all = [];
+        foreach ($sources as $source) {
+            $q = $this->visitKeysetQueryFromSource($source, $params, $after, $limit);
+            $names = $this->namedPlaceholders($q);
+            $stmt = $this->mysql->prepare($q);
+            $stmt->execute(array_intersect_key($params, $names));
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $all[] = ['tgl_registrasi' => $r['tgl_registrasi'], 'no_rawat' => $r['no_rawat']];
+            }
+        }
+
+        if (count($all) > 1) {
+            usort($all, function ($a, $b) {
+                $c = strcmp($a['tgl_registrasi'], $b['tgl_registrasi']);
+                return $c !== 0 ? $c : strcmp($a['no_rawat'], $b['no_rawat']);
+            });
+            $uniq = [];
+            foreach ($all as $v) {
+                $k = $v['tgl_registrasi'] . '|' . $v['no_rawat'];
+                if (!isset($uniq[$k])) {
+                    $uniq[$k] = $v;
+                }
+            }
+            $all = array_values($uniq);
+        }
+
+        return array_slice($all, 0, $limit);
+    }
+
+    /**
+     * Convert one branch source ("SELECT ... FROM ... WHERE ...") into the
+     * distinct-visit keyset query for that branch.
+     */
+    private function visitKeysetQueryFromSource(string $source, array &$params, ?array $after, int $limit): string
+    {
+        $q = preg_replace(
+            // Consume the SELECT list up to the top-level FROM reg_periksa rp.
+            // (Subquery FROMs inside column expressions, e.g. nota_jalan
+            // lookups, are naturally skipped because we match "FROM reg_periksa rp".)
+            '/^\s*SELECT\s+(?:DISTINCT\s+)?(?:ALL\s+)?[\s\S]*?\s+FROM\s+reg_periksa\s+rp\b/i',
+            'SELECT DISTINCT rp.tgl_registrasi, rp.no_rawat FROM reg_periksa rp',
+            $source,
+            1,
+            $replaced
+        );
+        if (!$replaced) {
+            throw new \RuntimeException('visit keyset: could not swap SELECT in branch source');
+        }
+
+        if ($after !== null) {
+            $params['k0'] = $after[0];
+            $params['k1'] = $after[1];
+            $q .= " AND (rp.tgl_registrasi, rp.no_rawat) > (:k0, :k1)";
+        }
+        $params['lim'] = $limit;
+        $q .= " ORDER BY rp.tgl_registrasi ASC, rp.no_rawat ASC LIMIT :lim";
+        return $q;
+    }
+
+    /**
+     * Split the ORDER-BY-less base SQL into one branch source per UNION
+     * member for 'derived' (… AS combined) and 'union' ((…) UNION ALL (…))
+     * queries; a single flat query yields itself.
+     */
+    private function visitSourceBranches(string $mode, string $base0): array
+    {
+        if ($mode === 'derived') {
+            $open = strpos($base0, '(');
+            $closed = strrpos($base0, ') AS combined');
+            if ($open === false || $closed === false || $closed <= $open) {
+                throw new \RuntimeException('visit keyset: derived-table structure not recognized');
+            }
+            $inner = substr($base0, $open + 1, $closed - $open - 1);
+            $branches = preg_split('/\s+UNION ALL\s+/i', trim($inner));
+            return array_map('trim', $branches);
+        }
+
+        if ($mode === 'union') {
+            $branches = preg_split('/\s+UNION ALL\s+/i', trim($base0));
+            $out = [];
+            foreach ($branches as $b) {
+                $b = trim($b);
+                if ($b !== '' && $b[0] === '(' && substr($b, -1) === ')') {
+                    $b = trim(substr($b, 1, -1));
+                }
+                $out[] = $b;
+            }
+            return $out;
+        }
+
+        return [$base0];
+    }
+
+    /**
+     * @return array<string,int> set of named placeholders referenced in $sql
+     */
+    private function namedPlaceholders(string $sql): array
+    {
+        $names = [];
+        if (preg_match_all('/:([a-zA-Z0-9_]+)/', $sql, $m)) {
+            foreach ($m[1] as $n) {
+                $names[$n] = 1;
+            }
+        }
+        return $names;
     }
 
     private function applyTail(string $method, string &$sql, array &$params, int|array|null $offsetOrAfter, ?int $limit): void
@@ -690,10 +914,7 @@ class SatuSehatDatabase
         ";
 
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $this->attachKamar($stmt->fetchAll(PDO::FETCH_ASSOC), 'latest');
+                return $this->attachKamar($this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit), 'latest');
     }
 
     /**
@@ -730,10 +951,7 @@ class SatuSehatDatabase
         ";
 
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $this->attachKamar($stmt->fetchAll(PDO::FETCH_ASSOC), 'finished');
+                return $this->attachKamar($this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit), 'finished');
     }
 
     public function fetchDiagnoses(string $noRawat): array
@@ -987,6 +1205,8 @@ class SatuSehatDatabase
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
             LEFT JOIN kamar_inap ki ON ki.no_rawat = rp.no_rawat
+            LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
+            LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
             LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.kd_penyakit = dp.kd_penyakit
             WHERE CASE
                     WHEN rp.status_lanjut = 'Ralan' THEN nj.tanggal
@@ -998,10 +1218,7 @@ class SatuSehatDatabase
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingEocFinished(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
@@ -1032,10 +1249,7 @@ class SatuSehatDatabase
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveEpisodeOfCare(string $noRawat, string $kdPenyakit, string $status, string $idEpisode): bool
@@ -1111,10 +1325,7 @@ class SatuSehatDatabase
         ";
 
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingConditionUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
@@ -1141,10 +1352,7 @@ class SatuSehatDatabase
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveCondition(string $noRawat, string $kdPenyakit, string $status, string $idCondition): bool
@@ -1630,10 +1838,7 @@ class SatuSehatDatabase
         ";
 
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingProcedureUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
@@ -1664,10 +1869,7 @@ class SatuSehatDatabase
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveProcedure(string $noRawat, string $kode, string $status, string $idProcedure): bool
@@ -1755,10 +1957,7 @@ class SatuSehatDatabase
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-$stmt = $this->mysql->prepare($sql);
-                $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingCarePlanUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
@@ -1809,10 +2008,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-$stmt = $this->mysql->prepare($sql);
-                $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveCarePlan(string $noRawat, string $tglPerawatan, string $jamRawat, string $status, string $idCarePlan): bool
@@ -1899,10 +2095,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-$stmt = $this->mysql->prepare($sql);
-                $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingAllergyUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
@@ -1947,10 +2140,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-$stmt = $this->mysql->prepare($sql);
-                $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveAllergyIntolerance(string $noRawat, string $tglPerawatan, string $jamRawat, string $statusRawat, string $idAllergy): bool
@@ -2323,10 +2513,7 @@ $stmt = $this->mysql->prepare($sql);
             'df1' => $dateFrom, 'dt1' => $dateTo,
             'df2' => $dateFrom, 'dt2' => $dateTo
         ];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-$stmt = $this->mysql->prepare($sql);
-                $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     /**
@@ -2384,10 +2571,7 @@ $stmt = $this->mysql->prepare($sql);
             'df1' => $dateFrom, 'dt1' => $dateTo,
             'df2' => $dateFrom, 'dt2' => $dateTo
         ];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-$stmt = $this->mysql->prepare($sql);
-                $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     /**
@@ -2546,10 +2730,7 @@ $stmt = $this->mysql->prepare($sql);
             'df1' => $dateFrom, 'dt1' => $dateTo,
             'df2' => $dateFrom, 'dt2' => $dateTo
         ];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-$stmt = $this->mysql->prepare($sql);
-                $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     /**
@@ -2622,10 +2803,7 @@ $stmt = $this->mysql->prepare($sql);
             'df1' => $dateFrom, 'dt1' => $dateTo,
             'df2' => $dateFrom, 'dt2' => $dateTo
         ];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-$stmt = $this->mysql->prepare($sql);
-                $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     /**
@@ -2793,10 +2971,7 @@ $stmt = $this->mysql->prepare($sql);
             'df3' => $dateFrom, 'dt3' => $dateTo,
             'df4' => $dateFrom, 'dt4' => $dateTo
         ];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-$stmt = $this->mysql->prepare($sql);
-                $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     /**
@@ -2901,10 +3076,7 @@ $stmt = $this->mysql->prepare($sql);
             'df3' => $dateFrom, 'dt3' => $dateTo,
             'df4' => $dateFrom, 'dt4' => $dateTo
         ];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-$stmt = $this->mysql->prepare($sql);
-                $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     /**
@@ -3299,7 +3471,7 @@ $stmt = $this->mysql->prepare($sql);
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
+                rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
                 prad.kd_dokter, peg.nama, peg.no_ktp as nik_praktisi,
                 sse.id_encounter, pr.noorder, pr.tgl_hasil, pr.jam_hasil, pr.diagnosa_klinis,
                 jpr.nm_perawatan, IFNULL(smr.code, '') as code, IFNULL(smr.system, '') as system, IFNULL(smr.display, '') as display,
@@ -3327,17 +3499,14 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingDiagnosticReportRadiologiUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
+                rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
                 prad.kd_dokter, peg.nama, peg.no_ktp as nik_praktisi,
                 sse.id_encounter, pr.noorder, pr.tgl_hasil, pr.jam_hasil, pr.diagnosa_klinis,
                 jpr.nm_perawatan, IFNULL(smr.code, '') as code, IFNULL(smr.system, '') as system, IFNULL(smr.display, '') as display,
@@ -3365,10 +3534,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveDiagnosticReportRadiologi(
@@ -3394,7 +3560,7 @@ $stmt = $this->mysql->prepare($sql);
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
+                rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
                 pr.noorder, pr.tgl_sampel, pr.jam_sampel, jpr.nm_perawatan,
                 smr.sampel_code, smr.sampel_system, smr.sampel_display,
                 ssr.id_servicerequest, ppr.kd_jenis_prw, '' as id_specimen
@@ -3412,17 +3578,14 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingSpecimenRadiologiUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
+                rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
                 pr.noorder, pr.tgl_sampel, pr.jam_sampel, jpr.nm_perawatan,
                 smr.sampel_code, smr.sampel_system, smr.sampel_display,
                 ssr.id_servicerequest, ppr.kd_jenis_prw, sssp.id_specimen
@@ -3440,10 +3603,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveSpecimenRadiologi(
@@ -3469,7 +3629,7 @@ $stmt = $this->mysql->prepare($sql);
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
+                rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
                 pr.noorder, pr.tgl_hasil, pr.jam_hasil, jpr.nm_perawatan,
                 smr.code, smr.system, smr.display, hr.hasil, ppr.kd_jenis_prw,
                 sssp.id_specimen, prad.kd_dokter, peg.nama as nm_dokter, peg.no_ktp as nik_praktisi,
@@ -3495,17 +3655,14 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingObservationRadiologiUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
+                rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien, 
                 pr.noorder, pr.tgl_hasil, pr.jam_hasil, jpr.nm_perawatan,
                 smr.code, smr.system, smr.display, hr.hasil, ppr.kd_jenis_prw,
                 sssp.id_specimen, prad.kd_dokter, peg.nama as nm_dokter, peg.no_ktp as nik_praktisi,
@@ -3531,10 +3688,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveObservationRadiologi(
@@ -3583,10 +3737,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingServiceRequestLabPKUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
@@ -3616,10 +3767,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveServiceRequestLabPK(
@@ -3670,10 +3818,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingServiceRequestLabMBUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
@@ -3703,10 +3848,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveServiceRequestLabMB(
@@ -3758,10 +3900,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingSpecimenLabPKUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
@@ -3792,10 +3931,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveSpecimenLabPK(
@@ -3847,10 +3983,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingSpecimenLabMBUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
@@ -3881,10 +4014,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveSpecimenLabMB(
@@ -3910,7 +4040,7 @@ $stmt = $this->mysql->prepare($sql);
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+                rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
                 pl.noorder, pl.tgl_hasil, pl.jam_hasil, tl.Pemeriksaan,
                 sml.code, sml.system, sml.display,
                 dpl.nilai, dpl.nilai_rujukan, dpl.keterangan, tl.satuan,
@@ -3947,17 +4077,14 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingObservationLabPKUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+                rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
                 pl.noorder, pl.tgl_hasil, pl.jam_hasil, tl.Pemeriksaan,
                 sml.code, sml.system, sml.display,
                 dpl.nilai, dpl.nilai_rujukan, dpl.keterangan, tl.satuan,
@@ -3994,10 +4121,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveObservationLabPK(
@@ -4023,7 +4147,7 @@ $stmt = $this->mysql->prepare($sql);
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+                rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
                 pl.noorder, pl.tgl_hasil, pl.jam_hasil, tl.Pemeriksaan,
                 sml.code, sml.system, sml.display,
                 dpl.nilai, dpl.nilai_rujukan, dpl.keterangan, tl.satuan,
@@ -4060,17 +4184,14 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingObservationLabMBUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
     {
         $sql = "
             SELECT DISTINCT 
-                rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+                rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
                 pl.noorder, pl.tgl_hasil, pl.jam_hasil, tl.Pemeriksaan,
                 sml.code, sml.system, sml.display,
                 dpl.nilai, dpl.nilai_rujukan, dpl.keterangan, tl.satuan,
@@ -4107,10 +4228,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
         
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveObservationLabMB(
@@ -4144,7 +4262,7 @@ $stmt = $this->mysql->prepare($sql);
     {
         $sql = "
             SELECT DISTINCT 
-            rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+            rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
             per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
             sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
             tl.Pemeriksaan, sml.code, sml.system, sml.display,
@@ -4187,17 +4305,14 @@ $stmt = $this->mysql->prepare($sql);
         ";
 
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingDiagnosticReportLabPKUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
     {
         $sql = "
             SELECT DISTINCT 
-            rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+            rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
             per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
             sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
             tl.Pemeriksaan, sml.code, sml.system, sml.display,
@@ -4240,10 +4355,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
 
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveDiagnosticReportLabPK(
@@ -4269,7 +4381,7 @@ $stmt = $this->mysql->prepare($sql);
     {
         $sql = "
             SELECT DISTINCT 
-            rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+            rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
             per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
             sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
             tl.Pemeriksaan, sml.code, sml.system, sml.display,
@@ -4312,17 +4424,14 @@ $stmt = $this->mysql->prepare($sql);
         ";
 
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingDiagnosticReportLabMBUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
     {
         $sql = "
             SELECT DISTINCT 
-            rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
+            rp.tgl_registrasi, rp.no_rawat, rp.no_rkm_medis, p.nm_pasien, p.no_ktp as nik_pasien,
             per.kd_dokter, peg.nama as nama_dokter, peg.no_ktp as nik_dokter,
             sse.id_encounter, pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
             tl.Pemeriksaan, sml.code, sml.system, sml.display,
@@ -4365,10 +4474,7 @@ $stmt = $this->mysql->prepare($sql);
         ";
 
         $params = ['df' => $dateFrom, 'dt' => $dateTo];
-                $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
-        $stmt = $this->mysql->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+                return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveDiagnosticReportLabMB(
