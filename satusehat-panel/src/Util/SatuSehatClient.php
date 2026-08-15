@@ -17,6 +17,10 @@ class SatuSehatClient
     private string $baseUrl;
     private int    $tokenTimeout;
     private int    $delayMs;
+    private string $delayMode;
+    private int    $consecutive429 = 0;
+    private int    $successStreak  = 0;
+    private float  $nextAllowedAt  = 0.0;
     private bool   $verbosePayload;
     private bool   $verifyTls;
     private Logger $log;
@@ -48,6 +52,7 @@ class SatuSehatClient
         $this->baseUrl         = $config->baseUrl;
         $this->tokenTimeout    = $config->tokenTimeout;
         $this->delayMs         = $config->delayMs;
+        $this->delayMode       = $config->delayMode;
         $this->verbosePayload  = $config->verbosePayload;
         $this->verifyTls       = $config->verifyTls;
         $this->log             = $log;
@@ -570,6 +575,58 @@ class SatuSehatClient
     }
 
     /**
+     * Pre-request pacing. In 'fixed' mode sleeps a constant SATUSEHAT_DELAY_MS
+     * (legacy behavior). In 'adaptive' mode (default) there is no fixed sleep —
+     * requests run back-to-back until HTTP 429 triggers an exponential
+     * cooldown that ramps 2s→60s with jitter, then decays on success.
+     */
+    private function applyRateLimit(): void
+    {
+        if ($this->delayMode === 'fixed') {
+            if ($this->delayMs > 0) {
+                usleep($this->delayMs * 1000);
+            }
+            return;
+        }
+
+        // Adaptive: only an active 429 cooldown holds the line.
+        if ($this->nextAllowedAt > 0) {
+            $waitUs = (int) (($this->nextAllowedAt - microtime(true)) * 1000000);
+            if ($waitUs > 0) {
+                usleep($waitUs);
+            }
+            $this->nextAllowedAt = 0;
+        }
+    }
+
+    /**
+     * Feed rate-limit state from each HTTP result.
+     */
+    private function noteHttpResult(int $httpCode): void
+    {
+        if ($httpCode === 429) {
+            $this->consecutive429++;
+            $this->successStreak = 0;
+            $backoff = min(60.0, pow(2, $this->consecutive429));
+            $backoff *= 0.75 + (mt_rand(0, 500) / 1000); // jitter 0.75x–1.25x
+            $this->nextAllowedAt = microtime(true) + $backoff;
+            return;
+        }
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            $this->successStreak++;
+            $this->consecutive429 = max(0, $this->consecutive429 - 1);
+            if ($this->successStreak >= 10) {
+                $this->successStreak = 0;
+                $this->consecutive429 = 0;
+            }
+            return;
+        }
+
+        $this->successStreak = 0;
+    }
+
+    /**
      * Core HTTP request method.
      */
     private function request(string $method, string $endpoint, ?array $payload, ?string $contentType = null): array
@@ -579,10 +636,8 @@ class SatuSehatClient
             return ['success' => false, 'code' => 401, 'message' => 'Failed to obtain access token', 'data' => []];
         }
 
-        // Rate limit delay
-        if ($this->delayMs > 0) {
-            usleep($this->delayMs * 1000);
-        }
+        // Rate limit pacing: fixed sleep (legacy) or adaptive with 429 backoff
+        $this->applyRateLimit();
 
         $url = $this->baseUrl . $endpoint;
         $headers = [
@@ -648,6 +703,7 @@ class SatuSehatClient
             // request, so re-POSTing the identical bundle risks duplicates
             // (rule 20002). Callers handle uncertain outcomes via
             // idempotency/reconciliation instead.
+            $this->noteHttpResult($httpCode);
             $isTransientError = false;
             $errorReason = '';
 

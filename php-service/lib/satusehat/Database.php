@@ -20,6 +20,18 @@ class SatuSehatDatabase
     /** File handles already flocked by THIS process (per lock name). */
     private static array $heldLocks = [];
 
+    // ── IHS lookup memoization (T2.8) ──────────────────────────────────────
+    // Caches final lookup results per NIK for the process lifetime. Negative
+    // results mirror the durable DB marks ('-' rows + 30-day SQLite TTL), so
+    // caching them is safe within one cron run.
+    private const IHS_MEMO_MAX = 50000;
+    /** kd_kamar => id_lokasi_satusehat (loaded once per process). */
+    private static array $lokasiRanapMap = [];
+    private static array $memoIhsPatient = [];
+    private static array $memoIhsPractitioner = [];
+    private static int $ihsLookups = 0;
+    private static int $ihsHits = 0;
+
     public function __construct(SatuSehatConfig $config, Logger $log, SatuSehatClient $client)
     {
         $this->config = $config;
@@ -62,6 +74,10 @@ class SatuSehatDatabase
         $this->sqlite->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $this->sqlite->exec("PRAGMA journal_mode=WAL;");
         $this->sqlite->exec("PRAGMA busy_timeout = 60000;");
+        // NORMAL (default) + WAL: commits are not individually fsync'd —
+        // removes the per-row disk barrier that made 28 parallel services
+        // hammer the disk; durability trade-off is opt-in via config.
+        $this->sqlite->exec("PRAGMA synchronous = " . ($config->sqliteSync === 'FULL' ? 'FULL' : 'NORMAL') . ";");
         
         // Ensure table exists
         $this->sqlite->exec("CREATE TABLE IF NOT EXISTS encounter_state (
@@ -289,6 +305,50 @@ class SatuSehatDatabase
         return $this->mysql;
     }
 
+    // ─── SQLITE BATCH TRANSACTIONS ─────────────────────────────────────────────
+    // State upserts are per-row; batching them per processor batch turns
+    // N commits into 1 — cuts lock contention between the 28 parallel
+    // services sharing the WAL. Pairs must be balanced; __destruct rolls back
+    // any dangling transaction.
+
+    private bool $sqliteTxOpen = false;
+
+    public function beginSqliteBatch(): void
+    {
+        if (!$this->sqliteTxOpen) {
+            $this->sqlite->beginTransaction();
+            $this->sqliteTxOpen = true;
+        }
+    }
+
+    public function commitSqliteBatch(): void
+    {
+        if ($this->sqliteTxOpen) {
+            $this->sqlite->commit();
+            $this->sqliteTxOpen = false;
+        }
+    }
+
+    public function rollbackSqliteBatch(): void
+    {
+        if ($this->sqliteTxOpen) {
+            $this->sqlite->rollBack();
+            $this->sqliteTxOpen = false;
+        }
+    }
+
+    public function __destruct()
+    {
+        if ($this->sqliteTxOpen) {
+            try {
+                $this->sqlite->rollBack();
+            } catch (\Throwable $e) {
+                // connection already gone — nothing to roll back
+            }
+            $this->sqliteTxOpen = false;
+        }
+    }
+
     // ─── KEYSET PAGINATION ────────────────────────────────────────────────────
     // Keyset (seek) pagination mirrors the index order of each paginated
     // fetchPending* query: WHERE (key tuple) > (:k0, :k1, ...) + ORDER BY the
@@ -363,6 +423,96 @@ class SatuSehatDatabase
      *
      * @param array $params Existing bound parameters; mutated in place.
      */
+    /**
+     * Attach kamar_inap context to encounter rows from a single per-batch
+     * IN-lookup instead of the legacy correlated derived-table join (which
+     * re-scanned ALL kamar_inap on every page).
+     *
+     * @param string $mode 'latest' = newest (tgl_masuk, jam_masuk) row per
+     *                     visit (Arrived / In-Progress); 'finished' = row
+     *                     with the max tgl_keluar among non-removed stays.
+     * Sets ki.* columns (tgl_masuk, jam_masuk, stts_pulang, lama, kd_kamar)
+     * and overlays id_lokasi_satusehat with the ranap location mapping when
+     * the visit had a kamar stay (mirrors the old COALESCE(ranap, ralan)).
+     */
+    private function attachKamar(array $rows, string $mode): array
+    {
+        if (empty($rows)) {
+            return $rows;
+        }
+
+        $noRawats = array_values(array_unique(array_column($rows, 'no_rawat')));
+        $in = [];
+        $params = [];
+        foreach ($noRawats as $i => $nr) {
+            $in[] = ":nr{$i}";
+            $params["nr{$i}"] = $nr;
+        }
+
+        $stmt = $this->mysql->prepare(
+            "SELECT no_rawat, tgl_masuk, jam_masuk, stts_pulang, lama, kd_kamar, tgl_keluar, jam_keluar
+             FROM kamar_inap WHERE no_rawat IN (" . implode(',', $in) . ")"
+        );
+        $stmt->execute($params);
+
+        $byVisit = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $ki) {
+            $byVisit[$ki['no_rawat']][] = $ki;
+        }
+
+        $pick = [];
+        foreach ($byVisit as $nr => $candidates) {
+            if ($mode === 'finished') {
+                $withdrawn = array_values(array_filter($candidates, function ($r) {
+                    return !in_array($r['stts_pulang'], ['-', 'Pindah Kamar'], true)
+                        && $r['tgl_keluar'] !== '0000-00-00'
+                        && $r['tgl_keluar'] !== null
+                        && $r['tgl_keluar'] !== '';
+                }));
+                if ($withdrawn === []) {
+                    continue;
+                }
+                $maxTgl = max(array_column($withdrawn, 'tgl_keluar'));
+                foreach ($withdrawn as $r) {
+                    if ($r['tgl_keluar'] === $maxTgl) {
+                        $pick[$nr] = $r;
+                        break;
+                    }
+                }
+            } else {
+                usort($candidates, function ($a, $b) {
+                    return strcmp($a['tgl_masuk'] . ' ' . $a['jam_masuk'], $b['tgl_masuk'] . ' ' . $b['jam_masuk']);
+                });
+                $pick[$nr] = end($candidates);
+            }
+        }
+
+        // Ranap location mapping table is small; load once per process.
+        if (self::$lokasiRanapMap === []) {
+            $map = [];
+            $mStmt = $this->mysql->query("SELECT kd_kamar, id_lokasi_satusehat FROM satu_sehat_mapping_lokasi_ranap");
+            foreach ($mStmt->fetchAll(PDO::FETCH_ASSOC) as $m) {
+                $map[$m['kd_kamar']] = $m['id_lokasi_satusehat'];
+            }
+            self::$lokasiRanapMap = $map;
+        }
+
+        foreach ($rows as &$row) {
+            $ki = $pick[$row['no_rawat']] ?? null;
+            $row['tgl_masuk']   = $ki['tgl_masuk'] ?? null;
+            $row['jam_masuk']   = $ki['jam_masuk'] ?? null;
+            $row['stts_pulang'] = $ki['stts_pulang'] ?? null;
+            $row['lama']        = $ki['lama'] ?? null;
+            $row['kd_kamar']    = $ki['kd_kamar'] ?? null;
+            if (($ki['kd_kamar'] ?? null) !== null && isset(self::$lokasiRanapMap[$ki['kd_kamar']])) {
+                $row['id_lokasi_satusehat'] = self::$lokasiRanapMap[$ki['kd_kamar']];
+            }
+        }
+        unset($row);
+
+        return $rows;
+    }
+
     private function applyTail(string $method, string &$sql, array &$params, int|array|null $offsetOrAfter, ?int $limit): void
     {
         $cfg = self::KEYSET_COLUMNS[$method] ?? null;
@@ -486,25 +636,13 @@ class SatuSehatDatabase
                 rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
                 p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
                 rp.kd_poli, pol.nm_poli,
-                COALESCE(smlranap.id_lokasi_satusehat, smlr.id_lokasi_satusehat) as id_lokasi_satusehat,
-                rp.stts, rp.status_lanjut,
-                ki.tgl_masuk, ki.jam_masuk, ki.stts_pulang, ki.lama, ki.kd_kamar
+                smlr.id_lokasi_satusehat as id_lokasi_satusehat,
+                rp.stts, rp.status_lanjut
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
             INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
             LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
-            LEFT JOIN (
-                SELECT ki1.*
-                FROM kamar_inap ki1
-                INNER JOIN (
-                    SELECT no_rawat, MAX(CONCAT(tgl_masuk, ' ', jam_masuk)) as max_datetime
-                    FROM kamar_inap
-                    GROUP BY no_rawat
-                ) ki2 ON ki1.no_rawat = ki2.no_rawat
-                     AND CONCAT(ki1.tgl_masuk, ' ', ki1.jam_masuk) = ki2.max_datetime
-            ) ki ON ki.no_rawat = rp.no_rawat AND rp.status_lanjut = 'Ranap'
-            LEFT JOIN satu_sehat_mapping_lokasi_ranap smlranap ON smlranap.kd_kamar = ki.kd_kamar
             WHERE rp.status_bayar = 'Sudah Bayar'
               AND rp.tgl_registrasi BETWEEN :df AND :dt
               AND rp.no_rawat NOT IN (SELECT no_rawat FROM satu_sehat_encounter)
@@ -515,7 +653,7 @@ class SatuSehatDatabase
                 $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        return $this->attachKamar($stmt->fetchAll(PDO::FETCH_ASSOC), 'latest');
     }
 
     /**
@@ -531,15 +669,14 @@ class SatuSehatDatabase
                 rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
                 p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
                 rp.kd_poli, pol.nm_poli,
-                COALESCE(smlranap.id_lokasi_satusehat, smlr.id_lokasi_satusehat) as id_lokasi_satusehat,
+                smlr.id_lokasi_satusehat as id_lokasi_satusehat,
                 rp.stts, rp.status_lanjut,
                 sse.id_encounter,
                 CASE
                     WHEN rp.status_lanjut = 'Ranap' AND pranap.no_rawat IS NOT NULL
                         THEN CONCAT(pranap.tgl_perawatan, 'T', pranap.jam_rawat, '+07:00')
                     ELSE CONCAT(pr.tgl_perawatan, 'T', pr.jam_rawat, '+07:00')
-                END as waktu_perawatan,
-                ki.tgl_masuk, ki.jam_masuk, ki.stts_pulang, ki.lama, ki.kd_kamar
+                END as waktu_perawatan
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
@@ -548,17 +685,6 @@ class SatuSehatDatabase
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ranap pranap ON pranap.no_rawat = rp.no_rawat
-            LEFT JOIN (
-                SELECT ki1.*
-                FROM kamar_inap ki1
-                INNER JOIN (
-                    SELECT no_rawat, MAX(CONCAT(tgl_masuk, ' ', jam_masuk)) as max_datetime
-                    FROM kamar_inap
-                    GROUP BY no_rawat
-                ) ki2 ON ki1.no_rawat = ki2.no_rawat
-                     AND CONCAT(ki1.tgl_masuk, ' ', ki1.jam_masuk) = ki2.max_datetime
-            ) ki ON ki.no_rawat = rp.no_rawat AND rp.status_lanjut = 'Ranap'
-            LEFT JOIN satu_sehat_mapping_lokasi_ranap smlranap ON smlranap.kd_kamar = ki.kd_kamar
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
          ORDER BY no_rawat ASC
         ";
@@ -567,7 +693,7 @@ class SatuSehatDatabase
                 $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        return $this->attachKamar($stmt->fetchAll(PDO::FETCH_ASSOC), 'latest');
     }
 
     /**
@@ -581,15 +707,14 @@ class SatuSehatDatabase
                 rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
                 p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
                 rp.kd_poli, pol.nm_poli,
-                COALESCE(smlranap.id_lokasi_satusehat, smlr.id_lokasi_satusehat) as id_lokasi_satusehat,
+                smlr.id_lokasi_satusehat as id_lokasi_satusehat,
                 rp.stts, rp.status_lanjut,
                 sse.id_encounter,
                 CASE
                     WHEN rp.status_lanjut = 'Ralan' THEN CONCAT(nj.tanggal, 'T', nj.jam, '+07:00')
                     WHEN rp.status_lanjut = 'Ranap' THEN CONCAT(ni.tanggal, 'T', ni.jam, '+07:00')
                 END as waktu_pulang,
-                pr.tgl_perawatan, pr.jam_rawat,
-                ki.stts_pulang, ki.lama, ki.kd_kamar
+                pr.tgl_perawatan, pr.jam_rawat
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
@@ -599,17 +724,6 @@ class SatuSehatDatabase
             LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
             LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
-            LEFT JOIN (
-                SELECT ki1.no_rawat, ki1.stts_pulang, ki1.lama, ki1.kd_kamar
-                FROM kamar_inap ki1
-                INNER JOIN (
-                    SELECT no_rawat, MAX(tgl_keluar) as max_tgl_keluar
-                    FROM kamar_inap
-                    WHERE stts_pulang NOT IN ('-', 'Pindah Kamar') AND tgl_keluar <> '0000-00-00'
-                    GROUP BY no_rawat
-                ) ki2 ON ki1.no_rawat = ki2.no_rawat AND ki1.tgl_keluar = ki2.max_tgl_keluar
-            ) ki ON ki.no_rawat = rp.no_rawat
-            LEFT JOIN satu_sehat_mapping_lokasi_ranap smlranap ON smlranap.kd_kamar = ki.kd_kamar
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (nj.tanggal IS NOT NULL OR ni.tanggal IS NOT NULL)
          ORDER BY no_rawat ASC
@@ -619,7 +733,7 @@ class SatuSehatDatabase
                 $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        return $this->attachKamar($stmt->fetchAll(PDO::FETCH_ASSOC), 'finished');
     }
 
     public function fetchDiagnoses(string $noRawat): array
@@ -657,6 +771,35 @@ class SatuSehatDatabase
     {
         if (!$this->isValidNik($nik)) {
             $this->log->debug("[DB] Invalid Patient NIK format: '{$nik}' (skipping IHS lookup)");
+            return null;
+        }
+
+        if (array_key_exists($nik, self::$memoIhsPatient)) {
+            self::$ihsHits++;
+            return self::$memoIhsPatient[$nik];
+        }
+        self::$ihsLookups++;
+
+        $result = $this->lookupIhsPatient($nik);
+
+        if (count(self::$memoIhsPatient) >= self::IHS_MEMO_MAX) {
+            self::$memoIhsPatient = [];
+        }
+        self::$memoIhsPatient[$nik] = $result;
+        if (self::$ihsLookups % 5000 === 0) {
+            $this->log->debug(sprintf(
+                "[MEMO] IHS lookups: %d total, %d hits (%.1f%%)",
+                self::$ihsLookups,
+                self::$ihsHits,
+                self::$ihsLookups > 0 ? (self::$ihsHits / self::$ihsLookups) * 100 : 0
+            ));
+        }
+        return $result;
+    }
+
+    private function lookupIhsPatient(string $nik): ?string
+    {
+        if (!$this->isValidNik($nik)) {
             return null;
         }
 
@@ -740,6 +883,28 @@ class SatuSehatDatabase
         $nik = trim($nik);
         if (!$this->isValidNik($nik)) {
             $this->log->debug("[DB] Invalid Practitioner NIK format: '{$nik}' (skipping IHS lookup)");
+            return null;
+        }
+
+        if (array_key_exists($nik, self::$memoIhsPractitioner)) {
+            self::$ihsHits++;
+            return self::$memoIhsPractitioner[$nik];
+        }
+        self::$ihsLookups++;
+
+        $result = $this->lookupIhsPractitioner($nik);
+
+        if (count(self::$memoIhsPractitioner) >= self::IHS_MEMO_MAX) {
+            self::$memoIhsPractitioner = [];
+        }
+        self::$memoIhsPractitioner[$nik] = $result;
+        return $result;
+    }
+
+    private function lookupIhsPractitioner(string $nik): ?string
+    {
+        $nik = trim($nik);
+        if (!$this->isValidNik($nik)) {
             return null;
         }
 

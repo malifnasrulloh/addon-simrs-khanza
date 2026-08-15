@@ -47,6 +47,29 @@ class SatuSehatConfig
     public readonly string $timezone;
     public readonly string $jwtSecret;
 
+    // ─── Performance / Pagination ─────────────────────────────────────────
+    /**
+     * Keyset (seekset) pagination for fetchPending* queries. When true the
+     * OFFSET pagination is replaced by index-aligned keyset cursors —
+     * O(N) instead of O(N^2) on large windows. Set 'false' to restore the
+     * legacy OFFSET path (rollback switch). Env: SATUSEHAT_KEYSET_PAGINATION
+     */
+    public readonly bool $keysetPagination;
+    /**
+     * Inter-request delay mode: 'adaptive' (default — start at 0 ms, apply
+     * exponential backoff on HTTP 429, decay on success) or 'fixed' (legacy:
+     * constant SATUSEHAT_DELAY_MS sleep before every request).
+     * Env: SATUSEHAT_DELAY_MODE
+     */
+    public readonly string $delayMode;
+    /**
+     * SQLite durability guarantee. 'NORMAL' (recommended; WAL mode keeps
+     * crash-durability of committed transactions, much faster for the shared
+     * state DB) or 'FULL' for maximum-power-loss safety.
+     * Env: SATUSEHAT_SQLITE_SYNC
+     */
+    public readonly string $sqliteSync;
+
     // ─── Webhook Credentials ─────────────────────────────────────────────────
     public readonly string $webhookUser;
     public readonly string $webhookPassword;
@@ -126,6 +149,10 @@ class SatuSehatConfig
         $this->logLevel         = strtoupper($this->get('LOG_LEVEL', 'INFO'));
         $this->logRetentionDays = (int) $this->get('LOG_RETENTION_DAYS', '30');
         $this->jwtSecret        = $this->get('JWT_SECRET', 'simrs-khanza-secret-super-secure-key');
+
+        $this->keysetPagination = $this->get('SATUSEHAT_KEYSET_PAGINATION', 'true') === 'true';
+        $this->delayMode        = strtolower($this->get('SATUSEHAT_DELAY_MODE', 'adaptive'));
+        $this->sqliteSync       = strtoupper($this->get('SATUSEHAT_SQLITE_SYNC', 'NORMAL'));
     }
 
     private function get(string $key, string $default = ''): string

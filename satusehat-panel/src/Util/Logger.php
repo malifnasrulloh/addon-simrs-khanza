@@ -22,6 +22,10 @@ class Logger
     private int $minLevel;
     private bool $verbose;
     private bool $echoWeb;
+    /** Lazily-opened persistent file handle (perf: one open per file, not per line). */
+    private $fh = null;
+    /** File the open handle belongs to (rotation detection). */
+    private string $fhFile = '';
 
     private const LEVELS = ['DEBUG' => 0, 'INFO' => 1, 'WARNING' => 2, 'ERROR' => 3];
 
@@ -57,6 +61,15 @@ class Logger
         $this->logFile  = $this->logDir . '/' . $serviceName . '_' . date('Y-m-d') . $suffix . '.log';
         $this->minLevel = self::LEVELS[strtoupper($level)] ?? 1;
         $this->verbose  = $verbose;
+
+        // Close the persistent handle at process shutdown.
+        register_shutdown_function(function () {
+            if (is_resource($this->fh)) {
+                fflush($this->fh);
+                fclose($this->fh);
+                $this->fh = null;
+            }
+        });
     }
 
     /**
@@ -114,7 +127,22 @@ class Logger
         $ts = date('Y-m-d H:i:s');
         $line = "[{$ts}] [{$level}] {$message}";
 
-        if (@file_put_contents($this->logFile, $line . PHP_EOL, FILE_APPEND | LOCK_EX) === false) {
+        // Persistent handle: open once per log file, keep it across writes.
+        // Reopen only when the (date-rotated) filename changes.
+        if (!is_resource($this->fh) || $this->fhFile !== $this->logFile) {
+            if (is_resource($this->fh)) {
+                fclose($this->fh);
+            }
+            $this->fh = @fopen($this->logFile, 'ab');
+            $this->fhFile = $this->logFile;
+        }
+
+        if (is_resource($this->fh)) {
+            flock($this->fh, LOCK_EX);
+            fwrite($this->fh, $line . PHP_EOL);
+            fflush($this->fh);
+            flock($this->fh, LOCK_UN);
+        } else {
             error_log("SIMRS-MobileJKN Log write failed: " . $line);
         }
 

@@ -137,7 +137,8 @@ function processPhase(
     SatuSehatEncounterProcessor $processor,
     Logger $logger,
     string $label,
-    string $batchFor // which param to fill: 'arrived', 'in-progress', 'finished'
+    string $batchFor, // which param to fill: 'arrived', 'in-progress', 'finished'
+    SatuSehatDatabase $db
 ): array {
     $stats = ['success' => 0, 'fail' => 0, 'skip' => 0];
     $batchIdx = 0;
@@ -146,11 +147,18 @@ function processPhase(
         $batchIdx++;
         $logger->info("[BATCH {$batchIdx}] Processing " . count($batch) . " {$label} encounters...");
 
+        $db->beginSqliteBatch();
         $arr = ($batchFor === 'arrived') ? $batch : [];
         $prog = ($batchFor === 'in-progress') ? $batch : [];
         $fin = ($batchFor === 'finished') ? $batch : [];
 
-        $s = $processor->run($arr, $prog, $fin);
+        try {
+            $s = $processor->run($arr, $prog, $fin);
+            $db->commitSqliteBatch();
+        } catch (\Throwable $e) {
+            $db->rollbackSqliteBatch();
+            throw $e;
+        }
         $stats['success'] += $s['success'];
         $stats['fail'] += $s['fail'];
         $stats['skip'] += $s['skip'];
@@ -176,7 +184,7 @@ if (!$isParallel) {
         $log->info("──────────────────────────────────────────────────────────────");
         $log->info("[SYNC] Phase 1: POST 'arrived' Encounters (batches of {$batchSize})");
         $cursor = new SatuSehatBatchCursor($db, 'fetchPendingArrived', [$dateFrom, $dateTo], $batchSize, $log, 'arrived');
-        $s = processPhase($cursor, $processor, $logGlobal, 'arrived', 'arrived');
+        $s = processPhase($cursor, $processor, $logGlobal, 'arrived', 'arrived', $db);
         $totalSuccess += $s['success']; $totalFail += $s['fail']; $totalSkip += $s['skip'];
         $log->info("[PHASE 1] Arrived: Success={$s['success']} Fail={$s['fail']} Skip={$s['skip']}");
 
@@ -184,7 +192,7 @@ if (!$isParallel) {
         $log->info("──────────────────────────────────────────────────────────────");
         $log->info("[SYNC] Phase 2: PUT 'in-progress' Encounters (batches of {$batchSize})");
         $cursor = new SatuSehatBatchCursor($db, 'fetchPendingInProgress', [$dateFrom, $dateTo], $batchSize, $log, 'in-progress');
-        $s = processPhase($cursor, $processor, $logGlobal, 'in-progress', 'in-progress');
+        $s = processPhase($cursor, $processor, $logGlobal, 'in-progress', 'in-progress', $db);
         $totalSuccess += $s['success']; $totalFail += $s['fail']; $totalSkip += $s['skip'];
         $log->info("[PHASE 2] In-Progress: Success={$s['success']} Fail={$s['fail']} Skip={$s['skip']}");
 
@@ -192,7 +200,7 @@ if (!$isParallel) {
         $log->info("──────────────────────────────────────────────────────────────");
         $log->info("[SYNC] Phase 3: PUT 'finished' Encounters (batches of {$batchSize})");
         $cursor = new SatuSehatBatchCursor($db, 'fetchPendingFinished', [$dateFrom, $dateTo], $batchSize, $log, 'finished');
-        $s = processPhase($cursor, $processor, $logGlobal, 'finished', 'finished');
+        $s = processPhase($cursor, $processor, $logGlobal, 'finished', 'finished', $db);
         $totalSuccess += $s['success']; $totalFail += $s['fail']; $totalSkip += $s['skip'];
         $log->info("[PHASE 3] Finished: Success={$s['success']} Fail={$s['fail']} Skip={$s['skip']}");
 
@@ -245,7 +253,14 @@ for ($i = 0; $i < $numWorkers; $i++) {
         // Arrived
         $cursor = new SatuSehatBatchCursor($childDb, 'fetchPendingArrived', [$wFrom, $wTo], $batchSize, $log, "W{$i}/arrived");
         foreach ($cursor->batches() as $batch) {
-            $s = $processor->run($batch, [], []);
+            $childDb->beginSqliteBatch();
+            try {
+                $s = $processor->run($batch, [], []);
+                $childDb->commitSqliteBatch();
+            } catch (\Throwable $e) {
+                $childDb->rollbackSqliteBatch();
+                throw $e;
+            }
             $workerFail += $s['fail'];
             $cursor->tick();
         }
@@ -253,7 +268,14 @@ for ($i = 0; $i < $numWorkers; $i++) {
         // In-Progress
         $cursor = new SatuSehatBatchCursor($childDb, 'fetchPendingInProgress', [$wFrom, $wTo], $batchSize, $log, "W{$i}/prog");
         foreach ($cursor->batches() as $batch) {
-            $s = $processor->run([], $batch, []);
+            $childDb->beginSqliteBatch();
+            try {
+                $s = $processor->run([], $batch, []);
+                $childDb->commitSqliteBatch();
+            } catch (\Throwable $e) {
+                $childDb->rollbackSqliteBatch();
+                throw $e;
+            }
             $workerFail += $s['fail'];
             $cursor->tick();
         }
@@ -261,7 +283,14 @@ for ($i = 0; $i < $numWorkers; $i++) {
         // Finished
         $cursor = new SatuSehatBatchCursor($childDb, 'fetchPendingFinished', [$wFrom, $wTo], $batchSize, $log, "W{$i}/fin");
         foreach ($cursor->batches() as $batch) {
-            $s = $processor->run([], [], $batch);
+            $childDb->beginSqliteBatch();
+            try {
+                $s = $processor->run([], [], $batch);
+                $childDb->commitSqliteBatch();
+            } catch (\Throwable $e) {
+                $childDb->rollbackSqliteBatch();
+                throw $e;
+            }
             $workerFail += $s['fail'];
             $cursor->tick();
         }

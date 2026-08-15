@@ -144,11 +144,18 @@ $cursor = new SatuSehatBatchCursor(
 );
 
 foreach ($cursor->batches() as $batch) {
-    foreach ($batch as $row) {
-        $d = $processor->runRow($row);
-        $totalSuccess += $d['success'];
-        $totalFail += $d['fail'];
-        $totalSkip += $d['skip'];
+    $db->beginSqliteBatch();
+    try {
+        foreach ($batch as $row) {
+            $d = $processor->runRow($row);
+            $totalSuccess += $d['success'];
+            $totalFail += $d['fail'];
+            $totalSkip += $d['skip'];
+        }
+        $db->commitSqliteBatch();
+    } catch (\Throwable $e) {
+        $db->rollbackSqliteBatch();
+        throw $e;
     }
     $cursor->tick();
 }
