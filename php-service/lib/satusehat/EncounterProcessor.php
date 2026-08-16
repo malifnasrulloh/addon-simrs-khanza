@@ -77,6 +77,20 @@ class SatuSehatEncounterProcessor
 
         foreach ($patients as $p) {
             $noRawat = $p['no_rawat'];
+
+            // Location guard (rule 10120): every Encounter we send must carry
+            // a valid location reference — the canonical payload always has
+            // one. When the SATUSEHAT location mapping is missing
+            // (id_lokasi_satusehat empty, e.g. unmapped poliklinik/kamar),
+            // skip the record IMMEDIATELY instead of sending a payload with
+            // an omitted (or empty Location/) element; it stays pending and
+            // sends automatically once the mapping exists.
+            if (empty($p['id_lokasi_satusehat'])) {
+                $this->log->warning("[PHASE 1] {$noRawat}: No SATUSEHAT location mapping (id_lokasi_satusehat empty) — skipped; add the poliklinik/kamar mapping to send.");
+                $this->skipCount++;
+                continue;
+            }
+
             $nik = $p['no_ktp'];
             $nikDokter = $p['ktpdokter'];
 
