@@ -181,6 +181,13 @@ class SatuSehatEncounterProcessor
                 ? SatuSehatPayloadBuilder::sanitizeDateTime($p['waktu_perawatan'], null, $p)
                 : $startWaktu;
 
+            // merge_failed guard: period/statusHistory entries whose end
+            // precedes the visit start violate FHIRPath constraints and the
+            // server rejects the whole PATCH. Clamp anomalies locally instead.
+            if (!self::validPeriod($startWaktu, $inProgressWaktu)) {
+                $inProgressWaktu = $startWaktu;
+            }
+
             $ops = [
                 [
                     'op' => 'replace',
@@ -221,7 +228,21 @@ class SatuSehatEncounterProcessor
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to in-progress via PATCH");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . \SatuSehatClient::extractErrorMsg($result));
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
+                if (stripos($errorMessage, 'merge_failed') !== false) {
+                    // Server-side merge conflict (concurrent updates / partial
+                    // period state): retry once with jitter before giving up.
+                    usleep(mt_rand(250000, 800000));
+                    $result = $this->api->patch("/Encounter/{$idEncounter}", $ops);
+                    if ($result['success']) {
+                        $this->db->updateLocalState($noRawat, 'in-progress');
+                        $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to in-progress via PATCH (retry)");
+                        $this->successCount++;
+                        continue;
+                    }
+                    $errorMessage = \SatuSehatClient::extractErrorMsg($result);
+                }
+                $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . $errorMessage);
                 $this->failCount++;
             }
         }
@@ -277,6 +298,16 @@ class SatuSehatEncounterProcessor
             $finishedWaktu = !empty($p['waktu_pulang'])
                 ? SatuSehatPayloadBuilder::sanitizeDateTime($p['waktu_pulang'], null, $p)
                 : null;
+
+            // merge_failed guard: a discharge time before the visit start
+            // violates FHIRPath on Encounter.period / statusHistory[i].period
+            // (server rejects the PATCH with merge_failed). Treat it as
+            // "no valid discharge time" — status still flips to finished, end
+            // timestamps are simply not sent.
+            if (!self::validPeriod($startWaktu, $finishedWaktu)) {
+                $this->log->warning("[PHASE 3] {$noRawat}: discharge time precedes visit start ({$finishedWaktu} < {$startWaktu}) — sending finished without end times (merge_failed guard).");
+                $finishedWaktu = null;
+            }
 
             // Compute statusHistory based on encounter type
             $isRanap = ($p['status_lanjut'] ?? '') === 'Ranap';
@@ -445,10 +476,44 @@ class SatuSehatEncounterProcessor
                 $this->log->info("[PHASE 3] {$noRawat}: ✓ Updated to finished via PATCH");
                 $this->successCount++;
             } else {
-                $this->log->warning("[PHASE 3] {$noRawat}: ✗ Failed -> " . \SatuSehatClient::extractErrorMsg($result));
+                $errorMessage = \SatuSehatClient::extractErrorMsg($result);
+                if (stripos($errorMessage, 'merge_failed') !== false) {
+                    // Server-side merge conflict: retry once with jitter.
+                    usleep(mt_rand(250000, 800000));
+                    $result = $this->api->patch("/Encounter/{$idEncounter}", $ops);
+                    if ($result['success']) {
+                        $this->db->updateLocalState($noRawat, 'finished');
+                        $this->log->info("[PHASE 3] {$noRawat}: ✓ Updated to finished via PATCH (retry)");
+                        $this->successCount++;
+                        continue;
+                    }
+                    $errorMessage = \SatuSehatClient::extractErrorMsg($result);
+                }
+                $this->log->warning("[PHASE 3] {$noRawat}: ✗ Failed -> " . $errorMessage);
                 $this->failCount++;
             }
         }
+    }
+
+    /**
+     * A FHIR Period is valid when both ends are present and end >= start
+     * (SATUSEHAT rejects start > end with merge_failed). Null/missing parts
+     * are accepted (open period).
+     */
+    private static function validPeriod(?string $start, ?string $end): bool
+    {
+        if ($start === null || $start === '') {
+            return true;
+        }
+        if ($end === null || $end === '') {
+            return true;
+        }
+        $s = strtotime($start);
+        $e = strtotime($end);
+        if ($s === false || $e === false) {
+            return false;
+        }
+        return $e >= $s;
     }
 
     /**
