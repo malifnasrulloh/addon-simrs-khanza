@@ -40,6 +40,14 @@ class SatuSehatClient
      */
     public ?\Closure $transport = null;
 
+    // ── Acceptance-rate instrumentation (Phase C) ──────────────────────────
+    /** Rejection taxonomy counters accumulated per process (400 responses). */
+    private static array $rejectedByRule = [];
+    private static int $rejectedOther400 = 0;
+    private static int $rejectedPermission = 0;
+    /** Pre-flight payload-shape issue count (see PayloadBuilder::validatePayload). */
+    private static int $validationIssueCount = 0;
+
     private const CONNECT_TIMEOUT = 10;
     private const REQUEST_TIMEOUT = 30;
 
@@ -60,6 +68,27 @@ class SatuSehatClient
         $this->tokenCacheFile     = $config->logDir . '/satusehat_token.json';
         $this->permissionCacheFile = $config->logDir . '/satusehat_permission_denied.json';
         $this->sourceTimezone     = new \DateTimeZone($config->timezone ?: 'Asia/Jakarta');
+
+        // Per-run acceptance summary: logged once at process shutdown so every
+        // sync service reports rejected-by-rule / 429 / permission counts.
+        register_shutdown_function(function () {
+            $parts = [];
+            foreach (self::$rejectedByRule as $rule => $count) {
+                $parts[] = "rule {$rule}: {$count}";
+            }
+            if (self::$rejectedPermission > 0) {
+                $parts[] = 'permission: ' . self::$rejectedPermission;
+            }
+            if (self::$rejectedOther400 > 0) {
+                $parts[] = 'other-400: ' . self::$rejectedOther400;
+            }
+            if (self::$validationIssueCount > 0) {
+                $parts[] = 'preflight-issues: ' . self::$validationIssueCount;
+            }
+            if ($parts !== []) {
+                $this->log->warning('[REJECT-STATS] ' . implode(' | ', $parts));
+            }
+        });
     }
 
     /**
@@ -600,6 +629,29 @@ class SatuSehatClient
     }
 
     /**
+     * Tally HTTP 400 rejection reasons for the run-end acceptance summary.
+     * Permission-denied ("don't have permission") and per-rule (RuleNumber:)
+     * responses are split so the acceptance rate can exclude permission noise.
+     */
+    private function tallyRejection(int $httpCode, $response): void
+    {
+        if ($httpCode !== 400 || !is_string($response) || $response === '') {
+            return;
+        }
+        if (stripos($response, 'permission') !== false) {
+            self::$rejectedPermission++;
+            return;
+        }
+        if (preg_match_all('/RuleNumber:\s*(\d+)/', $response, $m)) {
+            foreach ($m[1] as $rn) {
+                self::$rejectedByRule[$rn] = (self::$rejectedByRule[$rn] ?? 0) + 1;
+            }
+            return;
+        }
+        self::$rejectedOther400++;
+    }
+
+    /**
      * Feed rate-limit state from each HTTP result.
      */
     private function noteHttpResult(int $httpCode): void
@@ -648,6 +700,23 @@ class SatuSehatClient
 
         if ($payload !== null) {
             $payload = $this->convertPayloadDatesToUtc($payload);
+        }
+
+        // Pre-flight payload shape validation (best-practice guard): flags
+        // empty system/code/reference and malformed coding arrays that the
+        // server rejects as 400s. Logs only — never blocks the send.
+        if ($payload !== null && class_exists(\SatuSehatPayloadBuilder::class)) {
+            $issues = \SatuSehatPayloadBuilder::validatePayload($payload, $endpoint);
+            if ($issues !== []) {
+                self::$validationIssueCount += count($issues);
+                static $validateLogged = 0;
+                if ($validateLogged < 10) {
+                    foreach ($issues as $issue) {
+                        $this->log->warning("[VALIDATE] {$issue}");
+                    }
+                    $validateLogged++;
+                }
+            }
         }
 
         // Serialize the request body once (used by both transport modes).
@@ -704,6 +773,7 @@ class SatuSehatClient
             // (rule 20002). Callers handle uncertain outcomes via
             // idempotency/reconciliation instead.
             $this->noteHttpResult($httpCode);
+            $this->tallyRejection($httpCode, $response);
             $isTransientError = false;
             $errorReason = '';
 

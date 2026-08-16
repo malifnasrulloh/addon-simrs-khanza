@@ -93,9 +93,9 @@ final class CompositionAndDispenseTest extends TestCase
         ];
         $p = \SatuSehatPayloadBuilder::medicationStatement('1000000001', $row, 'ihs-1', null);
         $this->assertSame(
-            'outpatient',
+            'community',
             $p['category']['coding'][0]['code'] ?? null,
-            'statement category must be an OBJECT {"coding":[...]}'
+            'statement category must be an OBJECT {"coding":[...]} with the accepted \'community\' code'
         );
     }
 

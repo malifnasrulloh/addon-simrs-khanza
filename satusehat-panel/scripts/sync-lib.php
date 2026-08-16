@@ -44,15 +44,16 @@ $manifestFile = $root . '/storage/lib-manifest.json';
  * [source, target] pairs — relative to each project root.
  */
 $manifest = [
-    ['lib/satusehat/PayloadBuilder.php',       'src/Util/PayloadBuilder.php'],
-    ['lib/satusehat/AllergyDictionary.php',    'src/Util/AllergyDictionary.php'],
-    ['lib/satusehat/ObservationTTVDictionary.php', 'src/Util/ObservationTTVDictionary.php'],
-    ['lib/satusehat/EpisodeOfCareType.php',    'src/Util/EpisodeOfCareType.php'],
-    ['lib/satusehat/SatuSehatClient.php',      'src/Util/SatuSehatClient.php'],
-    ['lib/satusehat/Config.php',               'src/Util/SatuSehatConfig.php'],
-    ['lib/satusehat/DateTimeUtil.php',         'src/Util/DateTimeUtil.php'],
-    ['lib/satusehat/NumberUtil.php',          'src/Util/NumberUtil.php'],
-    ['lib/Logger.php',                         'src/Util/Logger.php'],
+    ['lib/satusehat/PayloadBuilder.php',          'src/Util/PayloadBuilder.php'],
+    ['lib/satusehat/ServiceTypeTerminology.php',  'src/Util/ServiceTypeTerminology.php'],
+    ['lib/satusehat/AllergyDictionary.php',       'src/Util/AllergyDictionary.php'],
+    ['lib/satusehat/ObservationTTVDictionary.php','src/Util/ObservationTTVDictionary.php'],
+    ['lib/satusehat/EpisodeOfCareType.php',       'src/Util/EpisodeOfCareType.php'],
+    ['lib/satusehat/SatuSehatClient.php',         'src/Util/SatuSehatClient.php'],
+    ['lib/satusehat/Config.php',                  'src/Util/SatuSehatConfig.php'],
+    ['lib/satusehat/DateTimeUtil.php',            'src/Util/DateTimeUtil.php'],
+    ['lib/satusehat/NumberUtil.php',              'src/Util/NumberUtil.php'],
+    ['lib/Logger.php',                            'src/Util/Logger.php'],
 ];
 
 function shaOf(string $path): string

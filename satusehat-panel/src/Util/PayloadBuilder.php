@@ -8,56 +8,168 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/ServiceTypeTerminology.php';
+
 class SatuSehatPayloadBuilder
 {
-    private static function getServiceType(string $kdPoli, string $statusLanjut): array
+    /**
+     * Pre-flight payload shape validation (best-practice guard, Phase C).
+     * Recursively flags the failure classes the platform rejects:
+     *   - empty system / code values (rules 10012, 10010)
+     *   - empty list references like "Location/" (rule 10120)
+     *   - empty coding arrays (unparseable_resource class)
+     * Returns a list of "<path>: <problem>" strings; empty list = OK.
+     * Hooked into SatuSehatClient before every send — logged, never blocks.
+     */
+    public static function validatePayload(array $payload, string $label = ''): array
     {
-        // Map kd_poli to service type based on known patterns
-        // If kd_poli starts with known prefixes, map to appropriate service type
-        $poli = strtoupper($kdPoli);
+        $issues = [];
+        foreach (self::scanPayloadIssues($payload, '$') as $issue) {
+            $issues[] = $label !== '' ? "{$label}: {$issue}" : $issue;
+        }
+        return $issues;
+    }
 
-        // IGD
-        if ($poli === 'IGDK') {
-            return [
-                'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
-                'code'   => '186',
-                'display' => 'Emergency'
-            ];
+    private static function scanPayloadIssues(array $node, string $path): array
+    {
+        $issues = [];
+        foreach ($node as $key => $value) {
+            if (is_array($value)) {
+                if ($key === 'coding' && $value === []) {
+                    $issues[] = "{$path}.{$key}: empty coding array";
+                } elseif ($key === 'reference' && is_string($value) && $value === '') {
+                    $issues[] = "{$path}.{$key}: empty reference";
+                } elseif ($key === 'reference' && is_string($value) && preg_match('/^[A-Za-z]+\/$/', $value)) {
+                    $issues[] = "{$path}.{$key}: empty reference '{$value}'";
+                } elseif (($key === 'system' || $key === 'code') && is_string($value) && trim($value) === '') {
+                    $issues[] = "{$path}.{$key}: empty {$key}";
+                }
+                $issues = array_merge($issues, self::scanPayloadIssues($value, $path . '.' . $key));
+            } elseif (is_string($value)) {
+                if ($key === 'reference' && ($value === '' || preg_match('/^[A-Za-z]+\/$/', $value))) {
+                    $issues[] = "{$path}.{$key}: empty reference '{$value}'";
+                } elseif ($key === 'system' && trim($value) === '') {
+                    $issues[] = "{$path}.{$key}: empty system";
+                } elseif ($key === 'code' && trim($value) === '') {
+                    $issues[] = "{$path}.{$key}: empty code";
+                }
+            }
+        }
+        return $issues;
+    }
+
+
+    // ── Unit classifier (Phase B) ───────────────────────────────────────────
+    // SATUSEHAT medication quantities put drug FORMS in the
+    // v3-orderableDrugForm code system and measurable units in UCUM
+    // (unitsofmeasure.org) with canonical case ('mL' not 'ml'). Sending a
+    // form under unitsofmeasure, or a lowercase unit, is rejected as
+    // "Code not found" (rules 10348/10349/10050).
+    private const FORM_SYSTEM = 'http://terminology.hl7.org/CodeSystem/v3-orderableDrugForm';
+
+    /** Raw SIMRS unit (normalized uppercase, spaces removed) → canonical code. */
+    private const DRUG_FORM_MAP = [
+        'TAB' => 'TAB', 'TABLET' => 'TAB',
+        'CAP' => 'CAP', 'CAPSUL' => 'CAP', 'CAPSULE' => 'CAP', 'KAPSUL' => 'CAP', 'KAPLET' => 'CAP',
+        'SUPP' => 'SUPP', 'SUPPOS' => 'SUPP', 'SUPPOSITORIA' => 'SUPP',
+        'SYR' => 'SYR', 'SIRUP' => 'SYR', 'SYRUP' => 'SYR',
+        'INH' => 'INH', 'INHAL' => 'INH', 'INHALER' => 'INH',
+        'DROP' => 'DROP', 'DROPS' => 'DROP', 'TETES' => 'DROP',
+        'OINT' => 'OINT', 'OINTMENT' => 'OINT', 'SALEP' => 'OINT',
+        'CREAM' => 'CREAM', 'KRIM' => 'CREAM',
+        'GEL' => 'GEL',
+        'SPRAY' => 'SPRAY', 'SEMPROT' => 'SPRAY',
+        'VIAL' => 'VIAL', 'AMP' => 'AMP', 'AMPUL' => 'AMP', 'AMPOULE' => 'AMP',
+        'SOL' => 'SOL', 'SOLUTION' => 'SOL',
+        'SUSP' => 'SUSP', 'SUSPENSI' => 'SUSP', 'SUSPENSION' => 'SUSP',
+        'PIL' => 'PILL', 'PILL' => 'PILL',
+        'PULV' => 'PWDR', 'POWDER' => 'PWDR', 'SERBUK' => 'PWDR',
+        'TROCHIS' => 'TROCH', 'LOZ' => 'TROCH',
+        'PATCH' => 'PATCH', 'PLASTER' => 'PATCH',
+    ];
+
+    /**
+     * Classify a SIMRS unit string into the FHIR Quantity triplet
+     * (unit/system/code): drug forms → v3-orderableDrugForm, measurable
+     * units → UCUM canonical case (mL, mg/dL, mm[Hg] …). Unknown units
+     * return null → callers omit the coded unit instead of sending an empty
+     * or wrong system (rule 10012).
+     */
+    private static function classifyUnit(string $unit): ?array
+    {
+        $raw = trim($unit);
+        if ($raw === '') {
+            return null;
+        }
+        $up = strtoupper(str_replace(' ', '', $raw));
+
+        if (isset(self::DRUG_FORM_MAP[$up])) {
+            $code = self::DRUG_FORM_MAP[$up];
+            return ['unit' => $code, 'system' => self::FORM_SYSTEM, 'code' => $code];
         }
 
-        // Operating room
-        if (str_starts_with($poli, 'OK')) {
-            return [
-                'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
-                'code'   => '333',
-                'display' => 'Surgery'
-            ];
+        $ucum = self::mapLabUnit($raw);
+        if ($ucum !== null) {
+            return ['unit' => $ucum, 'system' => 'http://unitsofmeasure.org', 'code' => $ucum];
         }
 
-        // ICU/NICU/PICU
-        if (in_array($poli, ['ICU', 'ICCU', 'NICU', 'PICU', 'PIICU'])) {
-            return [
-                'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
-                'code'   => '380',
-                'display' => 'Intensive care'
-            ];
-        }
+        return null;
+    }
 
-        // Inpatient wards
-        if ($statusLanjut === 'Ranap') {
-            return [
-                'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
-                'code'   => '110',
-                'display' => 'Inpatient care'
-            ];
+    /**
+     * Administration-route coding guard. Route values that are not actual
+     * route codes (e.g. 'Topical' stored under the ATC drug-class system)
+     * are rejected by rule 10038 — return null (omit the coding) instead.
+     */
+    private static function sanitizeRoute(array $p): ?array
+    {
+        $system  = trim((string) ($p['route_system'] ?? ''));
+        $code    = trim((string) ($p['route_code'] ?? ''));
+        $display = trim((string) ($p['route_display'] ?? ''));
+        if ($code === '') {
+            return null;
         }
-
-        // Default outpatient
+        if (stripos($system, 'whocc') !== false && !preg_match('/^[A-Z0-9]{3,7}$/', $code)) {
+            return null;
+        }
+        if (preg_match('/^(topical|oral|iv|intravenous|inhalation|parenteral|peroral)$/i', $code)) {
+            return null;
+        }
         return [
-            'system' => 'http://terminology.hl7.org/CodeSystem/service-type',
-            'code'   => '108',
-            'display' => 'Outpatient care'
+            'coding' => [
+                [
+                    'system'  => $system !== '' ? $system : null,
+                    'code'    => $code,
+                    'display' => $display !== '' ? $display : null,
+                ],
+            ],
         ];
+    }
+
+    /**
+     * Trim whitespace off mapping-provided columns before they enter a
+     * payload (mapping tables carry trailing spaces — rule 10010 rejecting
+     * LOINC codes like '20570-8 ').
+     */
+    private static function cleanMappingRow(array $p): array
+    {
+        $keys = [
+            'obat_code', 'obat_system', 'obat_display',
+            'form_code', 'form_system', 'form_display',
+            'route_code', 'route_system', 'route_display',
+            'denominator_code', 'denominator_system', 'denominator_display',
+            'vaksin_code', 'vaksin_system', 'vaksin_display',
+            'dose_quantity_code', 'dose_quantity_system', 'dose_quantity_unit',
+            'sampel_code', 'sampel_system', 'sampel_display',
+            'code', 'system', 'display',
+            'id_lokasi_satusehat',
+        ];
+        foreach ($keys as $k) {
+            if (isset($p[$k]) && is_string($p[$k])) {
+                $p[$k] = trim($p[$k]);
+            }
+        }
+        return $p;
     }
 
     /**
@@ -253,21 +365,28 @@ class SatuSehatPayloadBuilder
             }
         }
 
-        // Build location entry with period and ServiceClass extension
-        $locationEntry = [
-            'location' => [
-                'reference' => 'Location/' . $p['id_lokasi_satusehat'],
-                'display'   => $p['nm_poli']
-            ],
-            'period' => [
-                'start' => self::getLocationPeriodStart($p, $status),
-            ],
-            'extension' => [
-                self::buildServiceClassExtension($p)
-            ]
-        ];
-        if ($status === 'finished' && $finishedWaktu) {
-            $locationEntry['period']['end'] = $finishedWaktu;
+        // Build location entries with period and ServiceClass extension.
+        // Never emit an empty Location/ reference (rule 10120) — when the
+        // polyclinic/room has no SATUSEHAT location mapping the element is
+        // omitted entirely (canonical payloads do not require location).
+        $locationEntries = [];
+        if (!empty($p['id_lokasi_satusehat'])) {
+            $locationEntry = [
+                'location' => [
+                    'reference' => 'Location/' . $p['id_lokasi_satusehat'],
+                    'display'   => $p['nm_poli']
+                ],
+                'period' => [
+                    'start' => self::getLocationPeriodStart($p, $status),
+                ],
+                'extension' => [
+                    self::buildServiceClassExtension($p)
+                ]
+            ];
+            if ($status === 'finished' && $finishedWaktu) {
+                $locationEntry['period']['end'] = $finishedWaktu;
+            }
+            $locationEntries[] = $locationEntry;
         }
 
         $payload = [
@@ -278,7 +397,7 @@ class SatuSehatPayloadBuilder
                 'code'    => $classCode,
                 'display' => $classDisplay
             ],
-            'serviceType' => self::getServiceType($p['kd_poli'] ?? '', $p['status_lanjut'] ?? ''),
+            'serviceType' => \ServiceTypeTerminology::coding($p['kd_poli'] ?? '', $p['status_lanjut'] ?? '', $p['nm_poli'] ?? ''),
             'subject' => [
                 'reference' => 'Patient/' . $idPasien,
                 'display'   => $p['nm_pasien']
@@ -305,7 +424,7 @@ class SatuSehatPayloadBuilder
             'period' => [
                 'start' => $startWaktu,
             ],
-            'location' => [$locationEntry],
+            'location' => $locationEntries,
             'statusHistory' => $statusHistory,
             'serviceProvider' => [
                 'reference' => 'Organization/' . $orgId
@@ -317,6 +436,10 @@ class SatuSehatPayloadBuilder
                 ]
             ]
         ];
+
+        if ($locationEntries === []) {
+            unset($payload['location']);
+        }
 
         if ($status === 'finished' && $finishedWaktu) {
             $payload['period']['end'] = $finishedWaktu;
@@ -616,6 +739,19 @@ class SatuSehatPayloadBuilder
      */
     private static function mapIcd10(string $code): string
     {
+        // Env-driven overrides win: SATUSEHAT_ICD10_OVERRIDES = JSON object
+        // {"REJECTED_CODE": "ACCEPTED_2010_CODE", ...} — the maintenance
+        // point for codes the running SATUSEHAT dictionary keeps rejecting.
+        static $overrides = null;
+        if ($overrides === null) {
+            $raw = getenv('SATUSEHAT_ICD10_OVERRIDES') ?: '';
+            $decoded = $raw !== '' ? json_decode($raw, true) : null;
+            $overrides = is_array($decoded) ? $decoded : [];
+        }
+        if (isset($overrides[$code]) && is_string($overrides[$code]) && $overrides[$code] !== '') {
+            return $overrides[$code];
+        }
+
         $map = [
             // Cardiovascular
             'I96'   => 'I95.9',  // Gangrene (not in 2010) -> Hypotension, unspecified
@@ -687,12 +823,17 @@ class SatuSehatPayloadBuilder
                     ]
                 ]
             ],
-            'code' => [
+'code' => [
                 'coding' => [
                     [
-                        'system'  => 'http://hl7.org/fhir/sid/icd-10',
-                        'code'    => $kdPenyakit,
-                        'display' => $p['nm_penyakit']
+                        // Mapping tables carry trailing spaces (rule 10010) —
+                        // trim; missing system falls back to LOINC when the
+                        // code looks like one (never an empty string).
+                        'system'  => !empty(trim((string) ($p['system'] ?? '')))
+                            ? trim((string) $p['system'])
+                            : (preg_match('/^\d+-\d/', trim((string) ($p['code'] ?? ''))) ? 'http://loinc.org' : ''),
+                        'code'    => trim((string) ($p['code'] ?? '')),
+                        'display' => trim((string) ($p['display'] ?? ''))
                     ]
                 ]
             ],
@@ -877,17 +1018,17 @@ class SatuSehatPayloadBuilder
         $payload = [
             'resourceType' => 'Procedure',
             'status' => 'completed',
+            // category is 0..1 CodeableConcept → OBJECT form; the legacy
+            // array-of-one shape was rejected as unparseable_resource.
             'category' => [
-                [
-                    'coding' => [
-                        [
-                            'system'  => 'http://snomed.info/sct',
-                            'code'    => '103693007',
-                            'display' => 'Diagnostic procedure'
-                        ]
-                    ],
-                    'text' => 'Diagnostic procedure'
-                ]
+                'coding' => [
+                    [
+                        'system'  => 'http://snomed.info/sct',
+                        'code'    => '103693007',
+                        'display' => 'Diagnostic procedure'
+                    ]
+                ],
+                'text' => 'Diagnostic procedure'
             ],
             'code' => [
                 'coding' => [
@@ -1124,6 +1265,7 @@ class SatuSehatPayloadBuilder
         string $idDokter,
         string $idImmunization = ''
     ): array {
+        $p = self::cleanMappingRow($p);
         // Occurrence time
         $occurrenceDateTime = self::sanitizeDateTime($imm['tgl_perawatan'] ?? null, $imm['jam'] ?? null, $imm);
         
@@ -1245,6 +1387,7 @@ class SatuSehatPayloadBuilder
      */
     public static function medication(string $orgId, array $p, ?string $idMedication = null): array
     {
+        $p = self::cleanMappingRow($p);
         $payload = [
             'resourceType' => 'Medication',
             'meta' => [
@@ -1316,6 +1459,7 @@ class SatuSehatPayloadBuilder
         string $idDokter,
         ?string $idMedicationRequest = null
     ): array {
+        $p = self::cleanMappingRow($p);
         // Parse signa aturan pakai
         $signa1 = 1.0;
         $signa2 = 1.0;
@@ -1416,15 +1560,7 @@ class SatuSehatPayloadBuilder
                             'periodUnit' => 'd'
                         ]
                     ],
-                    'route' => [
-                        'coding' => [
-                            [
-                                'system'  => isset($p['route_system']) ? trim($p['route_system']) : null,
-                                'code'    => isset($p['route_code']) ? trim($p['route_code']) : null,
-                                'display' => isset($p['route_display']) ? trim($p['route_display']) : null
-                            ]
-                        ]
-                    ],
+                    'route' => self::sanitizeRoute($p) ?: [],
                     'doseAndRate' => [
                         [
                             'doseQuantity' => self::sanitizeUcum([
@@ -1454,6 +1590,8 @@ class SatuSehatPayloadBuilder
             ];
         }
 
+        self::stripEmptyRoutes($payload);
+
         if ($idMedicationRequest) {
             $payload['id'] = $idMedicationRequest;
         }
@@ -1480,6 +1618,7 @@ class SatuSehatPayloadBuilder
         ?string $idMedicationRequest,
         ?string $idMedicationDispense = null
     ): array {
+        $p = self::cleanMappingRow($p);
         // Parse signa aturan pakai
         $signa1 = 1.0;
         $signa2 = 1.0;
@@ -1567,15 +1706,7 @@ class SatuSehatPayloadBuilder
                             'periodUnit' => 'd'
                         ]
                     ],
-                    'route' => [
-                        'coding' => [
-                            [
-                                'system'  => isset($p['route_system']) ? trim($p['route_system']) : null,
-                                'code'    => isset($p['route_code']) ? trim($p['route_code']) : null,
-                                'display' => isset($p['route_display']) ? trim($p['route_display']) : null
-                            ]
-                        ]
-                    ],
+                    'route' => self::sanitizeRoute($p) ?: [],
                     'doseAndRate' => [
                         [
                             'doseQuantity' => self::sanitizeUcum([
@@ -1627,6 +1758,8 @@ class SatuSehatPayloadBuilder
             ];
         }
 
+        self::stripEmptyRoutes($payload);
+
         if ($idMedicationDispense) {
             $payload['id'] = $idMedicationDispense;
         }
@@ -1649,6 +1782,7 @@ class SatuSehatPayloadBuilder
         string $idPasien,
         ?string $idMedicationStatement = null
     ): array {
+        $p = self::cleanMappingRow($p);
         // Parse signa aturan pakai
         $signa1 = 1.0;
         $signa2 = 1.0;
@@ -1688,18 +1822,17 @@ class SatuSehatPayloadBuilder
             'status' => 'completed',
             // category is 0..1 CodeableConcept → OBJECT form (mirrors
             // MedicationDispense; list form was rejected by the server).
+            // 'community' is the only reliably accepted code for this system —
+            // rule 10436 rejects inpatient/outpatient (those belong to
+            // MedicationRequest.category; canonical statements use community).
             'category' => [
                 'coding' => [
                     [
                         'system'  => 'http://terminology.hl7.org/fhir/CodeSystem/medication-statement-category',
-                        'code'    => strtolower((string) ($p['status_lanjut'] ?? '')) === 'ranap' ? 'inpatient' : 'outpatient',
-                        'display' => strtolower((string) ($p['status_lanjut'] ?? '')) === 'ranap' ? 'Inpatient' : 'Outpatient'
+                        'code'    => 'community',
+                        'display' => 'Community'
                     ]
                 ]
-            ],
-            'medicationReference' => [
-                'reference' => 'Medication/' . $p['id_medication'],
-                'display'   => $p['obat_display']
             ],
             'medicationReference' => [
                 'reference' => 'Medication/' . $p['id_medication'],
@@ -1719,15 +1852,7 @@ class SatuSehatPayloadBuilder
                             'periodUnit' => 'd'
                         ]
                     ],
-                    'route' => [
-                        'coding' => [
-                            [
-                                'system'  => isset($p['route_system']) ? trim($p['route_system']) : null,
-                                'code'    => isset($p['route_code']) ? trim($p['route_code']) : null,
-                                'display' => isset($p['route_display']) ? trim($p['route_display']) : null
-                            ]
-                        ]
-                    ],
+                    'route' => self::sanitizeRoute($p) ?: [],
                     'doseAndRate' => [
                         [
                             'doseQuantity' => self::sanitizeUcum([
@@ -1761,6 +1886,8 @@ class SatuSehatPayloadBuilder
                 ]
             ]
         ];
+
+        self::stripEmptyRoutes($payload);
 
         if ($idMedicationStatement) {
             $payload['id'] = $idMedicationStatement;
@@ -1807,9 +1934,12 @@ class SatuSehatPayloadBuilder
                     'itemCodeableConcept' => [
                         'coding' => [
                             [
+                                // mapIcd10() remaps codes missing from the
+                                // platform's ICD-10 2010 dictionary (e.g. I96,
+                                // rule 10082) — legacy map + env overrides.
                                 'system'  => 'http://hl7.org/fhir/sid/icd-10',
-                                'code'    => strtoupper(trim($p['kd_penyakit'])),
-                                'display' => $p['nm_penyakit']
+                                'code'    => self::mapIcd10(strtoupper(trim($p['kd_penyakit']))),
+                                'display' => $p['nm_penyakit'],
                             ]
                         ]
                     ],
@@ -2035,6 +2165,7 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idServiceRequest = ''
     ): array {
+        $p = self::cleanMappingRow($p);
         $acsn = self::buildAcsn($p['noorder'], $p['kd_jenis_prw']);
         
         $authoredOn = self::sanitizeDateTime($p['tgl_permintaan'] ?? null, $p['jam_permintaan'] ?? null, $p);
@@ -2112,6 +2243,7 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idDiagnosticReport = ''
     ): array {
+        $p = self::cleanMappingRow($p);
         $dateTimeStr = self::sanitizeDateTime(
             $p['tgl_hasil'] ?? null,
             $p['jam_hasil'] ?? null,
@@ -2202,6 +2334,7 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idSpecimen = ''
     ): array {
+        $p = self::cleanMappingRow($p);
         $receivedTime = self::sanitizeDateTime(
             $p['tgl_sampel'] ?? null,
             $p['jam_sampel'] ?? null,
@@ -2255,6 +2388,7 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idObservation = ''
     ): array {
+        $p = self::cleanMappingRow($p);
         $dateTimeStr = self::sanitizeDateTime(
             $p['tgl_hasil'] ?? null,
             $p['jam_hasil'] ?? null,
@@ -2350,6 +2484,7 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idServiceRequest = ''
     ): array {
+        $p = self::cleanMappingRow($p);
         $dateTimeStr = self::sanitizeDateTime($p['tgl_permintaan'] ?? null, $p['jam_permintaan'] ?? null, $p);
 
         $payload = [
@@ -2421,6 +2556,7 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idSpecimen = ''
     ): array {
+        $p = self::cleanMappingRow($p);
         $receivedTime = self::sanitizeDateTime(
             $p['tgl_sampel'] ?? null,
             $p['jam_sampel'] ?? null,
@@ -2481,6 +2617,7 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idObservation = ''
     ): array {
+        $p = self::cleanMappingRow($p);
         $dateTimeStr = self::sanitizeDateTime(
             $p['tgl_hasil'] ?? null,
             $p['jam_hasil'] ?? null,
@@ -2550,14 +2687,21 @@ class SatuSehatPayloadBuilder
             'effectiveDateTime' => $dateTimeStr,
         ];
 
-        if ($numeric !== null) {
-            $qty = ['value' => $numeric];
-            if ($ucumCode !== null) {
-                $qty['unit'] = (string) ($p['satuan'] ?? '');
-                $qty['system'] = 'http://unitsofmeasure.org';
-                $qty['code'] = $ucumCode;
-            }
-            $payload['valueQuantity'] = $qty;
+        if ($numeric !== null && $ucumCode !== null) {
+            // Coded unit known → valueQuantity with system+code (SATUSEHAT
+            // requires the coded form; a bare value is rejected as
+            // "Invalid coding system" — rule 10012).
+            $payload['valueQuantity'] = [
+                'value'  => $numeric,
+                'unit'   => (string) ($p['satuan'] ?? ''),
+                'system' => 'http://unitsofmeasure.org',
+                'code'   => $ucumCode,
+            ];
+        } elseif ($numeric !== null) {
+            // Unit not mappable to UCUM → emit the number textually instead
+            // of a unitless valueQuantity (keeps the result accepted).
+            $satuan = trim((string) ($p['satuan'] ?? ''));
+            $payload['valueString'] = $satuan !== '' ? $numeric . ' ' . $satuan : (string) $numeric;
         } else {
             $payload['valueString'] = $valueString;
         }
@@ -2598,6 +2742,7 @@ class SatuSehatPayloadBuilder
         string $orgId,
         string $idDiagnosticReport = ''
     ): array {
+        $p = self::cleanMappingRow($p);
         $dateTimeStr = self::sanitizeDateTime(
             $p['tgl_hasil'] ?? null,
             $p['jam_hasil'] ?? null,
@@ -2994,6 +3139,25 @@ class SatuSehatPayloadBuilder
         }
     }
 
+    /**
+     * Remove empty 'route' codings from dosage instructions (FHIR route is
+     * 0..1 — an empty object is rejected; rule 10038 class).
+     */
+    private static function stripEmptyRoutes(array &$payload): void
+    {
+        foreach (['dosage', 'dosageInstruction'] as $key) {
+            if (!isset($payload[$key]) || !is_array($payload[$key])) {
+                continue;
+            }
+            foreach ($payload[$key] as &$entry) {
+                if (is_array($entry) && empty($entry['route'])) {
+                    unset($entry['route']);
+                }
+            }
+            unset($entry);
+        }
+    }
+
     public static function sanitizeUcum(array $qty): array
     {
         $value = isset($qty['value']) ? $qty['value'] : null;
@@ -3001,13 +3165,19 @@ class SatuSehatPayloadBuilder
         $system = isset($qty['system']) ? trim((string)$qty['system']) : '';
         $code = isset($qty['code']) ? trim((string)$qty['code']) : '';
 
-        // If code is empty, we must not include system to avoid validation errors
-        if ($code === '') {
+        // The unit classifier decides system+code: forms → orderableDrugForm,
+        // measurable units → canonical UCUM case ('ml' → 'mL'), unknown →
+        // coded-unit fields stripped (rule 10012: never send empty strings).
+        $classified = self::classifyUnit($unit !== '' ? $unit : $code);
+        if ($classified !== null) {
+            $unit = $classified['unit'];
+            $system = $classified['system'];
+            $code = $classified['code'];
+        } elseif ($code === '') {
             $system = '';
         } elseif ($system === '') {
-            // FHIR Quantity: a coded unit needs system+code together; UCUM is
-            // the standard default. A missing system previously triggered
-            // RuleNumber 10480 ("Invalid coding system") on every statement.
+            // Coded unit with an unknown unit label: keep the code but give
+            // it the UCUM default system (rule 10480 rejects a missing system).
             $system = 'http://unitsofmeasure.org';
         }
 
