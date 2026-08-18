@@ -39,6 +39,24 @@ final class SmokeTest extends TestCase
         $this->assertTrue(class_exists(\CredentialLocator::class));
     }
 
+    public function testSendControllerImportsPayloadAdapterWarnings(): void
+    {
+        // Regression (audit): the class was referenced unqualified in the
+        // SatusehatPanel\Controller namespace with no use import — every
+        // adapter-built send threw and only custom payloads worked.
+        $src = file_get_contents(__DIR__ . '/../src/Controller/SendController.php');
+        $this->assertStringContainsString('use SatusehatPanel\Util\PayloadAdapterWarnings;', $src);
+    }
+
+    public function testDiagnosticReportBuildersExistForAdapterCalls(): void
+    {
+        // Regression (audit): the adapter called SatuSehatPayloadBuilder::
+        // diagnosticReport() which does not exist — DiagnosticReport never
+        // sent. The panel branches on the rad/lab builders the CLI uses.
+        $this->assertTrue(method_exists(\SatuSehatPayloadBuilder::class, 'diagnosticReportRadiologi'));
+        $this->assertTrue(method_exists(\SatuSehatPayloadBuilder::class, 'diagnosticReportLab'));
+    }
+
     public function testPayloadBuilderPublicApiSurface(): void
     {
         $this->assertTrue(method_exists(\SatuSehatPayloadBuilder::class, 'encounter'));

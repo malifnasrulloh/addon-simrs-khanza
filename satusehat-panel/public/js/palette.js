@@ -4,7 +4,7 @@
 
 'use strict';
 
-import { $, escapeHtml, icon, rememberFocus, restoreFocus } from './ui.js';
+import { $, escapeHtml, icon, rememberFocus, restoreFocus, trapFocus, untrapFocus } from './ui.js';
 import { state, toISODate, todayISO } from './state.js';
 import { openDrawer } from './views/drawer.js';
 import { loadPatients } from './views/patients.js';
@@ -79,12 +79,14 @@ export function openPalette() {
     $('palette-backdrop').hidden = false;
     $('palette-input').value = '';
     renderPalette();
+    trapFocus($('palette-backdrop'));
     $('palette-input').focus();
 }
 
 export function closePalette() {
     palette.open = false;
     $('palette-backdrop').hidden = true;
+    untrapFocus($('palette-backdrop'));
     restoreFocus();
 }
 

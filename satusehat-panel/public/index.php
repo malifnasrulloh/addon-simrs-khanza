@@ -46,6 +46,7 @@ if (is_file(PANEL_BASE . '/vendor/autoload.php')) {
 }
 
 use SatusehatPanel\Core\Router;
+use SatusehatPanel\Core\Routes;
 use SatusehatPanel\Core\Auth;
 use SatusehatPanel\Core\ErrorHandler;
 
@@ -112,57 +113,8 @@ if (PANEL_BASE_PATH !== '') {
 }
 $router->setRequestUri($reqPath);
 
-// Auth endpoints
-$router->add('POST', '/api/auth/login', function () {
-    return SatusehatPanel\Controller\AuthController::login();
-});
-$router->add('POST', '/api/auth/logout', function () {
-    return SatusehatPanel\Controller\AuthController::logout();
-});
-$router->add('GET', '/api/auth/status', function () {
-    return SatusehatPanel\Controller\AuthController::status();
-});
-
-// API: patient list
-$router->add('GET', '/api/patients', function () {
-    return SatusehatPanel\Controller\PatientController::list();
-});
-
-// API: resource payload preview (MOST SPECIFIC first)
-$router->add('GET', '/api/patients/{noRawat:any}/resources/{resource}', function (array $params) {
-    return SatusehatPanel\Controller\ResourceController::preview($params['noRawat'], $params['resource']);
-});
-
-// API: send selected resources via Bundle
-$router->add('POST', '/api/patients/{noRawat:any}/send', function (array $params) {
-    return SatusehatPanel\Controller\SendController::sendBundle($params['noRawat']);
-});
-
-// API: patient detail with available resources
-$router->add('GET', '/api/patients/{noRawat:any}', function (array $params) {
-    return SatusehatPanel\Controller\PatientController::detail($params['noRawat']);
-});
-
-// API: audit log
-$router->add('GET', '/api/audit/{id}', function (array $params) {
-    return SatusehatPanel\Controller\AuditController::detail((int) $params['id']);
-});
-$router->add('GET', '/api/audit/stats', function () {
-    return SatusehatPanel\Controller\AuditController::stats();
-});
-$router->add('GET', '/api/audit/export', function () {
-    return SatusehatPanel\Controller\AuditController::export();
-});
-$router->add('GET', '/api/audit', function () {
-    return SatusehatPanel\Controller\AuditController::list();
-});
-
-// API: Satu Sehat credential settings
-$router->add('GET', '/api/settings', function () {
-    return SatusehatPanel\Controller\SettingsController::get();
-});
-$router->add('POST', '/api/settings', function () {
-    return SatusehatPanel\Controller\SettingsController::save();
-});
+// Registration order lives in Routes::register so tests can assert the
+// literal-before-catch-all ordering (see tests/RouterTest.php).
+Routes::register($router);
 
 $router->dispatch();

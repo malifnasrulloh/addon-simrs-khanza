@@ -12,9 +12,12 @@ import {
 } from '../ui.js';
 import {
     state, patientStatus, countReadyResources, readinessLevel,
-    toISODate, todayISO, rangeLabel,
+    toISODate, rangeLabel,
 } from '../state.js';
 import { openDrawer } from './drawer.js';
+
+// Monotonic guard: only the newest loadPatients request may paint.
+let patientsSeq = 0;
 
 const searchInput = debounce((e) => {
     state.filters.search = e.target.value;
@@ -57,14 +60,6 @@ export function initPatientsView() {
         });
     }
 
-    if (!state.dateRange.since && state.dateRange.preset === '90') {
-        const until = new Date();
-        const since = new Date();
-        since.setDate(until.getDate() - 89);
-        state.dateRange = { since: toISODate(since), until: toISODate(until), preset: '90' };
-        syncDateControls();
-    }
-
     $('batch-select-all').addEventListener('change', (e) => {
         const filtered = applyFilters();
         if (e.target.checked) filtered.forEach(p => state.batchSel.add(p.no_rawat));
@@ -102,13 +97,20 @@ function updateSubtitle() {
 }
 
 export async function loadPatients(targetPage = 1) {
+    const seq = ++patientsSeq;
     state.page = targetPage;
     const tbody = $('patient-tbody');
     const alert = $('list-alert');
     alert.hidden = true;
     tbody.innerHTML = skeletonRows();
     updateSubtitle();
-    state.batchSel.clear();
+    // Batch selection survives page turns and reloads, but a changed server
+    // filter (date range / search) invalidates it — prune then.
+    const filterKey = `${state.dateRange.since}|${state.dateRange.until}|${state.filters.search}`;
+    if (state.lastFilterKey !== filterKey) {
+        state.batchSel.clear();
+        state.lastFilterKey = filterKey;
+    }
     updateBatchBar();
 
     const qs = new URLSearchParams();
@@ -120,17 +122,20 @@ export async function loadPatients(targetPage = 1) {
 
     try {
         const data = await api(`/api/patients?${qs}`);
+        if (seq !== patientsSeq) return; // a newer load won this race
         state.patients = data.data || [];
         if (data.meta) {
             state.paginationMeta = data.meta;
         } else {
             state.paginationMeta = { total: state.patients.length, page: 1, per_page: 50, pages: 1 };
         }
+        state.stats = data.stats || null;
         renderStats();
         renderTable();
         renderPagination();
         setConn('ok', 'Terhubung ke SIMRS');
     } catch (e) {
+        if (seq !== patientsSeq) return;
         setConn('error', 'Gagal terhubung');
         state.patients = [];
         renderStats();
@@ -161,8 +166,17 @@ function renderPagination() {
     $('btn-page-next').disabled = meta.page >= meta.pages;
 }
 
-/* ── Stats (server-range-filtered set) ────────────────────── */
+/* ── Stats (server-computed over the filtered range) ──────── */
 function renderStats() {
+    const s = state.stats;
+    if (s && s.total !== undefined) {
+        $('stat-total').textContent = String(s.total);
+        $('stat-paid').textContent = String(s.paid ?? 0);
+        $('stat-unpaid').textContent = String(s.unpaid ?? 0);
+        $('stat-ready').textContent = String(s.ready ?? 0);
+        return;
+    }
+    // Fallback (legacy server): current page only.
     const paid = state.patients.filter(p => patientStatus(p) === 'paid').length;
     const ready = state.patients.filter(p => countReadyResources(p.resource_counts) > 0).length;
     $('stat-total').textContent = state.patients.length;

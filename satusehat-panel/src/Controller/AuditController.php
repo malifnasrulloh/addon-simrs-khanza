@@ -41,11 +41,13 @@ class AuditController
             $params[] = $ruleFilter;
         }
         if ($since !== '') {
-            $where .= " AND date(a.created_at) >= ?";
-            $params[] = $since;
+            // Sargable form: datetime(?, '+1 day') is applied to the constant,
+            // not the column, so idx_audit_created stays usable.
+            $where .= " AND a.created_at >= ?";
+            $params[] = $since . ' 00:00:00';
         }
         if ($until !== '') {
-            $where .= " AND date(a.created_at) <= ?";
+            $where .= " AND a.created_at < datetime(?, '+1 day')";
             $params[] = $until;
         }
 
@@ -184,11 +186,11 @@ class AuditController
                 $params[] = $_GET['status'];
             }
             if ($key === 'since' && self::validDate($_GET['since'] ?? '') !== '') {
-                $where .= " AND date(created_at) >= ?";
-                $params[] = self::validDate($_GET['since']);
+                $where .= " AND created_at >= ?";
+                $params[] = self::validDate($_GET['since']) . ' 00:00:00';
             }
             if ($key === 'until' && self::validDate($_GET['until'] ?? '') !== '') {
-                $where .= " AND date(created_at) <= ?";
+                $where .= " AND created_at < datetime(?, '+1 day')";
                 $params[] = self::validDate($_GET['until']);
             }
         }
@@ -239,6 +241,10 @@ class AuditController
      * Retention policy (T36): prune audit_logs + their send_entries older
      * than AUDIT_RETENTION_DAYS (default 90). Runs at most once per day —
      * the marker file avoids a sweep on every request.
+     *
+     * The marker is written only AFTER a successful prune so a failure is
+     * retried on the next request, and the DELETE is chunked (SQLite caps
+     * bound variables at 999) so large sweeps can't silently fail.
      */
     private static function pruneOldAudits(): void
     {
@@ -247,7 +253,6 @@ class AuditController
         if (is_file($marker) && (time() - (int) filemtime($marker)) < 86400) {
             return;
         }
-        @file_put_contents($marker, (string) time());
 
         try {
             $db = Database::getSqlite();
@@ -255,12 +260,14 @@ class AuditController
             $stmt = $db->prepare("SELECT id FROM audit_logs WHERE created_at < ?");
             $stmt->execute([$cutoff]);
             $ids = array_column($stmt->fetchAll(), 'id');
-            if (empty($ids)) {
-                return;
+            if (!empty($ids)) {
+                foreach (array_chunk($ids, 400) as $chunk) {
+                    $ph = implode(',', array_fill(0, count($chunk), '?'));
+                    $db->prepare("DELETE FROM send_entries WHERE audit_id IN ({$ph})")->execute($chunk);
+                    $db->prepare("DELETE FROM audit_logs WHERE id IN ({$ph})")->execute($chunk);
+                }
             }
-            $ph = implode(',', array_fill(0, count($ids), '?'));
-            $db->prepare("DELETE FROM send_entries WHERE audit_id IN ({$ph})")->execute($ids);
-            $db->prepare("DELETE FROM audit_logs WHERE id IN ({$ph})")->execute($ids);
+            @file_put_contents($marker, (string) time());
         } catch (\Throwable $e) {
             error_log('[PANEL] pruneOldAudits: ' . $e->getMessage());
         }

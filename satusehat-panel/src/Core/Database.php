@@ -85,7 +85,6 @@ class Database
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 patient_id VARCHAR(50) NOT NULL,
                 resource_type VARCHAR(50) NOT NULL,
-                resource_id VARCHAR(100),
                 action VARCHAR(20) NOT NULL, -- 'send', 'retry', 'cancel'
                 status VARCHAR(20) NOT NULL, -- 'success', 'failed', 'pending'
                 request_payload TEXT,
@@ -93,24 +92,6 @@ class Database
                 error_message TEXT,
                 user_identifier VARCHAR(100), -- IP or user identifier
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ");
-
-        // Retry queue
-        $db->exec("
-            CREATE TABLE IF NOT EXISTS retry_queue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                patient_id VARCHAR(50) NOT NULL,
-                resource_type VARCHAR(50) NOT NULL,
-                resource_id VARCHAR(100),
-                payload TEXT NOT NULL,
-                attempt_count INTEGER DEFAULT 0,
-                max_attempts INTEGER DEFAULT 3,
-                last_error TEXT,
-                status VARCHAR(20) DEFAULT 'pending', -- 'pending', 'processing', 'success', 'failed'
-                scheduled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ");
 
@@ -154,24 +135,34 @@ class Database
         ");
 
         // Login rate limiting (T24): max 5 failures per identifier per 15 min.
+        // identifier_hash MUST be UNIQUE — Auth::recordLoginFailure upserts
+        // with ON CONFLICT(identifier_hash), which SQLite rejects at prepare
+        // time unless the column is a unique constraint (plain index is not
+        // enough — the old migration silently disabled rate limiting).
         $db->exec("
             CREATE TABLE IF NOT EXISTS login_attempts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                identifier_hash VARCHAR(64) NOT NULL,
+                identifier_hash VARCHAR(64) NOT NULL UNIQUE,
                 window_start INTEGER NOT NULL,
                 attempts INTEGER DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ");
-        $db->exec("CREATE INDEX IF NOT EXISTS idx_login_identifier ON login_attempts(identifier_hash)");
+        // Upgrade pre-fix deployments: dedupe (keep newest row per identifier)
+        // then enforce uniqueness.
+        try {
+            $db->exec("DELETE FROM login_attempts WHERE id NOT IN (SELECT MAX(id) FROM login_attempts GROUP BY identifier_hash)");
+            $db->exec("CREATE UNIQUE INDEX IF NOT EXISTS uq_login_identifier ON login_attempts(identifier_hash)");
+        } catch (\Throwable $e) {
+            error_log('[PANEL] login_attempts unique upgrade failed: ' . $e->getMessage());
+        }
 
         // Indexes
         $db->exec("CREATE INDEX IF NOT EXISTS idx_audit_patient ON audit_logs(patient_id)");
         $db->exec("CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at)");
-        $db->exec("CREATE INDEX IF NOT EXISTS idx_retry_status ON retry_queue(status)");
-        $db->exec("CREATE INDEX IF NOT EXISTS idx_retry_patient ON retry_queue(patient_id)");
         $db->exec("CREATE INDEX IF NOT EXISTS idx_idempotency_key ON idempotency_keys(key_hash)");
         $db->exec("CREATE INDEX IF NOT EXISTS idx_send_entries_audit ON send_entries(audit_id)");
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_send_entries_audit_status ON send_entries(audit_id, status)");
         $db->exec("CREATE INDEX IF NOT EXISTS idx_send_entries_patient ON send_entries(patient_id, resource_type)");
     }
 }

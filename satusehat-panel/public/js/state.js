@@ -15,7 +15,9 @@ export const state = {
     activeGroup: null,
     batchSel: new Set(),
     batchRunning: false,
-    expanded: null,        // no_rawat of the expanded dropdown row
+    stats: null,             // server-side rail totals for the current filter
+    lastFilterKey: '',       // server-filter fingerprint for batch-selection pruning
+    expanded: null,          // no_rawat of the expanded dropdown row
     page: 1,
     perPage: 50,
     paginationMeta: { total: 0, page: 1, per_page: 50, pages: 1 },
@@ -73,6 +75,7 @@ export function rangeLabel(since, until) {
 
 export function dayLabel(isoDateTime) {
     const d = new Date(String(isoDateTime).replace(' ', 'T'));
+    if (Number.isNaN(d.getTime())) return String(isoDateTime || '');
     const today = new Date();
     const startOf = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
     const diffDays = Math.round((startOf(today) - startOf(d)) / DAY_MS);

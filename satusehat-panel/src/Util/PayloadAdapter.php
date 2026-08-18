@@ -548,7 +548,7 @@ class PayloadAdapter
                 dpo.tgl_perawatan, dpo.jam, dpo.status AS status_pemberian,
                 ap.aturan, ro.no_resep,
                 IFNULL(ssml.id_lokasi_satusehat, '') AS id_lokasi_satusehat,
-                IFNULL(b.nm_bangsal, '') AS nm_bangsal,
+                IFNULL(bm.nm_bangsal, '') AS nm_bangsal,
                 IFNULL(ssmr.id_medicationrequest, '') AS id_medicationrequest,
                 IFNULL(ssmd.id_medicationdispanse, '') AS id_medicationdispense
             FROM reg_periksa rp
@@ -1051,7 +1051,10 @@ class PayloadAdapter
                             PayloadAdapterWarnings::add("DiagnosticReport radiologi ({$row['noorder']}/{$row['kd_jenis_prw']}): ImagingStudy belum terkirim — dilewati");
                             break;
                         }
-                        $payload = \SatuSehatPayloadBuilder::diagnosticReport($row, $ihs['pasien'], $ihs['dokter'], $orgId, $row['id_diagnosticreport'] ?? '');
+                        // CLI parity: radiology vs lab use distinct builders.
+                        $payload = $isRad
+                            ? \SatuSehatPayloadBuilder::diagnosticReportRadiologi($row, $ihs['pasien'], $ihs['dokter'], $orgId, $row['id_diagnosticreport'] ?? '')
+                            : \SatuSehatPayloadBuilder::diagnosticReportLab($row, $ihs['pasien'], $ihs['dokter'], $orgId, $row['id_diagnosticreport'] ?? '');
                         break;
                 }
                 if ($payload !== null) {

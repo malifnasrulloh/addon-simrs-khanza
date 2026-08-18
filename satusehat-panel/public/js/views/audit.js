@@ -5,14 +5,19 @@
 'use strict';
 
 import { api, base } from '../api.js';
-import { $, escapeHtml, debounce, emptyStateHtml } from '../ui.js';
+import { $, escapeHtml, debounce, emptyStateHtml, rememberFocus, trapFocus, toast } from '../ui.js';
 import { state, dayLabel, timeLabel } from '../state.js';
 
 const auditReload = debounce(() => { state.auditPage = 1; loadAudit(); }, 300);
 const auditPageReload = debounce(loadAudit, 150);
+// Monotonic guards: the list and the stats fetch run concurrently from
+// showAuditView() — a SHARED counter would let the second request (stats)
+// invalidate the first (list) every time, dropping the timeline paint.
+let auditListSeq = 0;
+let auditStatsSeq = 0;
 
 export function initAuditView() {
-    $('btn-audit').addEventListener('click', (e) => { e.preventDefault(); location.hash = '#/audit'; });
+    // #btn-audit is a plain anchor (href="#/audit") — no JS needed.
     $('btn-audit-back').addEventListener('click', () => { location.hash = '#/'; });
     $('audit-since').addEventListener('input', auditReload);
     $('audit-until').addEventListener('input', auditReload);
@@ -26,7 +31,9 @@ export function initAuditView() {
         if (since) qs.set('since', since);
         if (until) qs.set('until', until);
         if (status && status !== 'all') qs.set('status', status);
-        window.location.href = base('/api/audit/export') + '&' + qs.toString();
+        // base() already carries ?r=... — only append & when there are filters.
+        const url = base('/api/audit/export');
+        window.location.href = qs.toString() ? url + '&' + qs.toString() : url;
     });
 }
 
@@ -40,6 +47,7 @@ export function showAuditView() {
 }
 
 export async function loadAudit() {
+    const seq = ++auditListSeq;
     const list = $('audit-list');
     list.innerHTML = '<div class="empty-state">Memuat audit log...</div>';
     $('audit-summary').hidden = true;
@@ -56,6 +64,7 @@ export async function loadAudit() {
 
     try {
         const data = await api(`/api/audit?${qs}`);
+        if (seq !== auditListSeq) return; // a newer filter/page request won this race
         state.audit = data.data || [];
         state.auditPages = data.meta?.pages || 1;
         state.auditTotal = data.meta?.total || 0;
@@ -71,6 +80,7 @@ export async function loadAudit() {
         renderSummary(state.audit.length);
         renderTimeline();
     } catch (e) {
+        if (seq !== auditListSeq) return;
         list.innerHTML = emptyStateHtml({
             iconName: 'alert',
             title: 'Gagal memuat audit',
@@ -83,9 +93,10 @@ export async function loadAudit() {
 }
 
 async function loadAuditStats() {
+    const seq = ++auditStatsSeq;
     try {
         const res = await api('/api/audit/stats');
-        if (!res.data) return;
+        if (seq !== auditStatsSeq || !res.data) return;
         const t = res.data.totals || {};
         $('audit-stat-total').textContent = String(t.audits ?? '-');
         $('audit-stat-ok').textContent = String(t.success ?? '-');
@@ -115,9 +126,6 @@ function renderPager() {
 
 function renderSummary(count) {
     $('audit-summary').hidden = false;
-    $('audit-summary').innerHTML = `
-        <div class="audit-stat"><span class="a-k">Log tampil</span><span class="a-v">${count}</span></div>
-        <div class="audit-stat success"><span class="a-k">Berhasil</span><span class="a-v">${count === 0 ? 0 : ''}</span></div>`;
     $('audit-summary').innerHTML = `
         <div class="audit-stat"><span class="a-k">Log tampil</span><span class="a-v">${count}</span></div>`;
 }
@@ -151,7 +159,7 @@ function renderTimeline() {
             const sent = l.sent_count ?? null;
             const fail = l.failed_count ?? null;
             return `
-            <div class="audit-item" data-audit-id="${l.id}" style="cursor:pointer" title="Klik untuk lihat detail per entri">
+            <div class="audit-item" data-audit-id="${l.id}" role="button" tabindex="0" title="Klik untuk lihat detail per entri">
                 <span class="audit-dot ${cls}" aria-hidden="true"></span>
                 <div class="audit-meta">
                     <span class="patient-name mono">${escapeHtml(l.patient_id || '-')}</span>
@@ -165,14 +173,24 @@ function renderTimeline() {
     `).join('');
 
     list.querySelectorAll('.audit-item[data-audit-id]').forEach(item => {
-        item.addEventListener('click', () => showAuditDetail(parseInt(item.dataset.auditId, 10)));
+        const open = () => showAuditDetail(parseInt(item.dataset.auditId, 10));
+        item.addEventListener('click', open);
+        // Keyboard parity: Enter/Space on a focused item opens the detail.
+        item.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+        });
     });
 }
 
+// Rapid clicks on two audit entries must not paint out of order.
+let auditDetailSeq = 0;
+
 async function showAuditDetail(id) {
+    const seq = ++auditDetailSeq;
     try {
         const res = await api(`/api/audit/${id}`);
         if (!res.data) return;
+        if (seq !== auditDetailSeq) return; // a newer detail request won
         const log = res.data;
 
         let reqFormatted = '';
@@ -185,6 +203,7 @@ async function showAuditDetail(id) {
         const modal = $('payload-modal');
         if (modal) {
             // Read-only: hide the Save button while viewing an audit detail.
+            // hidePayloadModal() restores them on every close path.
             const saveBtn = $('modal-save');
             const fmtBtn = $('modal-format');
             if (saveBtn) saveBtn.hidden = true;
@@ -215,22 +234,10 @@ async function showAuditDetail(id) {
             }
             $('payload-modal').hidden = false;
             $('modal-backdrop').hidden = false;
-
-            // Restore buttons when the modal closes.
-            const restore = () => {
-                if (saveBtn) saveBtn.hidden = false;
-                if (fmtBtn) fmtBtn.hidden = false;
-                const eb = $('audit-entries');
-                if (eb) eb.innerHTML = '';
-                $('modal-close').removeEventListener('click', restore);
-                $('modal-backdrop').removeEventListener('click', restore);
-            };
-            $('modal-close').addEventListener('click', restore);
-            $('modal-backdrop').addEventListener('click', restore);
+            rememberFocus();
+            trapFocus($('payload-modal'));
         }
     } catch (e) {
-        // Surface detail-load failures (the old code swallowed them).
-        const toast = window.__toast || (() => {});
-        try { toast('Gagal memuat detail audit', e.message, 'error'); } catch (err) { /* noop */ }
+        toast('Gagal memuat detail audit', e.message, 'error');
     }
 }

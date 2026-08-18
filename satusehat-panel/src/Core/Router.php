@@ -53,6 +53,46 @@ class Router
             }
         }
 
+        $match = $this->matchRoute($requestMethod, $this->requestUri());
+        if ($match !== null) {
+            // Set params globally for the handler
+            $_SERVER['ROUTE_PARAMS'] = $match['params'];
+            http_response_code(200);
+            header('Content-Type: application/json; charset=utf-8');
+            $response = call_user_func($this->routes[$match['index']]['handler'], $match['params']);
+            echo is_string($response) ? $response : json_encode($response);
+            return;
+        }
+
+        http_response_code(404);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success' => false, 'error' => 'Route not found']);
+    }
+
+    /**
+     * Resolve a method+URI to a registered route (first match wins, in
+     * registration order). Returns the route index + captured params, or
+     * null when nothing matches. Public so tests can assert ordering
+     * invariants (literal routes before catch-alls) without dispatching.
+     *
+     * @return array{index:int,path:string,params:array<string,string>}|null
+     */
+    public function matchRoute(string $method, string $uri): ?array
+    {
+        foreach ($this->routes as $i => $route) {
+            if ($route['method'] !== strtoupper($method)) {
+                continue;
+            }
+            $params = $this->matchPath($route['path'], $uri);
+            if ($params !== null) {
+                return ['index' => $i, 'path' => $route['path'], 'params' => $params];
+            }
+        }
+        return null;
+    }
+
+    private function requestUri(): string
+    {
         if ($this->explicitUri !== null) {
             $requestUri = $this->explicitUri;
         } else {
@@ -75,28 +115,7 @@ class Router
 
         // Decode percent-encoding so params with slashes (%2F) work.
         // Single decode pass — avoids double-decoding corruption.
-        $requestUri = rawurldecode($requestUri);
-
-        foreach ($this->routes as $route) {
-            if ($route['method'] !== $requestMethod) {
-                continue;
-            }
-
-            $params = $this->matchPath($route['path'], $requestUri);
-            if ($params !== null) {
-                // Set params globally for the handler
-                $_SERVER['ROUTE_PARAMS'] = $params;
-                http_response_code(200);
-                header('Content-Type: application/json; charset=utf-8');
-                $response = call_user_func($route['handler'], $params);
-                echo is_string($response) ? $response : json_encode($response);
-                return;
-            }
-        }
-
-        http_response_code(404);
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['success' => false, 'error' => 'Route not found']);
+        return rawurldecode($requestUri);
     }
 
     private function matchPath(string $pattern, string $uri): ?array

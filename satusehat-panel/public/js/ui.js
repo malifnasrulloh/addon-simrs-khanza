@@ -29,22 +29,16 @@ const ICON_PATHS = {
     search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
     refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
-    moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
-    x: '<path d="M18 6 6 18M6 6l12 12"/>',
     doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6"/>',
     eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
     check: '<path d="M20 6 9 17l-5-5"/>',
     alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4m0 4h.01"/>',
     info: '<circle cx="12" cy="12" r="9"/><path d="M12 8h.01M12 12v4"/>',
-    send: '<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/>',
     user: '<circle cx="12" cy="12" r="4"/><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>',
-    filter: '<path d="M4 6h16M7 12h10M10 18h4"/>',
     calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
     grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     sliders: '<path d="M4 6h16M4 12h10M4 17h7"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-    arrowLeft: '<path d="M19 12H5m6-6-6 6 6 6"/>',
-    plus: '<path d="M12 5v14M5 12h14"/>',
 };
 
 export function icon(name, cls = 'icon') {
@@ -79,6 +73,8 @@ export function restoreFocus() {
     if (el && el.isConnected) el.focus();
 }
 
+const trapHandlers = new WeakMap();
+
 export function trapFocus(container) {
     const focusables = () => [...container.querySelectorAll(
         'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
@@ -92,7 +88,10 @@ export function trapFocus(container) {
         if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
         else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
     };
-    container.addEventListener('keydown', onKey);
+    if (!trapHandlers.has(container)) {
+        container.addEventListener('keydown', onKey);
+        trapHandlers.set(container, onKey);
+    }
     // Async content (skeleton -> data): keep trying until something focusable.
     const initial = first();
     if (initial) initial.focus();
@@ -104,6 +103,15 @@ export function trapFocus(container) {
             if (n) { clearInterval(h); n.focus(); }
         }, 50);
         setTimeout(() => clearInterval(h), 5000);
+    }
+}
+
+/** Remove the keydown handler installed by trapFocus (call on close). */
+export function untrapFocus(container) {
+    const handler = trapHandlers.get(container);
+    if (handler) {
+        container.removeEventListener('keydown', handler);
+        trapHandlers.delete(container);
     }
 }
 

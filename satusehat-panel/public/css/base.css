@@ -201,6 +201,14 @@ body {
 }
 .btn-danger:hover:not(:disabled) { background: var(--bad-ink); box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3); }
 
+/* Confirm-armed state (two-step destructive action) */
+.btn.armed {
+    background: linear-gradient(180deg, #ef4444 0%, var(--bad) 100%);
+    color: #ffffff;
+    box-shadow: 0 0 0 3px var(--bad-soft), 0 4px 12px rgba(220, 38, 38, 0.3);
+}
+.btn.armed:hover:not(:disabled) { background: var(--bad-ink); }
+
 /* Loading state */
 .btn .spinner { display: none; }
 .btn.loading .spinner { display: inline-block; }

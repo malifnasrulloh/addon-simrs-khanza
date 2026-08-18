@@ -141,14 +141,16 @@ $router->add('GET', '/api/patients/{noRawat:any}', function (array $params) {
 });
 
 // API: audit log
-$router->add('GET', '/api/audit/{id:any}', function (array $params) {
-    return SatusehatPanel\Controller\AuditController::detail((int) $params['id']);
-});
+// NOTE: stats/export must be registered BEFORE {id:any} — the catch-all
+// would otherwise shadow them (matched first).
 $router->add('GET', '/api/audit/stats', function () {
     return SatusehatPanel\Controller\AuditController::stats();
 });
 $router->add('GET', '/api/audit/export', function () {
     return SatusehatPanel\Controller\AuditController::export();
+});
+$router->add('GET', '/api/audit/{id:any}', function (array $params) {
+    return SatusehatPanel\Controller\AuditController::detail((int) $params['id']);
 });
 $router->add('GET', '/api/audit', function () {
     return SatusehatPanel\Controller\AuditController::list();

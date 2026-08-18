@@ -30,10 +30,6 @@ export function setCsrfToken(token) {
     if (token) csrfToken = token;
 }
 
-export function getCsrfToken() {
-    return csrfToken;
-}
-
 export async function api(path, opts = {}) {
     const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
     if (csrfToken && opts.method && opts.method.toUpperCase() !== 'GET') {

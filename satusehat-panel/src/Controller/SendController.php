@@ -5,6 +5,7 @@ namespace SatusehatPanel\Controller;
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Core\Config;
 use SatusehatPanel\Util\PayloadAdapter;
+use SatusehatPanel\Util\PayloadAdapterWarnings;
 use SatusehatPanel\Util\ReferenceRegistry;
 use SatusehatPanel\Util\EntryOutcomeClassifier;
 use SatusehatPanel\Util\IdempotencyStore;
@@ -67,15 +68,16 @@ class SendController
         $nikDokter = (string) ($stmtDoc->fetchColumn() ?: '');
         $ihsDokter = PayloadAdapter::resolveDokterIhs($db, $nikDokter);
 
-        // Validate IHS IDs are real (not placeholders)
-        if (str_contains($ihsPasien, 'PLACEHOLDER')) {
+        // Validate IHS IDs are real (not placeholders).
+        // '' means the NIK lookup found no SATUSEHAT record — same outcome.
+        if ($ihsPasien === '' || str_contains($ihsPasien, 'PLACEHOLDER')) {
             return [
                 'success' => false,
                 'error' => 'IHS ID Pasien tidak ditemukan. Pastikan NIK pasien (' . $nik . ') terdaftar di SATUSEHAT.',
                 'build_errors' => [],
             ];
         }
-        if (str_contains($ihsDokter, 'PLACEHOLDER')) {
+        if ($ihsDokter === '' || str_contains($ihsDokter, 'PLACEHOLDER')) {
             return [
                 'success' => false,
                 'error' => 'IHS ID Dokter tidak ditemukan. Pastikan NIK dokter (' . $nikDokter . ') terdaftar di SATUSEHAT.',
@@ -91,6 +93,9 @@ class SendController
         ];
 
         $buildErrors = [];
+        // Advisory notices (no data for a requested type, adapter notes,
+        // unresolved references) — do NOT mark the send as failed.
+        $buildWarnings = [];
         // Per-instance reference registry: resolves "Type/" empty references
         // to the correct bundle entry via source-row keys — never first-wins.
         $registry = new ReferenceRegistry();
@@ -109,7 +114,7 @@ class SendController
                     // resources only — encounter/condition/obs etc.).
                     $payloadList = PayloadAdapter::build($resource, $noRawat, $patient, $registry->uuidsByType());
                     foreach (PayloadAdapterWarnings::take() as $w) {
-                        $buildErrors[] = $w;
+                        $buildWarnings[] = $w;
                     }
                 } catch (\Throwable $e) {
                     error_log("[PANEL] build failed for {$resource}: " . $e->getMessage());
@@ -119,7 +124,7 @@ class SendController
             }
 
             if (empty($payloadList)) {
-                $buildErrors[] = "{$resource}: no data on this visit";
+                $buildWarnings[] = "{$resource}: no data on this visit";
                 continue;
             }
 
@@ -190,17 +195,20 @@ class SendController
         // 'Patient/{id}' from the mapping tables, which would be incomplete
         // ('Encounter/') when the referenced resource is also in this bundle.
         $refWarnings = self::rewriteBundleReferences($bundle['entry'], $registry);
-        $buildErrors = array_merge($buildErrors, $refWarnings);
+        $buildWarnings = array_merge($buildWarnings, $refWarnings);
 
         if (empty($bundle['entry'])) {
             return [
                 'success' => false,
                 'error' => 'No resources could be built',
                 'build_errors' => $buildErrors,
+                'warnings' => $buildWarnings,
             ];
         }
 
-        // Check if there were partial build failures
+        // Partial failure = a requested resource failed to BUILD. Advisory
+        // notices (no data, adapter notes, unresolved refs) don't fail the
+        // send — they're reported as warnings.
         $partialFailure = count($buildErrors) > 0;
 
         // ── Strip internal _panel_meta from entries before wire ───────
@@ -226,7 +234,8 @@ class SendController
         $entryKeyHashes = [];
         $idemKeys = [];
         foreach ($bundle['entry'] as $i => $ent) {
-            $meta = $ent['_panel_meta'] ?? [];
+            // _panel_meta was stripped above — read from the preserved copy.
+            $meta = $entryMetas[$i] ?? [];
             $pk = $meta['persist_keys']['keys'] ?? [];
             $keys = is_array($pk) ? $pk : [];
             if (empty($keys)) {
@@ -237,7 +246,7 @@ class SendController
             $idemKeys[$key] = (string) ($ent['request']['url'] ?? '');
         }
 
-        $conflicts = IdempotencyStore::attemptsConflicted($idemKeys);
+        $conflicts = IdempotencyStore::claimAll($idemKeys, $noRawat);
         if (!empty($conflicts)) {
             $types = implode(', ', array_unique(array_map(static fn($c) => $c['type'], $conflicts)));
             return [
@@ -245,38 +254,81 @@ class SendController
                 'error' => "Kiriman sebelumnya untuk: {$types} — hasilnya belum tentu selesai (timeout/error jaringan). Periksa Riwayat Kirim, verifikasi manual, lalu coba lagi.",
                 'needs_manual_verify' => true,
                 'build_errors' => $buildErrors,
+                'warnings' => $buildWarnings,
                 'ref_warnings' => $refWarnings,
                 'sent_count' => 0,
             ];
         }
-        foreach ($entryKeyHashes as $i => $key) {
-            IdempotencyStore::claim($key, $noRawat, (string) ($bundle['entry'][$i]['request']['url'] ?? ''));
-        }
 
         // ── Send the transaction Bundle to SATUSEHAT ──────────────────
+        // Entries already committed in a prior attempt are replayed from the
+        // store (their SATUSEHAT ids are authoritative); only the rest is
+        // POSTed — a re-send after partial failure never re-creates the
+        // sent entries (rule 20002).
         $client = self::getClient();
         $replayed = false;
-        if (!empty($idemKeys) && self::allKeysSettledSent($idemKeys)) {
+
+        $sentIndexes = [];
+        $postIndexes = [];
+        foreach (array_keys($bundle['entry']) as $i) {
+            $row = isset($entryKeyHashes[$i]) ? IdempotencyStore::lookup($entryKeyHashes[$i]) : null;
+            if ($row !== null && $row['status'] === IdempotencyStore::STATUS_SENT) {
+                $sentIndexes[] = $i;
+            } else {
+                $postIndexes[] = $i;
+            }
+        }
+
+        $replayEntries = [];
+        $replayByUrl = [];
+        foreach ($sentIndexes as $i) {
+            $ent = $bundle['entry'][$i];
+            $stored = IdempotencyStore::lookup($entryKeyHashes[$i]);
+            $fullUrl = $ent['fullUrl'] ?? '';
+            $replayByUrl[$fullUrl] = [
+                'type' => (string) ($ent['request']['url'] ?? ''),
+                'id' => $stored['resource_id'] ?? null,
+            ];
+            $replayEntries[] = [
+                'fullUrl' => $fullUrl,
+                'resource' => ['id' => $stored['resource_id'] ?? null],
+            ];
+        }
+
+        if (empty($postIndexes)) {
             // Full replay: every entry was already committed in a previous
             // attempt — rebuild the response from stored ids, no new POST.
-            $responseEntries = [];
-            foreach ($bundle['entry'] as $i => $ent) {
-                $stored = isset($entryKeyHashes[$i]) ? IdempotencyStore::lookup($entryKeyHashes[$i]) : null;
-                $responseEntries[] = [
-                    'fullUrl' => $ent['fullUrl'] ?? '',
-                    'resource' => ['id' => $stored['resource_id'] ?? null],
-                ];
-            }
             $result = [
                 'success' => true,
                 'code' => 200,
                 'message' => 'Replayed from idempotency store (no new POST)',
-                'data' => ['entry' => $responseEntries],
+                'data' => ['entry' => $replayEntries],
                 'response' => '{}',
             ];
             $replayed = true;
         } else {
-            $result = $client->post('/', $bundle);
+            $postEntries = [];
+            foreach ($postIndexes as $i) {
+                $postEntries[] = $bundle['entry'][$i];
+            }
+            // Point in-bundle references at the replayed resources' real
+            // SATUSEHAT ids — their urn:uuid is not part of the POSTed
+            // bundle, so dangling refs would be rejected server-side.
+            if (!empty($replayByUrl)) {
+                $postEntries = self::rewriteReplayRefs($postEntries, $replayByUrl);
+            }
+            $postBundle = $bundle;
+            $postBundle['entry'] = $postEntries;
+            $result = $client->post('/', $postBundle);
+            $result['data'] = $result['data'] ?? [];
+            if (!empty($result['success']) && isset($result['data']['entry']) && is_array($result['data']['entry'])) {
+                // Match full bundle entries by fullUrl in constructEntryOutcomes.
+                $result['data']['entry'] = array_merge($replayEntries, $result['data']['entry']);
+            } else {
+                // Network failure: outcomes for the replayed entries are
+                // still known; the POSTed ones stay NETWORK_UNKNOWN.
+                $result['data']['entry'] = $replayEntries;
+            }
         }
 
         // ── Per-entry outcome state machine ───────────────────────────
@@ -285,22 +337,47 @@ class SendController
         // entries unknown. Bundle success now means: HTTP 2xx AND every
         // entry actually sent.
         if (!empty($result['success'])) {
-            $outcomes = self::constructEntryOutcomes($bundle['entry'], $result['data']['entry'] ?? []);
+            $outcomes = self::constructEntryOutcomes($bundle['entry'], $result['data']['entry'] ?? [], $entryMetas);
         } else {
+            // Network failure: only entries POSTed in THIS attempt are
+            // uncertain. Entries replayed from the idempotency store were
+            // proven SENT on a prior run — an unknown outcome here would
+            // settle them SENT → UNKNOWN below, blocking the next resend.
             $outcomes = [];
-            foreach ($bundle['entry'] as $ent) {
-                $meta = $ent['_panel_meta'] ?? [];
+            foreach ($postIndexes as $i) {
+                $meta = $entryMetas[$i] ?? [];
                 $keys = $meta['persist_keys']['keys'] ?? [];
-                $outcomes[] = [
+                $outcomes[$i] = [
                     'status'        => EntryOutcomeClassifier::NETWORK_UNKNOWN,
                     'rule_number'   => null,
                     'issue_text'    => (string) ($result['message'] ?? 'API Error'),
                     'satusehat_id'  => null,
-                    'key_hash'      => is_array($keys) ? ReferenceRegistry::hashKeys(array_map('strval', $keys)) : null,
+                    // Phantom hash guard: keyless (hand-edited) entries carry
+                    // no key and must not mint a hash of an empty set.
+                    'key_hash'      => is_array($keys) && !empty($keys)
+                        ? ReferenceRegistry::hashKeys(array_map('strval', $keys))
+                        : null,
                 ];
             }
         }
         $summary = EntryOutcomeClassifier::summarize($outcomes);
+
+        // Per-entry failures inside an HTTP-200 transaction never reach the
+        // client's HTTP-level tally — feed them into the run-end
+        // [REJECT-STATS] summary so panel acceptance data is meaningful.
+        if (class_exists(\SatuSehatClient::class)) {
+            foreach ($outcomes as $o) {
+                if ($o['status'] === EntryOutcomeClassifier::SENT
+                    || $o['status'] === EntryOutcomeClassifier::NETWORK_UNKNOWN) {
+                    continue;
+                }
+                if ($o['rule_number'] !== null) {
+                    \SatuSehatClient::tallyRuleRejection($o['rule_number']);
+                } else {
+                    \SatuSehatClient::tallyOtherRejection();
+                }
+            }
+        }
 
         // ── Settle idempotency keys from per-entry outcomes ───────────
         foreach ($entryKeyHashes as $i => $key) {
@@ -347,6 +424,7 @@ class SendController
             'success' => $realSuccess,
             'partial_failure' => $partialFailure || !$summary['all_sent'],
             'build_errors' => $buildErrors,
+            'warnings' => $buildWarnings,
             'ref_warnings' => $refWarnings,
             'sent_count' => count(array_filter($outcomes, fn($o) => $o['status'] === EntryOutcomeClassifier::SENT)),
             'failed_count' => count(array_filter($outcomes, fn($o) => $o['status'] !== EntryOutcomeClassifier::SENT)),
@@ -362,28 +440,14 @@ class SendController
     }
 
     /**
-     * True when every provided key exists in the store with status 'sent'
-     * (the whole bundle was previously committed — safe to replay).
-     *
-     * @param array<string,string> $keys key_hash => resource_type
-     */
-    private static function allKeysSettledSent(array $keys): bool
-    {
-        foreach ($keys as $key => $type) {
-            $row = IdempotencyStore::lookup($key);
-            if ($row === null || $row['status'] !== IdempotencyStore::STATUS_SENT) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /**
      * Match response entries back to request entries and classify each one.
+     *
+     * @param array $entryMetas Preserved _panel_meta per request entry index
+     *                          (stripped from the wire bundle before send).
      *
      * @return array<int,array{status:string,rule_number:?int,issue_text:?string,satusehat_id:?string,key_hash:?string}>
      */
-    private static function constructEntryOutcomes(array $requestEntries, array $responseEntries): array
+    private static function constructEntryOutcomes(array $requestEntries, array $responseEntries, array $entryMetas = []): array
     {
         $reqByUrl = [];
         $reqByPos = [];
@@ -407,7 +471,7 @@ class SendController
             $meta = [];
             $keys = [];
             if ($reqIndex !== null) {
-                $meta = $requestEntries[$reqIndex]['_panel_meta'] ?? [];
+                $meta = $entryMetas[$reqIndex] ?? [];
                 $pk = $meta['persist_keys']['keys'] ?? [];
                 $keys = is_array($pk) ? $pk : [];
             }
@@ -543,6 +607,15 @@ class SendController
                     $idCol = $persistKeys['id_col'];
                     $keys = $persistKeys['keys'];
 
+                    // Whitelist identifiers before interpolation — a hand-edited
+                    // payload could otherwise inject arbitrary SQL identifiers.
+                    if (!is_string($table) || !preg_match('/^satu_sehat_[a-z0-9_]+$/', $table)
+                        || !is_string($idCol) || !preg_match('/^id_[a-z0-9_]+$/', $idCol)
+                        || !is_array($keys) || !self::validPersistKeys($keys)) {
+                        error_log("[PANEL] persist skipped for {$type}: _panel_persist_keys tidak valid");
+                        continue;
+                    }
+
                     $cols = array_keys($keys);
                     $cols[] = $idCol;
                     $placeholders = array_map(fn($c) => ":$c", $cols);
@@ -621,6 +694,25 @@ class SendController
         }
 
         return $created;
+    }
+
+    /**
+     * Every persist key must be a scalar (string|int|float) so only safe
+     * values ever reach the whitelisted column list.
+     *
+     * @param array $keys persist key => value map
+     */
+    private static function validPersistKeys(array $keys): bool
+    {
+        foreach ($keys as $k => $v) {
+            if (!is_string($k) || !preg_match('/^[a-z0-9_]+$/', $k)) {
+                return false;
+            }
+            if (!is_scalar($v)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -716,6 +808,41 @@ class SendController
     }
 
     /**
+     * Recursively rewrite references that point at replayed bundle entries
+     * (urn:uuid) into real 'Type/{satusehatId}' references, so a reduced
+     * bundle POSTed after a partial failure keeps working.
+     *
+     * @param array<int,array>          $entries  POSTed entries (by value)
+     * @param array<string,array{type:string,id:?string}> $replayByUrl fullUrl => type/id
+     * @return array<int,array> rewritten entries
+     */
+    private static function rewriteReplayRefs(array $entries, array $replayByUrl): array
+    {
+        foreach ($entries as &$entry) {
+            if (isset($entry['resource'])) {
+                self::rewriteReplayRefNode($entry['resource'], $replayByUrl);
+            }
+        }
+        unset($entry);
+        return $entries;
+    }
+
+    private static function rewriteReplayRefNode(array &$node, array $replayByUrl): void
+    {
+        foreach ($node as $key => &$value) {
+            if (is_array($value)) {
+                self::rewriteReplayRefNode($value, $replayByUrl);
+            } elseif (is_string($value) && $key === 'reference' && isset($replayByUrl[$value])) {
+                $target = $replayByUrl[$value];
+                if ($target['id'] !== null && $target['id'] !== '') {
+                    $value = $target['type'] . '/' . $target['id'];
+                }
+            }
+        }
+        unset($value);
+    }
+
+    /**
      * Record an audit row and return its id (for send_entries linkage).
      * Status is the truthful per-entry summary: 'success' | 'failed' |
      * 'partial' (never derived from HTTP code alone).
@@ -745,11 +872,22 @@ class SendController
                 (patient_id, resource_type, action, status, request_payload, response_payload, error_message, user_identifier)
             VALUES (?, ?, 'send', ?, ?, ?, ?, ?)
         ");
-$stmt->execute([
+        // Never persist internal persist-routing keys (_panel_meta) in the
+        // audit payload — they're panel-internal, not FHIR.
+        $auditBundle = $bundle;
+        if (isset($auditBundle['entry']) && is_array($auditBundle['entry'])) {
+            foreach ($auditBundle['entry'] as &$entry) {
+                if (is_array($entry)) {
+                    unset($entry['_panel_meta']);
+                }
+            }
+            unset($entry);
+        }
+        $stmt->execute([
             $noRawat,
             implode(',', $resources),
             $status,
-            \Logger::scrubSensitiveData(json_encode($bundle)),
+            \Logger::scrubSensitiveData(json_encode($auditBundle)),
             $responseJson,
             $errorMsg,
             $_SERVER['REMOTE_ADDR'] ?? 'cli',

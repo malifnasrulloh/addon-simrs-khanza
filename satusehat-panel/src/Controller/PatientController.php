@@ -28,11 +28,13 @@ class PatientController
         $params = [];
 
         if ($since !== '') {
-            $where .= " AND DATE(rp.tgl_registrasi) >= ?";
+            // Direct column comparison (sargable) — DATE() wrapping would
+            // defeat the tgl_registrasi index.
+            $where .= " AND rp.tgl_registrasi >= ?";
             $params[] = $since;
         }
         if ($until !== '') {
-            $where .= " AND DATE(rp.tgl_registrasi) <= ?";
+            $where .= " AND rp.tgl_registrasi < DATE_ADD(?, INTERVAL 1 DAY)";
             $params[] = $until;
         }
         if ($search !== '') {
@@ -103,6 +105,10 @@ class PatientController
             $p['resource_counts'] = $batchCounts[$p['no_rawat']] ?? [];
         }
 
+        // Rail stats: same date/search scope as the list, computed server-side
+        // over the FULL filtered set (not just this page).
+        $stats = self::stats($where, $params);
+
         return [
             'success' => true,
             'data' => $patients,
@@ -112,7 +118,164 @@ class PatientController
                 'per_page' => $perPage,
                 'pages' => $pages,
             ],
+            'stats' => $stats,
         ];
+    }
+
+    /**
+     * Aggregate totals over the filtered registration set:
+     * total / paid / unpaid from billing status, ready = patients having at
+     * least one resource type with source data that is not fully sent.
+     * Mirrors the availability/coverage rules of buildResourceManifest().
+     */
+    private static function stats(string $where, array $params): array
+    {
+        $db = Database::getMysql();
+        $base = "FROM reg_periksa rp JOIN pasien pj ON pj.no_rkm_medis = rp.no_rkm_medis {$where}";
+
+        $total = 0;
+        $paid = 0;
+        try {
+            $stmt = $db->prepare("SELECT COUNT(*) AS total, COALESCE(SUM(rp.status_bayar LIKE '%Sudah%'), 0) AS paid {$base}");
+            $stmt->execute($params);
+            $row = $stmt->fetch();
+            $total = (int) ($row['total'] ?? 0);
+            $paid = (int) ($row['paid'] ?? 0);
+        } catch (\Throwable $e) {
+            // Stats are advisory — never fail the list over them.
+        }
+
+        $ready = 0;
+        try {
+            $predicates = array_values(self::pendingResourcePredicates());
+            if ($predicates !== []) {
+                $sql = "SELECT COUNT(DISTINCT rp.no_rawat) AS ready {$base} AND (" . implode(' OR ', $predicates) . ')';
+                $stmt = $db->prepare($sql);
+                $stmt->execute($params);
+                $ready = (int) ($stmt->fetch()['ready'] ?? 0);
+            }
+        } catch (\Throwable $e) {
+            $ready = 0;
+        }
+
+        return [
+            'total' => $total,
+            'paid' => $paid,
+            'unpaid' => $total - $paid,
+            'ready' => $ready,
+        ];
+    }
+
+    /**
+     * One SQL predicate per resource type: "this visit has source data but
+     * not every instance carries a real SATUSEHAT id". Used by the stats
+     * "ready" count; keep in exact parity with buildResourceManifest().
+     * Every expression references the outer alias `rp` (reg_periksa).
+     *
+     * @internal — exposed for structural tests (predicate coverage).
+     * @return array<string, string>
+     */
+    public static function pendingResourcePredicates(): array
+    {
+        $src = fn(string $body) => "(SELECT COUNT(*) FROM {$body})";
+        $mapReal = fn(string $table, string $idCol) =>
+            "(SELECT COUNT(*) FROM {$table} WHERE no_rawat = rp.no_rawat AND {$idCol} NOT IN ('', '-'))";
+        // MedicationRequest/MedicationStatement are keyed (no_resep, kode_brng)
+        // — they have NO no_rawat column. Resolve the visit via resep_obat,
+        // mirroring the CLI (Database.php): JOIN resep_obat ON no_resep.
+        $mapMed = fn(string $table, string $idCol) =>
+            "(SELECT COUNT(*) FROM {$table} ssm INNER JOIN resep_obat ro ON ro.no_resep = ssm.no_resep"
+            . " WHERE ro.no_rawat = rp.no_rawat AND ssm.{$idCol} NOT IN ('', '-'))";
+        $anyReal = fn(string $table, string $idCol) =>
+            "NOT EXISTS (SELECT 1 FROM {$table} WHERE no_rawat = rp.no_rawat AND {$idCol} NOT IN ('', '-'))";
+
+        $srcCond = $src('diagnosa_pasien dp WHERE dp.no_rawat = rp.no_rawat')
+            . ' + ' . $src("pemeriksaan_ralan pr WHERE pr.no_rawat = rp.no_rawat AND pr.keluhan IS NOT NULL AND pr.keluhan != ''")
+            . ' + ' . $src("pemeriksaan_ranap pr WHERE pr.no_rawat = rp.no_rawat AND pr.keluhan IS NOT NULL AND pr.keluhan != ''");
+        $srcMed = $src('resep_obat ro INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep WHERE ro.no_rawat = rp.no_rawat');
+        $srcTTV = $src('pemeriksaan_ralan pr WHERE pr.no_rawat = rp.no_rawat')
+            . ' + ' . $src('pemeriksaan_ranap pr WHERE pr.no_rawat = rp.no_rawat');
+
+        // MedicationDispense parity with the manifest's strict allCovered:
+        // every administered drug line (detail_pemberian_obat, keyed exactly
+        // as the CLI syncs it) must carry a real mapping id.
+        $srcDpo = $src('detail_pemberian_obat dpo WHERE dpo.no_rawat = rp.no_rawat');
+        $mapDpo = $src('detail_pemberian_obat dpo INNER JOIN satu_sehat_medicationdispense ssmd'
+            . ' ON ssmd.no_rawat = dpo.no_rawat AND ssmd.tgl_perawatan = dpo.tgl_perawatan'
+            . ' AND ssmd.jam = dpo.jam AND ssmd.kode_brng = dpo.kode_brng'
+            . ' AND ssmd.no_batch = dpo.no_batch AND ssmd.no_faktur = dpo.no_faktur'
+            . ' WHERE dpo.no_rawat = rp.no_rawat AND ssmd.id_medicationdispanse NOT IN (\'\', \'-\')');
+
+        $predicates = [
+            'Encounter' => "NOT EXISTS (SELECT 1 FROM satu_sehat_encounter e WHERE e.no_rawat = rp.no_rawat)",
+            'Condition' => "({$srcCond} > 0) AND ({$srcCond} > {$mapReal('satu_sehat_condition', 'id_condition')})",
+            'Procedure' => "(SELECT COUNT(*) FROM prosedur_pasien pp WHERE pp.no_rawat = rp.no_rawat) > 0"
+                . " AND (SELECT COUNT(*) FROM prosedur_pasien pp WHERE pp.no_rawat = rp.no_rawat) > {$mapReal('satu_sehat_procedure', 'id_procedure')}",
+            'AllergyIntolerance' => "((SELECT COUNT(*) FROM pemeriksaan_ralan pr WHERE pr.no_rawat = rp.no_rawat AND pr.alergi IS NOT NULL AND pr.alergi != '' AND pr.alergi != '-')"
+                . " + (SELECT COUNT(*) FROM pemeriksaan_ranap pr WHERE pr.no_rawat = rp.no_rawat AND pr.alergi IS NOT NULL AND pr.alergi != '' AND pr.alergi != '-')) > 0"
+                . " AND {$anyReal('satu_sehat_allergy_intolerance', 'id_allergy_intolerance')}",
+            'MedicationRequest' => "({$srcMed} > 0) AND ({$srcMed} > {$mapMed('satu_sehat_medicationrequest', 'id_medicationrequest')})",
+            'MedicationDispense' => "({$srcMed} > 0) AND ({$srcDpo} > {$mapDpo})",
+            'MedicationStatement' => "({$srcMed} > 0) AND ({$srcMed} > {$mapMed('satu_sehat_medicationstatement', 'id_medicationstatement')})",
+            'Medication' => "({$srcMed} > 0) AND NOT EXISTS (SELECT 1 FROM resep_obat ro"
+                . " INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep"
+                . " INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = rd.kode_brng"
+                . " WHERE ro.no_rawat = rp.no_rawat AND ssm.id_medication NOT IN ('', '-'))",
+            'CarePlan' => "((SELECT COUNT(*) FROM pemeriksaan_ralan pr WHERE pr.no_rawat = rp.no_rawat AND pr.rtl IS NOT NULL AND pr.rtl != '')"
+                . " + (SELECT COUNT(*) FROM pemeriksaan_ranap pr WHERE pr.no_rawat = rp.no_rawat AND pr.rtl IS NOT NULL AND pr.rtl != '')) > 0"
+                . " AND {$anyReal('satu_sehat_careplan', 'id_careplan')}",
+            'ClinicalImpression' => "((SELECT COUNT(*) FROM pemeriksaan_ralan pr WHERE pr.no_rawat = rp.no_rawat AND pr.penilaian <> '')"
+                . " + (SELECT COUNT(*) FROM pemeriksaan_ranap pr WHERE pr.no_rawat = rp.no_rawat AND pr.penilaian <> '')) > 0"
+                . " AND NOT EXISTS (SELECT 1 FROM satu_sehat_clinicalimpression ci WHERE ci.no_rawat = rp.no_rawat)",
+            'Immunization' => "((SELECT COUNT(*) FROM detail_pemberian_obat dpo JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng"
+                . " WHERE dpo.no_rawat = rp.no_rawat AND dpo.no_batch <> '')) > 0"
+                . " AND {$anyReal('satu_sehat_immunization', 'id_immunization')}",
+            'Composition' => "((SELECT COUNT(*) FROM nota_jalan nj WHERE nj.no_rawat = rp.no_rawat)"
+                . " + (SELECT COUNT(*) FROM nota_inap ni WHERE ni.no_rawat = rp.no_rawat)) > 0"
+                . " AND NOT EXISTS (SELECT 1 FROM satu_sehat_composition sc WHERE sc.no_rawat = rp.no_rawat)",
+            'QuestionnaireResponse' => "((SELECT COUNT(*) FROM resep_obat ro INNER JOIN telaah_farmasi tf ON tf.no_resep = ro.no_resep"
+                . " WHERE ro.no_rawat = rp.no_rawat)) > 0"
+                . " AND NOT EXISTS (SELECT 1 FROM resep_obat ro INNER JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = ro.no_resep"
+                . " WHERE ro.no_rawat = rp.no_rawat AND ssqr.id_questionresponse NOT IN ('', '-'))",
+            'EpisodeOfCare' => "(SELECT COUNT(*) FROM diagnosa_pasien dp WHERE dp.no_rawat = rp.no_rawat) > 0"
+                . " AND (SELECT COUNT(*) FROM satu_sehat_encounter e WHERE e.no_rawat = rp.no_rawat) > 0"
+                . " AND (SELECT COUNT(*) FROM satu_sehat_condition sc WHERE sc.no_rawat = rp.no_rawat) > 0"
+                . " AND {$anyReal('satu_sehat_episode_of_care', 'id_episode_of_care')}",
+            'ObservationTTV' => "({$srcTTV} > 0) AND NOT EXISTS (SELECT 1 FROM ("
+                . implode(' UNION ALL ', array_map(
+                    fn(string $t) => "SELECT id_observation FROM {$t} WHERE no_rawat = rp.no_rawat",
+                    ['satu_sehat_observationttvsuhu', 'satu_sehat_observationttvrespirasi', 'satu_sehat_observationttvnadi',
+                     'satu_sehat_observationttvspo2', 'satu_sehat_observationttvtb', 'satu_sehat_observationttvbb',
+                     'satu_sehat_observationttvlp', 'satu_sehat_observationttvtensi', 'satu_sehat_observationttvgcs',
+                     'satu_sehat_observationttvkesadaran'],
+                ))
+                . ") t WHERE t.id_observation NOT IN ('', '-'))",
+        ];
+
+        // Lab pipeline — per-type pending when ANY source variant (pk/mb/rad)
+        // has detail rows that are not fully covered by real ids.
+        $labSrcPk = 'SELECT COUNT(*) FROM permintaan_lab pl INNER JOIN permintaan_detail_permintaan_lab dl ON dl.noorder = pl.noorder WHERE pl.no_rawat = rp.no_rawat';
+        $labSrcMb = 'SELECT COUNT(*) FROM permintaan_labmb pl INNER JOIN permintaan_detail_permintaan_labmb dl ON dl.noorder = pl.noorder WHERE pl.no_rawat = rp.no_rawat';
+        $labSrcRad = 'SELECT COUNT(*) FROM permintaan_radiologi pr INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder WHERE pr.no_rawat = rp.no_rawat';
+        $labTypes = [
+            'ServiceRequest' => ['satu_sehat_servicerequest_lab', 'satu_sehat_servicerequest_lab_mb', 'satu_sehat_servicerequest_radiologi', 'id_servicerequest'],
+            'Specimen' => ['satu_sehat_specimen_lab', 'satu_sehat_specimen_lab_mb', 'satu_sehat_specimen_radiologi', 'id_specimen'],
+            'Observation' => ['satu_sehat_observation_lab', 'satu_sehat_observation_lab_mb', 'satu_sehat_observation_radiologi', 'id_observation'],
+            'DiagnosticReport' => ['satu_sehat_diagnosticreport_lab', 'satu_sehat_diagnosticreport_lab_mb', 'satu_sehat_diagnosticreport_radiologi', 'id_diagnosticreport'],
+        ];
+        foreach ($labTypes as $type => [$tPk, $tMb, $tRad, $idCol]) {
+            $predicates[$type] = "(({$labSrcPk}) > 0 AND ({$labSrcPk}) > "
+                    . "(SELECT COUNT(*) FROM permintaan_lab pl INNER JOIN permintaan_detail_permintaan_lab dl ON dl.noorder = pl.noorder"
+                    . " INNER JOIN {$tPk} ss ON ss.noorder = dl.noorder WHERE pl.no_rawat = rp.no_rawat AND ss.{$idCol} NOT IN ('', '-')))"
+                . " OR (({$labSrcMb}) > 0 AND ({$labSrcMb}) > "
+                    . "(SELECT COUNT(*) FROM permintaan_labmb pl INNER JOIN permintaan_detail_permintaan_labmb dl ON dl.noorder = pl.noorder"
+                    . " INNER JOIN {$tMb} ss ON ss.noorder = dl.noorder WHERE pl.no_rawat = rp.no_rawat AND ss.{$idCol} NOT IN ('', '-')))"
+                . " OR (({$labSrcRad}) > 0 AND ({$labSrcRad}) > "
+                    . "(SELECT COUNT(*) FROM permintaan_radiologi pr INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder"
+                    . " INNER JOIN {$tRad} ss ON ss.noorder = ppr.noorder WHERE pr.no_rawat = rp.no_rawat AND ss.{$idCol} NOT IN ('', '-')))";
+        }
+
+        return $predicates;
     }
 
     /**
@@ -221,18 +384,29 @@ class PatientController
             'DiagnosticReport' => ['satu_sehat_diagnosticreport_lab', 'satu_sehat_diagnosticreport_lab_mb', 'satu_sehat_diagnosticreport_radiologi', 'id_diagnosticreport'],
         ];
         foreach ($labTables as $resType => [$tLab, $tMb, $tRad, $idCol]) {
+            // Each UNION member embeds its own placeholder set; the bind list
+            // must therefore carry the visit list once PER member (3×). The
+            // outer alias maps nr back to no_rawat for the fetch loop.
+            $p1 = implode(',', array_fill(0, count($noRawatList), '?'));
+            $p2 = implode(',', array_fill(0, count($noRawatList), '?'));
+            $p3 = implode(',', array_fill(0, count($noRawatList), '?'));
             $unions = [
-                "SELECT pl.no_rawat AS nr FROM permintaan_lab pl INNER JOIN {$tLab} ss ON ss.noorder = pl.noorder WHERE pl.no_rawat IN ({$placeholders}) AND ss.{$idCol} NOT IN ('', '-')",
-                "SELECT pl.no_rawat AS nr FROM permintaan_labmb pl INNER JOIN {$tMb} ss ON ss.noorder = pl.noorder WHERE pl.no_rawat IN ({$placeholders}) AND ss.{$idCol} NOT IN ('', '-')",
-                "SELECT pr.no_rawat AS nr FROM permintaan_radiologi pr INNER JOIN {$tRad} ss ON ss.noorder = pr.noorder WHERE pr.no_rawat IN ({$placeholders}) AND ss.{$idCol} NOT IN ('', '-')",
+                "SELECT pl.no_rawat AS nr FROM permintaan_lab pl INNER JOIN {$tLab} ss ON ss.noorder = pl.noorder WHERE pl.no_rawat IN ({$p1}) AND ss.{$idCol} NOT IN ('', '-')",
+                "SELECT pl.no_rawat AS nr FROM permintaan_labmb pl INNER JOIN {$tMb} ss ON ss.noorder = pl.noorder WHERE pl.no_rawat IN ({$p2}) AND ss.{$idCol} NOT IN ('', '-')",
+                "SELECT pr.no_rawat AS nr FROM permintaan_radiologi pr INNER JOIN {$tRad} ss ON ss.noorder = pr.noorder WHERE pr.no_rawat IN ({$p3}) AND ss.{$idCol} NOT IN ('', '-')",
             ];
-            $tables[$resType] = "SELECT nr, COUNT(*) as cnt FROM (" . implode(' UNION ALL ', $unions) . ") t GROUP BY nr";
+            $tables[$resType] = "SELECT nr AS no_rawat, COUNT(*) as cnt FROM (" . implode(' UNION ALL ', $unions) . ") t GROUP BY nr";
         }
 
         foreach ($tables as $resType => $sql) {
             try {
                 $stmt = $db->prepare($sql);
-                $stmt->execute($noRawatList);
+                // Lab UNION queries embed 3 placeholder sets; regular queries
+                // embed 1. The param list mirrors that shape.
+                $params = in_array($resType, array_keys($labTables), true)
+                    ? array_merge($noRawatList, $noRawatList, $noRawatList)
+                    : $noRawatList;
+                $stmt->execute($params);
                 while ($row = $stmt->fetch()) {
                     $results[$row['no_rawat']][$resType] = (int) $row['cnt'];
                 }
@@ -355,7 +529,21 @@ class PatientController
         $manifest[] = [
             'type' => 'MedicationDispense',
             'available' => $hasMeds,
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_medicationdispense WHERE no_rawat = ? AND id_medicationdispanse NOT IN ('', '-')", [$noRawat]),
+            // Strict like MedicationRequest: every administered drug line
+            // (detail_pemberian_obat, keyed exactly as the CLI syncs it) must
+            // have a real mapping id. Any single row synced previously marked
+            // the whole type 'sent' — false positive.
+            'sent' => $allCovered(
+                "SELECT COUNT(*) FROM detail_pemberian_obat dpo WHERE dpo.no_rawat = ?",
+                [$noRawat],
+                "SELECT COUNT(*) FROM detail_pemberian_obat dpo
+                 INNER JOIN satu_sehat_medicationdispense ssmd
+                     ON ssmd.no_rawat = dpo.no_rawat AND ssmd.tgl_perawatan = dpo.tgl_perawatan
+                     AND ssmd.jam = dpo.jam AND ssmd.kode_brng = dpo.kode_brng
+                     AND ssmd.no_batch = dpo.no_batch AND ssmd.no_faktur = dpo.no_faktur
+                 WHERE dpo.no_rawat = ? AND ssmd.id_medicationdispanse NOT IN ('', '-')",
+                [$noRawat]
+            ),
         ];
         $manifest[] = [
             'type' => 'MedicationStatement',
@@ -400,22 +588,31 @@ class PatientController
 
         // Lab coverage per variant: source request-detail pairs vs mapped
         // rows with real ids. All variants with data must be fully covered.
+        // The three source counts are identical for every lab resource type —
+        // compute them ONCE here instead of per type (4×3 queries -> 3).
         $labSource = [
             'pk'  => "SELECT COUNT(*) FROM permintaan_lab pl INNER JOIN permintaan_detail_permintaan_lab dl ON dl.noorder = pl.noorder WHERE pl.no_rawat = ?",
             'mb'  => "SELECT COUNT(*) FROM permintaan_labmb pl INNER JOIN permintaan_detail_permintaan_labmb dl ON dl.noorder = pl.noorder WHERE pl.no_rawat = ?",
             'rad' => "SELECT COUNT(*) FROM permintaan_radiologi pr INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder WHERE pr.no_rawat = ?",
         ];
+        $labSrcCounts = [];
+        foreach ($labSource as $variant => $sql) {
+            try {
+                $stmt = $db->prepare($sql);
+                $stmt->execute([$noRawat]);
+                $labSrcCounts[$variant] = (int) $stmt->fetchColumn();
+            } catch (\Throwable $e) {
+                $labSrcCounts[$variant] = 0;
+            }
+        }
         $labMapped = [
             'pk'  => "SELECT COUNT(*) FROM permintaan_lab pl INNER JOIN permintaan_detail_permintaan_lab dl ON dl.noorder = pl.noorder INNER JOIN {table} ss ON ss.noorder = dl.noorder WHERE pl.no_rawat = ? AND ss.{idCol} NOT IN ('', '-')",
             'mb'  => "SELECT COUNT(*) FROM permintaan_labmb pl INNER JOIN permintaan_detail_permintaan_labmb dl ON dl.noorder = pl.noorder INNER JOIN {table} ss ON ss.noorder = dl.noorder WHERE pl.no_rawat = ? AND ss.{idCol} NOT IN ('', '-')",
             'rad' => "SELECT COUNT(*) FROM permintaan_radiologi pr INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder INNER JOIN {table} ss ON ss.noorder = ppr.noorder WHERE pr.no_rawat = ? AND ss.{idCol} NOT IN ('', '-')",
         ];
-        $allLabCovered = function (array $tables, string $idCol) use ($db, $labSource, $labMapped, $noRawat): bool {
+        $allLabCovered = function (array $tables, string $idCol) use ($db, $labMapped, $labSrcCounts, $noRawat): bool {
             try {
-                foreach ($labSource as $variant => $sql) {
-                    $src = $db->prepare($sql);
-                    $src->execute([$noRawat]);
-                    $nSrc = (int) $src->fetchColumn();
+                foreach ($labSrcCounts as $variant => $nSrc) {
                     if ($nSrc <= 0) {
                         continue;
                     }

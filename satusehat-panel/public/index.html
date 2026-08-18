@@ -10,6 +10,18 @@
     <link rel="stylesheet" href="css/tokens.css">
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
+    <script>
+    // Pre-paint theme: apply the saved preference (or system scheme) before
+    // the first render so dark users never see a light flash, and tokens.css
+    // needs only a single dark block (no @media duplicate).
+    (function () {
+        var saved = null;
+        try { saved = localStorage.getItem('sh-theme'); } catch (e) {}
+        document.documentElement.dataset.theme =
+            (saved === 'dark' || saved === 'light') ? saved
+            : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    })();
+    </script>
 </head>
 <body>
     <div class="grain" aria-hidden="true"></div>
@@ -76,6 +88,10 @@
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7"/></svg>
                         <span class="palette-trigger-label">Palet</span>
                         <span class="kbd" aria-hidden="true">Ctrl K</span>
+                    </button>
+                    <button id="btn-logout" class="btn btn-ghost btn-sm" type="button" title="Keluar dari panel">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+                        Keluar
                     </button>
                 </div>
             </div>
@@ -363,6 +379,12 @@
                 </div>
                 <p class="muted small resource-hint" id="resource-hint">Pilih resource yang akan dikirim. Minimal 1 resource.</p>
 
+                <div id="override-banner" class="override-banner" hidden role="status">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+                    <span class="override-banner-text"></span>
+                    <button class="btn btn-ghost btn-sm" id="btn-revert-overrides" type="button">Batalkan perubahan</button>
+                </div>
+
                 <div id="resource-list" class="resource-list">
                     <div class="empty-state">Memuat resource...</div>
                 </div>
@@ -422,6 +444,7 @@
         <footer class="modal-foot batch-foot">
             <span id="batch-progress-text" class="muted small" role="status"></span>
             <span id="batch-foot-error" class="batch-foot-error" role="alert"></span>
+            <button class="btn btn-primary" id="batch-start" type="button" hidden>Mulai kirim</button>
             <button class="btn btn-primary" id="batch-retry" type="button" hidden>Ulangi yang gagal</button>
             <button class="btn btn-ghost" id="batch-cancel" type="button">Batalkan</button>
         </footer>

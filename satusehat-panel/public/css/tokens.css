@@ -78,7 +78,7 @@
     --glass-border: rgba(255, 255, 255, 0.6);
     --ink: #0f172a;
     --ink-2: #334155;
-    --ink-3: #64748b;
+    --ink-3: #556478; /* AA 5.3:1 on subtle / 5.2:1 on inset */
     --line: #e2e8f0;
     --line-strong: #cbd5e1;
     --scrim: rgba(15, 23, 42, 0.45);
@@ -167,71 +167,9 @@
     --focus-ring: 0 0 0 3px rgba(13, 155, 108, 0.35);
 }
 
-/* ── Dark mode ────────────────────────────────────────────── */
-@media (prefers-color-scheme: dark) {
-    :root {
-        --accent: #1fb77f;
-        --accent-strong: #33d196;
-        --accent-light: #4ade80;
-        --accent-soft: rgba(31, 183, 127, 0.16);
-        --accent-soft-hover: rgba(31, 183, 127, 0.25);
-        --accent-ink: #86efac;
-        --accent-contrast: #07130e;
-        --accent-glow: rgba(31, 183, 127, 0.38);
-
-        --ok: #1fb77f;
-        --ok-soft: rgba(31, 183, 127, 0.16);
-        --ok-ink: #8fe8c5;
-        --warn: #f59e0b;
-        --warn-soft: rgba(245, 158, 11, 0.16);
-        --warn-ink: #fde68a;
-        --bad: #f87171;
-        --bad-soft: rgba(248, 113, 113, 0.16);
-        --bad-ink: #fca5a5;
-        --info: #38bdf8;
-        --info-soft: rgba(56, 189, 248, 0.16);
-        --info-ink: #bae6fd;
-
-        --data-0: #94a3b8;
-        --data-0-soft: rgba(148, 163, 184, 0.15);
-        --data-0-ink: #cbd5e1;
-        --data-1: #818cf8;
-        --data-1-soft: rgba(129, 140, 248, 0.16);
-        --data-1-ink: #c7d2fe;
-        --data-2: #60a5fa;
-        --data-2-soft: rgba(96, 165, 250, 0.16);
-        --data-2-ink: #bfdbfe;
-        --data-3: #34d399;
-        --data-3-soft: rgba(52, 211, 153, 0.16);
-        --data-3-ink: #a7f3d0;
-
-        --bg: #0b0f17;
-        --bg-panel: #131924;
-        --bg-elevated: #1a2332;
-        --bg-subtle: #0f1520;
-        --bg-inset: #080b11;
-        --glass-bg: rgba(19, 25, 36, 0.82);
-        --glass-border: rgba(255, 255, 255, 0.08);
-        --ink: #f1f5f9;
-        --ink-2: #94a3b8;
-        --ink-3: #64748b;
-        --line: #1e293b;
-        --line-strong: #334155;
-        --scrim: rgba(0, 0, 0, 0.65);
-
-        --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.5);
-        --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.55);
-        --shadow-3: 0 12px 36px rgba(0, 0, 0, 0.65);
-        --shadow-4: 0 24px 64px rgba(0, 0, 0, 0.75);
-        --shadow-drawer: -24px 0 64px rgba(0, 0, 0, 0.7);
-        --shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.4);
-        --shadow-glow: 0 0 32px var(--accent-glow);
-
-        --focus-ring: 0 0 0 3px rgba(51, 209, 150, 0.40);
-    }
-}
-
-/* ── Manual theme override (topbar toggle) ────────────────── */
+/* ── Manual theme override (topbar toggle) ──────────────────
+   index.html sets data-theme before first paint (saved pref or system
+   scheme), so this single dark block covers both cases. */
 html[data-theme="dark"] {
     color-scheme: dark;
     --accent: #1fb77f;
@@ -278,7 +216,7 @@ html[data-theme="dark"] {
     --glass-border: rgba(255, 255, 255, 0.08);
     --ink: #f1f5f9;
     --ink-2: #94a3b8;
-    --ink-3: #64748b;
+    --ink-3: #8496ad; /* AA 5.9:1 on panel / 6.3:1 on bg */
     --line: #1e293b;
     --line-strong: #334155;
     --scrim: rgba(0, 0, 0, 0.65);
@@ -295,65 +233,9 @@ html[data-theme="dark"] {
 }
 
 html[data-theme="light"] {
+    /* :root already carries the light palette — only the native control
+       scheme needs forcing. */
     color-scheme: light;
-    --accent: #0d9b6c;
-    --accent-strong: #077a53;
-    --accent-light: #1fb77f;
-    --accent-soft: rgba(13, 155, 108, 0.12);
-    --accent-soft-hover: rgba(13, 155, 108, 0.20);
-    --accent-ink: #055e42;
-    --accent-contrast: #ffffff;
-    --accent-glow: rgba(13, 155, 108, 0.32);
-
-    --ok: #0d9b6c;
-    --ok-soft: rgba(13, 155, 108, 0.14);
-    --ok-ink: #06764e;
-    --warn: #b45309;
-    --warn-soft: rgba(217, 119, 6, 0.14);
-    --warn-ink: #8f5506;
-    --bad: #dc2626;
-    --bad-soft: rgba(220, 38, 38, 0.13);
-    --bad-ink: #b91c1c;
-    --info: #0284c7;
-    --info-soft: rgba(2, 132, 199, 0.13);
-    --info-ink: #075e8c;
-
-    --data-0: #5b6472;
-    --data-0-soft: rgba(91, 100, 114, 0.13);
-    --data-0-ink: #4b5363;
-    --data-1: #4f46e5;
-    --data-1-soft: rgba(79, 70, 229, 0.14);
-    --data-1-ink: #3730a3;
-    --data-2: #2563eb;
-    --data-2-soft: rgba(37, 99, 235, 0.14);
-    --data-2-ink: #1d4ed8;
-    --data-3: #0d9b6c;
-    --data-3-soft: rgba(13, 155, 108, 0.15);
-    --data-3-ink: #06694a;
-
-    --bg: #f5f7fa;
-    --bg-panel: #ffffff;
-    --bg-elevated: #ffffff;
-    --bg-subtle: #edf0f5;
-    --bg-inset: #e2e6ee;
-    --glass-bg: rgba(255, 255, 255, 0.82);
-    --glass-border: rgba(255, 255, 255, 0.6);
-    --ink: #0f172a;
-    --ink-2: #334155;
-    --ink-3: #64748b;
-    --line: #e2e8f0;
-    --line-strong: #cbd5e1;
-    --scrim: rgba(15, 23, 42, 0.45);
-
-    --shadow-1: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-    --shadow-2: 0 4px 14px rgba(15, 23, 42, 0.08), 0 2px 4px rgba(15, 23, 42, 0.04);
-    --shadow-3: 0 12px 36px rgba(15, 23, 42, 0.12), 0 4px 8px rgba(15, 23, 42, 0.06);
-    --shadow-4: 0 24px 64px rgba(15, 23, 42, 0.16), 0 8px 24px rgba(15, 23, 42, 0.08);
-    --shadow-drawer: -24px 0 64px rgba(15, 23, 42, 0.18);
-    --shadow-inset: inset 0 1px 2px rgba(15, 23, 42, 0.06);
-    --shadow-glow: 0 0 24px var(--accent-glow);
-
-    --focus-ring: 0 0 0 3px rgba(13, 155, 108, 0.35);
 }
 
 /* ── Reduced motion ───────────────────────────────────────── */

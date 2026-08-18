@@ -39,7 +39,14 @@ class Config
                     if ($line === '' || str_starts_with($line, '#')) continue;
                     if (!str_contains($line, '=')) continue;
                     [$k, $v] = explode('=', $line, 2);
-                    $env[trim($k)] = trim($v);
+                    $k = trim($k);
+                    $v = trim($v);
+                    // Strip surrounding single/double quotes so
+                    // KEY="value with spaces" reads as `value with spaces`.
+                    if (strlen($v) >= 2 && in_array($v[0], ['"', "'"], true) && substr($v, -1) === $v[0]) {
+                        $v = substr($v, 1, -1);
+                    }
+                    $env[$k] = $v;
                 }
             }
         }

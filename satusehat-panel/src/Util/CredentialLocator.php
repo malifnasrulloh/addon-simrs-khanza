@@ -175,7 +175,6 @@ class CredentialLocator
             'SATUSEHAT_SECRET_KEY'  => $secret,
             'SATUSEHAT_AUTH_URL'    => $authUrl,
             'SATUSEHAT_BASE_URL'    => $baseUrl,
-            'SATUSEHAT_VERIFY_TLS'  => 'true',
         ]);
 
         // One-time cleanup of the legacy temp env file (no longer written).

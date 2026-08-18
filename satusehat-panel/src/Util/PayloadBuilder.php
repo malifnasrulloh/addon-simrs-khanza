@@ -1265,7 +1265,9 @@ class SatuSehatPayloadBuilder
         string $idDokter,
         string $idImmunization = ''
     ): array {
-        $p = self::cleanMappingRow($p);
+        // Copy-paste leftover from medication(): `$p` was never defined here
+        // and is never used below — the builder reads `$imm` directly.
+        // Removing it fixes a TypeError that crashed every Immunization sync.
         // Occurrence time
         $occurrenceDateTime = self::sanitizeDateTime($imm['tgl_perawatan'] ?? null, $imm['jam'] ?? null, $imm);
         

@@ -121,4 +121,45 @@ final class AuditControllerTest extends TestCase
         $this->assertSame(0, (int) $db->query("SELECT COUNT(*) FROM send_entries")->fetchColumn());
         @unlink($marker);
     }
+
+    public function testPruneIsChunkedAcrossLargeSweeps(): void
+    {
+        // SQLite caps bound variables at 999; the prune deletes in chunks of
+        // 400. A sweep larger than one chunk must fully drain, never fail.
+        $db = Database::getSqlite();
+        $db->beginTransaction();
+        $stmt = $db->prepare("
+            INSERT INTO audit_logs (patient_id, resource_type, action, status, request_payload, response_payload, user_identifier, created_at)
+            VALUES (?, 'Condition', 'send', 'success', '{}', '{}', 'test', datetime('now', '-200 days'))
+        ");
+        for ($i = 0; $i < 450; $i++) {
+            $stmt->execute(['V-P' . $i]);
+            $auditId = (int) $db->lastInsertId();
+            $db->prepare("INSERT INTO send_entries (audit_id, patient_id, resource_type, status) VALUES (?, 'V-P{$i}', 'Condition', 'sent')")
+                ->execute([$auditId]);
+        }
+        $db->commit();
+
+        $marker = PANEL_BASE . '/storage/.audit_prune_marker';
+        @unlink($marker);
+        \SatusehatPanel\Controller\AuditController::list();
+        $this->assertSame(0, (int) $db->query("SELECT COUNT(*) FROM audit_logs")->fetchColumn());
+        $this->assertSame(0, (int) $db->query("SELECT COUNT(*) FROM send_entries")->fetchColumn());
+        $this->assertFileExists($marker, 'marker must be written after a successful chunked prune');
+        @unlink($marker);
+    }
+
+    public function testPruneKeepsFreshAudits(): void
+    {
+        $this->seed();
+        $db = Database::getSqlite();
+        // Age only the first audit (V-1); V-2 stays fresh.
+        $db->exec("UPDATE audit_logs SET created_at = datetime('now', '-200 days') WHERE patient_id = 'V-1'");
+        $marker = PANEL_BASE . '/storage/.audit_prune_marker';
+        @unlink($marker);
+        $res = \SatusehatPanel\Controller\AuditController::list();
+        $this->assertSame(1, $res['meta']['total']);
+        $this->assertSame('V-2', $res['data'][0]['patient_id']);
+        @unlink($marker);
+    }
 }

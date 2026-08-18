@@ -7,22 +7,22 @@
 
 import { $, toast, prefersReducedMotion } from './ui.js';
 import { state, bus } from './state.js';
-import { base } from './api.js';
-import { initPatientsView, showPatientsView, loadPatients, setConn } from './views/patients.js';
+import { base, api, setCsrfToken } from './api.js';
+import { initPatientsView, showPatientsView, loadPatients } from './views/patients.js';
 import { initDrawerView, hideDrawer } from './views/drawer.js';
 import { initAuditView, showAuditView } from './views/audit.js';
 import { initSettingsView, showSettingsView } from './views/settings.js';
 import { initPayloadEditor, hidePayloadModal } from './payload.js';
-import { initBatchView, hideBatchModal } from './batch.js';
+import { initBatchView, hideBatchModal, resetBatchRun } from './batch.js';
 import { initPalette, openPalette, closePalette } from './palette.js';
 
 /* ── Theme ────────────────────────────────────────────────── */
 function initTheme() {
+    // index.html already set data-theme pre-paint (saved pref or system);
+    // here we only need to enforce the stored preference over it.
     const saved = localStorage.getItem('sh-theme');
     if (saved === 'dark' || saved === 'light') {
         document.documentElement.dataset.theme = saved;
-    } else {
-        delete document.documentElement.dataset.theme;
     }
     syncThemeMeta();
 }
@@ -45,6 +45,9 @@ async function checkAuth() {
     try {
         const res = await fetch(base('/api/auth/status'), { credentials: 'same-origin' });
         const data = await res.json();
+        // Capture the CSRF token issued with the status call — the first
+        // POST (first bundle send) must not go out without it.
+        if (data.csrf_token) setCsrfToken(data.csrf_token);
         return !!data.authed;
     } catch (e) {
         return false;
@@ -54,21 +57,37 @@ function showLogin() {
     $('login-screen').hidden = false;
     $('app-root').hidden = true;
     closeDrawerAndModals();
+    // Fresh session: clear stale credentials, selections and payload
+    // overrides so the next login starts from a clean state.
+    state.batchSel.clear();
+    state.selected = {};
+    state.detail = null;
+    state.detailNoRawat = null;
+    const pw = $('login-password');
+    if (pw) { pw.value = ''; pw.focus(); }
 }
 function showApp() {
     $('login-screen').hidden = true;
     $('app-root').hidden = false;
 }
 function closeDrawerAndModals() {
-    $('drawer').hidden = true;
-    $('drawer-backdrop').hidden = true;
-    $('payload-modal').hidden = true;
-    $('modal-backdrop').hidden = true;
-    $('batch-modal').hidden = true;
-    $('batch-backdrop').hidden = true;
-    $('palette-backdrop').hidden = true;
+    hideDrawer();
+    hidePayloadModal();
+    hideBatchModal();
+    closePalette();
+    closeRail();
 }
-window.addEventListener('auth:expired', showLogin);
+window.addEventListener('auth:expired', () => {
+    toast('Sesi berakhir', 'Silakan masuk kembali', 'error');
+    showLogin();
+});
+
+$('btn-logout').addEventListener('click', async () => {
+    try {
+        await api('/api/auth/logout', { method: 'POST' });
+    } catch (e) { /* session may already be gone — still return to login */ }
+    showLogin();
+});
 
 $('login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -92,6 +111,9 @@ $('login-form').addEventListener('submit', async (e) => {
         });
         const data = await res.json();
         if (data.success) {
+            // The login response rotates the session token — adopt the fresh
+            // CSRF token, or the first POST after login would 403.
+            if (data.csrf_token) setCsrfToken(data.csrf_token);
             showApp();
             route();
             loadPatients();
@@ -146,6 +168,7 @@ $('rail-close').addEventListener('click', closeRail);
 $('rail-backdrop').addEventListener('click', closeRail);
 
 /* ── Keyboard shortcuts ───────────────────────────────────── */
+let gChordArmed = false;
 document.addEventListener('keydown', (e) => {
     // Cmd/Ctrl+K palette
     if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
@@ -153,21 +176,31 @@ document.addEventListener('keydown', (e) => {
         if (paletteOpen()) closePalette();
         else openPalette();
     }
-    // Cmd/Ctrl+Enter in payload modal = save
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !$('payload-modal').hidden) {
+    // Cmd/Ctrl+Enter in payload modal = save (only in edit mode — the
+    // audit-detail view hides the save button)
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !$('payload-modal').hidden && !$('modal-save').hidden) {
         e.preventDefault();
         $('modal-save').click();
     }
     // 'g' then 'p'/'a' quick nav (only when not typing)
-    if (e.key === 'g' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (e.key === 'g' && !gChordArmed && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        gChordArmed = true;
         const onG = (e2) => {
+            // Same typing/modifier guard as the 'g' arm: 'gp'/'ga' typed in
+            // a field must not yank the view away.
+            if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+            if (e2.metaKey || e2.ctrlKey || e2.altKey) return;
             if (e2.key === 'p' || e2.key === 'a') {
                 location.hash = e2.key === 'p' ? '#/' : '#/audit';
                 clearTimeout(chordTimer);
                 document.removeEventListener('keydown', onG);
+                gChordArmed = false;
             }
         };
-        const chordTimer = setTimeout(() => document.removeEventListener('keydown', onG), 1200);
+        const chordTimer = setTimeout(() => {
+            document.removeEventListener('keydown', onG);
+            gChordArmed = false;
+        }, 1200);
         document.addEventListener('keydown', onG);
     }
     // '/' focuses search

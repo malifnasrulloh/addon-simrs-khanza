@@ -23,6 +23,15 @@ final class IdempotencyStore
     public const STATUS_FAILED = 'failed';
     public const STATUS_UNKNOWN = 'unknown';
 
+    /**
+     * Pending claims expire after this long; sweep() clears them so a crashed
+     * worker between claim and settle cannot block the key forever.
+     */
+    public const PENDING_TTL_HOURS = 6;
+
+    /** SQLite datetime modifier matching PENDING_TTL_HOURS (no space after +). */
+    private const PENDING_TTL_MODIFIER = '+6 hours';
+
     public static function canonicalKey(string $patientId, string $resourceType, array $keys): string
     {
         $canon = array_map('strval', $keys);
@@ -52,14 +61,17 @@ final class IdempotencyStore
      * Claim a key as pending (insert only — never downgrades an existing
      * recorded outcome; callers must refuse to re-send when a pending or
      * unknown key already exists).
+     *
+     * Pending rows carry an expiry so a crashed worker between claim and
+     * settle cannot block the key forever — sweep() clears it.
      */
     public static function claim(string $key, string $patientId, string $resourceType): void
     {
         try {
             $db = Database::getSqlite();
             $stmt = $db->prepare("
-                INSERT OR IGNORE INTO idempotency_keys (key_hash, patient_id, resource_type, status)
-                VALUES (?, ?, ?, ?)
+                INSERT OR IGNORE INTO idempotency_keys (key_hash, patient_id, resource_type, status, expires_at)
+                VALUES (?, ?, ?, ?, datetime('now', '" . self::PENDING_TTL_MODIFIER . "'))
             ");
             $stmt->execute([$key, $patientId, $resourceType, self::STATUS_PENDING]);
         } catch (\Throwable $e) {
@@ -101,6 +113,57 @@ final class IdempotencyStore
             $stmt->execute([$status, $satusehatId, $responseData, $key]);
         } catch (\Throwable $e) {
             error_log('[PANEL] idempotency settle failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Atomically check-then-claim a full key set (BEGIN IMMEDIATE).
+     * Two concurrent sends of the same bundle cannot both pass the conflict
+     * check — the first transaction commits its claims, the second sees the
+     * pending rows and refuses.
+     *
+     * @param array<string,string> $keys key_hash => resource_type
+     * @return array<string,array{type:string,status:string}> conflicts; empty
+     *                                                         when all claimed
+     */
+    public static function claimAll(array $keys, string $patientId): array
+    {
+        if (empty($keys)) {
+            return [];
+        }
+        $db = Database::getSqlite();
+        $db->exec('BEGIN IMMEDIATE');
+        try {
+            $conflicts = [];
+            $sel = $db->prepare('SELECT status FROM idempotency_keys WHERE key_hash = ?');
+            foreach ($keys as $key => $type) {
+                $sel->execute([$key]);
+                $status = $sel->fetchColumn();
+                if ($status !== false && in_array((string) $status, [self::STATUS_PENDING, self::STATUS_UNKNOWN], true)) {
+                    $conflicts[$key] = ['type' => $type, 'status' => (string) $status];
+                }
+            }
+            if (!empty($conflicts)) {
+                $db->exec('ROLLBACK');
+                return $conflicts;
+            }
+            $ins = $db->prepare("
+                INSERT OR IGNORE INTO idempotency_keys (key_hash, patient_id, resource_type, status, expires_at)
+                VALUES (?, ?, ?, ?, datetime('now', '" . self::PENDING_TTL_MODIFIER . "'))
+            ");
+            foreach ($keys as $key => $type) {
+                $ins->execute([$key, $patientId, $type, self::STATUS_PENDING]);
+            }
+            $db->exec('COMMIT');
+            return [];
+        } catch (\Throwable $e) {
+            try {
+                $db->exec('ROLLBACK');
+            } catch (\Throwable $ignored) {
+                // connection may have died — nothing to roll back
+            }
+            error_log('[PANEL] idempotency claimAll failed: ' . $e->getMessage());
+            return $conflicts ?? [];
         }
     }
 

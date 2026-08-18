@@ -5,7 +5,7 @@
 'use strict';
 
 import { api, extractError } from '../api.js';
-import { $, escapeHtml, toast, rememberFocus, restoreFocus, trapFocus, avatarHtml, emptyStateHtml, icon } from '../ui.js';
+import { $, escapeHtml, toast, rememberFocus, restoreFocus, trapFocus, untrapFocus, avatarHtml, emptyStateHtml, icon } from '../ui.js';
 import { state, bus, patientStatus } from '../state.js';
 import { openPayloadEditor } from '../payload.js';
 
@@ -28,6 +28,50 @@ export function initDrawerView() {
         updateSendSummary();
     });
     $('btn-send').addEventListener('click', sendBundle);
+    $('btn-revert-overrides').addEventListener('click', () => {
+        if (!state.detailNoRawat) return;
+        delete state.selected[state.detailNoRawat];
+        renderOverrideBanner();
+        toast('Perubahan payload dibatalkan', 'Payload asli akan digunakan', 'info');
+    });
+    bus.on('payload:changed', (noRawat) => {
+        if (noRawat === state.detailNoRawat) renderOverrideBanner();
+    });
+}
+
+/* ── Confirm-before-send (two-step arm) ───────────────────── */
+let sendArmed = false;
+let sendArmTimer = null;
+
+function armSend() {
+    sendArmed = true;
+    const btn = $('btn-send');
+    btn.classList.add('armed');
+    btn.querySelector('.btn-label').textContent = 'Konfirmasi kirim';
+    clearTimeout(sendArmTimer);
+    sendArmTimer = setTimeout(disarmSend, 8000);
+}
+
+export function disarmSend() {
+    sendArmed = false;
+    clearTimeout(sendArmTimer);
+    const btn = $('btn-send');
+    if (!btn) return;
+    btn.classList.remove('armed');
+    const label = btn.querySelector('.btn-label');
+    if (label && !btn.disabled) label.textContent = 'Kirim via Bundle';
+}
+
+/* ── Custom-payload override indicator (U3) ───────────────── */
+function renderOverrideBanner() {
+    const banner = $('override-banner');
+    if (!banner) return;
+    const overrides = state.selected[state.detailNoRawat] || {};
+    const keys = Object.keys(overrides);
+    if (!keys.length) { banner.hidden = true; return; }
+    banner.hidden = false;
+    banner.querySelector('.override-banner-text').textContent =
+        `${keys.length} payload diubah manual untuk pasien ini — kirim ulang akan memakai payload asli untuk sisanya.`;
 }
 
 let drawerAbort = null;
@@ -37,7 +81,9 @@ export async function openDrawer(noRawat) {
     drawerAbort = new AbortController();   // open wins, older fetch is ignored
     const seq = drawerAbort;
     state.detailNoRawat = noRawat;
-    rememberFocus();
+    // Only snapshot focus on a FRESH open — re-opening (e.g. right after a
+    // send) would push a second entry onto the focus stack otherwise.
+    if ($('drawer').hidden) rememberFocus();
     $('drawer-backdrop').hidden = false;
     $('drawer').hidden = false;
     $('drawer-title').textContent = 'Detail Pasien';
@@ -58,6 +104,7 @@ export async function openDrawer(noRawat) {
         state.detail = data.data;
         renderSummary(state.detail.patient);
         renderResourceGroups(state.detail.resources || []);
+        renderOverrideBanner();
     } catch (e) {
         if (e.name === 'AbortError') return; // superseded by a newer request
         $('patient-summary').innerHTML = emptyStateHtml({
@@ -71,10 +118,16 @@ export async function openDrawer(noRawat) {
 }
 
 export function hideDrawer() {
+    if (drawerAbort) drawerAbort.abort(); // drop any in-flight detail fetch —
+    drawerAbort = null;                    // its paint must not re-open data
     $('drawer').hidden = true;
     $('drawer-backdrop').hidden = true;
     state.detail = null;
     state.detailNoRawat = null;
+    const banner = $('override-banner');
+    if (banner) banner.hidden = true;
+    disarmSend();
+    untrapFocus($('drawer'));
     restoreFocus();
 }
 
@@ -202,6 +255,7 @@ export function updateSendSummary() {
     const checked = [...document.querySelectorAll('.resource-check:checked')].map(cb => cb.dataset.resource);
     const summary = $('send-summary');
     const btn = $('btn-send');
+    disarmSend(); // selection changed — require re-confirmation
     if (!checked.length) {
         summary.textContent = 'Belum ada resource dipilih';
         btn.disabled = true;
@@ -214,6 +268,9 @@ export function updateSendSummary() {
 /* ── Send bundle ──────────────────────────────────────────── */
 async function sendBundle() {
     if (!state.detailNoRawat) return;
+    // Two-step confirmation: first click arms, second click sends.
+    if (!sendArmed) { armSend(); return; }
+    disarmSend();
     const checked = [...document.querySelectorAll('.resource-check:checked')].map(cb => cb.dataset.resource);
     if (!checked.length) return;
     const btn = $('btn-send');

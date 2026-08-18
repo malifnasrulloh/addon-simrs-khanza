@@ -7,8 +7,8 @@ namespace SatusehatPanel\Util;
 /**
  * Queue for build-time warnings surfaced from PayloadAdapter (e.g. a
  * radiology Observation skipped because its ImagingStudy id is missing).
- * SendController drains these into the send response's build_errors so a
- * silent partial send is never reported as full success.
+ * SendController drains these into the send response's `warnings` list —
+ * advisory only; they do NOT mark the send as failed.
  */
 final class PayloadAdapterWarnings
 {

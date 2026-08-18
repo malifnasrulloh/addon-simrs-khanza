@@ -652,6 +652,26 @@ class SatuSehatClient
     }
 
     /**
+     * Record per-entry rule rejections from a transaction Bundle response
+     * (entry-level OperationOutcome inside an HTTP-200 response). The
+     * HTTP-level tally above never sees these, so the panel calls this
+     * after classifying every entry.
+     */
+    public static function tallyRuleRejection(int $rule, int $count = 1): void
+    {
+        self::$rejectedByRule[$rule] = (self::$rejectedByRule[$rule] ?? 0) + $count;
+    }
+
+    /**
+     * Record per-entry non-rule rejections (e.g. privacy/permission entries
+     * without a RuleNumber) into the run-end acceptance summary.
+     */
+    public static function tallyOtherRejection(int $count = 1): void
+    {
+        self::$rejectedOther400 += $count;
+    }
+
+    /**
      * Feed rate-limit state from each HTTP result.
      */
     private function noteHttpResult(int $httpCode): void
