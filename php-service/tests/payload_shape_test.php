@@ -46,19 +46,30 @@ echo "── ServiceTypeTerminology ──────────────�
 
 $st = ServiceTypeTerminology::coding('IGDK', 'Ralan', 'POLI IGD');
 ok(is_array($st['coding'][0] ?? null), 'coding() returns CodeableConcept with coding array');
-ok(($st['coding'][0]['code'] ?? '') === '117.0', 'IGDK → Emergency Medical 117.0');
+ok(($st['coding'][0]['code'] ?? '') === '117', 'IGDK → Emergency Medical 117');
+ok(($st['coding'][0]['display'] ?? '') === 'Emergency Medical', 'IGDK display');
 
+// Exactly 3 conditions decide the encounter (Java reference parity):
+// IGDK = emergency, Ralan = outpatient, Ranap = inpatient. Poli names and
+// keywords must NOT influence the outcome.
 $st2 = ServiceTypeTerminology::coding('UNKNOWN-X', 'Ralan', 'POLIKLINIK JANTUNG');
-ok(($st2['coding'][0]['code'] ?? '') === '165.0', 'nm_poli keyword JANTUNG → Cardiology 165.0');
+ok(($st2['coding'][0]['code'] ?? '') === '124', 'Ralan (any poli) → General Practice 124');
 
 $st3 = ServiceTypeTerminology::coding('UNKNOWN-Y', 'Ranap', '');
-ok(($st3['coding'][0]['code'] ?? '') === '557.0', 'Ranap fallback → Inpatients 557.0');
+ok(($st3['coding'][0]['code'] ?? '') === '557', 'Ranap → Inpatients 557');
 
 $st4 = ServiceTypeTerminology::coding('', 'Ralan', '');
-ok(($st4['coding'][0]['code'] ?? '') === '124.0', 'Ralan fallback → General Practice 124.0');
+ok(($st4['coding'][0]['code'] ?? '') === '124', 'Ralan (empty poli) → General Practice 124');
 
-$st5 = ServiceTypeTerminology::coding('ICU-2', 'Ranap', 'ICU');
-ok(($st5['coding'][0]['system'] ?? '') === 'http://snomed.info/sct', 'ICU → SNOMED system');
+$st5 = ServiceTypeTerminology::resolve('BDS', 'Ralan', 'BEDAH SARAF');
+ok($st5['code'] === '124', 'BEDAH SARAF with Ralan stays General Practice (3-condition rule)');
+
+$st6 = ServiceTypeTerminology::resolve('BSY', 'Ranap', 'Bedah Syaraf');
+ok($st6['code'] === '557', 'Bedah Syaraf with Ranap stays Inpatients (3-condition rule)');
+
+$st7 = ServiceTypeTerminology::resolve('IGDK', 'Ranap', '');
+ok($st7['code'] === '117', 'IGDK wins over Ranap → Emergency Medical (Java getClassCode parity)');
+
 
 echo "── Encounter payload ───────────────────────────────────\n";
 
