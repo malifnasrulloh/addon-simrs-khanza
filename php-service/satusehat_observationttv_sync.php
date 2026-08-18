@@ -144,18 +144,13 @@ $cursor = new SatuSehatBatchCursor(
 );
 
 foreach ($cursor->batches() as $batch) {
-    $db->beginSqliteBatch();
-    try {
-        foreach ($batch as $row) {
-            $d = $processor->runRow($row);
-            $totalSuccess += $d['success'];
-            $totalFail += $d['fail'];
-            $totalSkip += $d['skip'];
-        }
-        $db->commitSqliteBatch();
-    } catch (\Throwable $e) {
-        $db->rollbackSqliteBatch();
-        throw $e;
+    // No SQLite transaction around runRow(): API round-trips inside the
+    // processor must never hold the shared state DB write lock.
+    foreach ($batch as $row) {
+        $d = $processor->runRow($row);
+        $totalSuccess += $d['success'];
+        $totalFail += $d['fail'];
+        $totalSkip += $d['skip'];
     }
     $cursor->tick();
 }

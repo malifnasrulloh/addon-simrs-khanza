@@ -147,18 +147,17 @@ function processPhase(
         $batchIdx++;
         $logger->info("[BATCH {$batchIdx}] Processing " . count($batch) . " {$label} encounters...");
 
-        $db->beginSqliteBatch();
+        // NOTE: no SQLite transaction wraps processor->run(): the processor
+        // interleaves state upserts with API round-trips, and holding the
+        // SQLite write lock across network I/O starves the OTHER 27 parallel
+        // services (SQLSTATE[HY000] database is locked after busytimeout).
+        // WAL + synchronous=NORMAL make each per-write commit cheap enough
+        // that the shared file serializes fine without a transaction.
         $arr = ($batchFor === 'arrived') ? $batch : [];
         $prog = ($batchFor === 'in-progress') ? $batch : [];
         $fin = ($batchFor === 'finished') ? $batch : [];
 
-        try {
-            $s = $processor->run($arr, $prog, $fin);
-            $db->commitSqliteBatch();
-        } catch (\Throwable $e) {
-            $db->rollbackSqliteBatch();
-            throw $e;
-        }
+        $s = $processor->run($arr, $prog, $fin);
         $stats['success'] += $s['success'];
         $stats['fail'] += $s['fail'];
         $stats['skip'] += $s['skip'];
@@ -253,14 +252,9 @@ for ($i = 0; $i < $numWorkers; $i++) {
         // Arrived
         $cursor = new SatuSehatBatchCursor($childDb, 'fetchPendingArrived', [$wFrom, $wTo], $batchSize, $log, "W{$i}/arrived");
         foreach ($cursor->batches() as $batch) {
-            $childDb->beginSqliteBatch();
-            try {
-                $s = $processor->run($batch, [], []);
-                $childDb->commitSqliteBatch();
-            } catch (\Throwable $e) {
-                $childDb->rollbackSqliteBatch();
-                throw $e;
-            }
+            // No SQLite transaction around run(): API round-trips inside the
+            // processor must never hold the shared state DB write lock.
+            $s = $processor->run($batch, [], []);
             $workerFail += $s['fail'];
             $cursor->tick();
         }
@@ -268,14 +262,9 @@ for ($i = 0; $i < $numWorkers; $i++) {
         // In-Progress
         $cursor = new SatuSehatBatchCursor($childDb, 'fetchPendingInProgress', [$wFrom, $wTo], $batchSize, $log, "W{$i}/prog");
         foreach ($cursor->batches() as $batch) {
-            $childDb->beginSqliteBatch();
-            try {
-                $s = $processor->run([], $batch, []);
-                $childDb->commitSqliteBatch();
-            } catch (\Throwable $e) {
-                $childDb->rollbackSqliteBatch();
-                throw $e;
-            }
+            // No SQLite transaction around run(): API round-trips inside the
+            // processor must never hold the shared state DB write lock.
+            $s = $processor->run([], $batch, []);
             $workerFail += $s['fail'];
             $cursor->tick();
         }
@@ -283,14 +272,9 @@ for ($i = 0; $i < $numWorkers; $i++) {
         // Finished
         $cursor = new SatuSehatBatchCursor($childDb, 'fetchPendingFinished', [$wFrom, $wTo], $batchSize, $log, "W{$i}/fin");
         foreach ($cursor->batches() as $batch) {
-            $childDb->beginSqliteBatch();
-            try {
-                $s = $processor->run([], [], $batch);
-                $childDb->commitSqliteBatch();
-            } catch (\Throwable $e) {
-                $childDb->rollbackSqliteBatch();
-                throw $e;
-            }
+            // No SQLite transaction around run(): API round-trips inside the
+            // processor must never hold the shared state DB write lock.
+            $s = $processor->run([], [], $batch);
             $workerFail += $s['fail'];
             $cursor->tick();
         }

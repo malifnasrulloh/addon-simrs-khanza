@@ -46,6 +46,14 @@ class SatuSehatConfig
     public readonly int    $logRetentionDays;
     public readonly string $timezone;
     public readonly string $jwtSecret;
+    /**
+     * Directory for the shared SATUSEHAT state SQLite database. Defaults to
+     * $logDir, but can be pointed at a LOCAL fast path via
+     * SATUSEHAT_STATE_DIR — if $logDir lives on a network mount (NFS/SMB),
+     * SQLite's WAL locking misbehaves and every parallel service starts
+     * throwing "SQLSTATE[HY000] ... database is locked".
+     */
+    public readonly string $stateDir;
 
     // ─── Performance / Pagination ─────────────────────────────────────────
     /**
@@ -149,6 +157,14 @@ class SatuSehatConfig
         $this->logLevel         = strtoupper($this->get('LOG_LEVEL', 'INFO'));
         $this->logRetentionDays = (int) $this->get('LOG_RETENTION_DAYS', '30');
         $this->jwtSecret        = $this->get('JWT_SECRET', 'simrs-khanza-secret-super-secure-key');
+
+        $stateDir = $this->get('SATUSEHAT_STATE_DIR', '');
+        if ($stateDir === '') {
+            $stateDir = $this->logDir;
+        } elseif (!str_starts_with($stateDir, '/')) {
+            $stateDir = (defined('BASE_DIR') ? BASE_DIR : dirname(__DIR__, 2)) . '/' . $stateDir;
+        }
+        $this->stateDir = $stateDir;
 
         $this->keysetPagination = $this->get('SATUSEHAT_KEYSET_PAGINATION', 'true') === 'true';
         $this->delayMode        = strtolower($this->get('SATUSEHAT_DELAY_MODE', 'adaptive'));
