@@ -313,6 +313,16 @@ SQL;
         return $stmt->execute(['nr' => $noRawat, 'tid' => $taskId]);
     }
 
+    /**
+     * Update task ID waktu timestamp in DB (used for repeated tasks like 2nd Task 3).
+     */
+    public function updateTaskIdWaktu(string $noRawat, string $taskId, string $waktu): bool
+    {
+        $sql = "UPDATE referensi_mobilejkn_bpjs_taskid SET waktu = :w WHERE no_rawat = :nr AND taskid = :tid";
+        $stmt = $this->pdo->prepare($sql);
+        return $stmt->execute(['nr' => $noRawat, 'tid' => $taskId, 'w' => $waktu]);
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Lookup Helpers
     // ═══════════════════════════════════════════════════════════════════════

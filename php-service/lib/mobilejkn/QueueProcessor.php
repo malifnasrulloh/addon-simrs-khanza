@@ -585,8 +585,7 @@ class QueueProcessor
                             $t3bTs = strtotime($waktu3Str) + 180; // 3 minutes after 1st Task 3
                             if ($t3bTs <= time()) {
                                 $waktu3bStr = date('Y-m-d H:i:s', $t3bTs);
-                                $this->log->info("[{$label}] {$noRawat} TaskID 3 (repeat): SEND 2nd Task 3 at {$waktu3bStr}");
-                                $r3b = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3bStr, $label, $jenisresep);
+                                $r3b = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3bStr, $label, $jenisresep, true);
                                 if ($r3b['ok']) {
                                     $state['waktu_3'] = $waktu3bStr;
                                 }
@@ -938,36 +937,52 @@ class QueueProcessor
      * @return array{ok: bool, reason: string} 'ok'=accepted, 'reason'=failure type
      *   reason: 'accepted', 'already_in_db', 'invalid_waktu', 'time_order' (BPJS time rejection), 'api_error'
      */
-    private function sendTaskId(string $kodebooking, string $noRawat, string $taskId, string $waktuStr, string $label, string $jenisresep = 'Tidak ada'): array
-    {
+    private function sendTaskId(
+        string $kodebooking,
+        string $noRawat,
+        string $taskId,
+        string $waktuStr,
+        string $label,
+        string $jenisresep = 'Tidak ada',
+        bool   $isRepeat = false
+    ): array {
         // Step 1: Insert into DB (idempotency — Java: menyimpantf2)
-        if (!$this->db->insertTaskId($noRawat, $taskId, $waktuStr)) {
-            $this->log->debug("[{$label}] {$noRawat} TaskID {$taskId}: already in DB — skip");
-            $this->skipCount++;
-            return ['ok' => false, 'reason' => 'already_in_db'];
+        if (!$isRepeat) {
+            if (!$this->db->insertTaskId($noRawat, $taskId, $waktuStr)) {
+                $this->log->debug("[{$label}] {$noRawat} TaskID {$taskId}: already in DB — skip");
+                $this->skipCount++;
+                return ['ok' => false, 'reason' => 'already_in_db'];
+            }
         }
 
         // Step 2: Convert to epoch ms (Java: parsedDate.getTime())
         $waktuMs = RobotInference::toEpochMs($waktuStr);
         if ($waktuMs === null) {
             $this->log->warning("[{$label}] {$noRawat} TaskID {$taskId}: invalid waktu '{$waktuStr}' — rollback");
-            $this->db->deleteTaskId($noRawat, $taskId);
+            if (!$isRepeat) {
+                $this->db->deleteTaskId($noRawat, $taskId);
+            }
             $this->failCount++;
             return ['ok' => false, 'reason' => 'invalid_waktu'];
         }
 
         // Step 3: Send to BPJS
-        $this->log->info("[{$label}] {$noRawat} TaskID {$taskId}: SEND waktu={$waktuMs} ({$waktuStr}) jenisresep={$jenisresep}");
+        $this->log->info("[{$label}] {$noRawat} TaskID {$taskId}" . ($isRepeat ? ' (repeat)' : '') . ": SEND waktu={$waktuMs} ({$waktuStr}) jenisresep={$jenisresep}");
         $result = $this->api->updateWaktu($kodebooking, $taskId, $waktuMs, $jenisresep);
 
         if ($result['success']) {
-            $this->log->info("[{$label}] {$noRawat} TaskID {$taskId}: ✓ accepted");
+            $this->log->info("[{$label}] {$noRawat} TaskID {$taskId}" . ($isRepeat ? ' (repeat)' : '') . ": ✓ accepted");
+            if ($isRepeat) {
+                $this->db->updateTaskIdWaktu($noRawat, $taskId, $waktuStr);
+            }
             $this->successCount++;
             return ['ok' => true, 'reason' => 'accepted'];
         }
 
         // Step 4: Rollback on failure
-        $this->db->deleteTaskId($noRawat, $taskId);
+        if (!$isRepeat) {
+            $this->db->deleteTaskId($noRawat, $taskId);
+        }
         $msg = $result['message'] ?? '';
         $code = $result['code'] ?? '';
         $msgLower = strtolower($msg);
@@ -1053,7 +1068,7 @@ class QueueProcessor
     private function syncTaskStateFromBpjs(string $kodebooking, string $noRawat, array &$state, string $label): void
     {
         $res = $this->api->getListTask($kodebooking);
-        if (!$res['success'] || !is_array($res['data'])) {
+        if (!$res['success'] || !isset($res['data']) || !is_array($res['data'])) {
             return;
         }
 
