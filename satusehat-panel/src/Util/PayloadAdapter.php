@@ -435,7 +435,7 @@ class PayloadAdapter
                     'id_col' => 'id_condition',
                     'keys' => [
                         'no_rawat' => $noRawat,
-                        'kd_penyakit' => 'CHIEF-COMPLAINT',
+                        'kd_penyakit' => 'CHIEF-COMPLAINT-' . ($row['tgl_perawatan'] ?? '') . '-' . ($row['jam_rawat'] ?? ''),
                         'status' => $status,
                     ],
                 ];
@@ -765,6 +765,7 @@ class PayloadAdapter
             LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
             LEFT JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pr.no_rawat AND ssc.tgl_perawatan = pr.tgl_perawatan AND ssc.jam_rawat = pr.jam_rawat AND ssc.status = 'Ralan'
             WHERE pr.no_rawat = ? AND pr.rtl IS NOT NULL AND pr.rtl != ''
+                AND (ssc.id_careplan IS NULL OR ssc.id_careplan IN ('', '-'))
             LIMIT 1
         ");
         $stmt->execute([$patient['no_rawat']]);
@@ -815,6 +816,7 @@ class PayloadAdapter
             LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
             LEFT JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pr.no_rawat AND ssai.tgl_perawatan = pr.tgl_perawatan AND ssai.jam_rawat = pr.jam_rawat
             WHERE pr.no_rawat = ? AND pr.alergi IS NOT NULL AND pr.alergi != '' AND pr.alergi != '-'
+                AND (ssai.id_allergy_intolerance IS NULL OR ssai.id_allergy_intolerance IN ('', '-'))
             LIMIT 1
         ");
         $stmt->execute([$patient['no_rawat']]);
@@ -935,6 +937,7 @@ class PayloadAdapter
                     AND ssci.jam_rawat = pem.jam_rawat
                     AND ssci.status = 'Ralan'
                 WHERE pem.penilaian <> '' AND rp.no_rawat = ?
+                    AND (ssci.id_clinicalimpression IS NULL OR ssci.id_clinicalimpression IN ('', '-'))
                 LIMIT 1
             ");
             $stmtR->execute([$noRawat]);
@@ -977,6 +980,7 @@ class PayloadAdapter
                         AND ssci.jam_rawat = pem.jam_rawat
                         AND ssci.status = 'Ranap'
                     WHERE pem.penilaian <> '' AND rp.no_rawat = ?
+                        AND (ssci.id_clinicalimpression IS NULL OR ssci.id_clinicalimpression IN ('', '-'))
                     LIMIT 1
                 ");
                 $stmtN->execute([$noRawat]);
@@ -1073,15 +1077,16 @@ class PayloadAdapter
     private static function attachLabPersistKeys(array $payload, bool $isRad, string $stage, array $row): array
     {
         $radSuffix = $isRad ? '_radiologi' : '';
+        $labInfix = $isRad ? '' : '_lab';
         $variantSuffix = '';
         if (!$isRad) {
             $variantSuffix = str_ends_with((string) ($row['_panel_variant'] ?? ''), 'mb') ? '_mb' : '';
         }
         $tableById = [
-            'serviceRequest'  => ['satu_sehat_servicerequest' . $radSuffix . $variantSuffix, 'id_servicerequest'],
-            'specimen'        => ['satu_sehat_specimen' . $radSuffix . $variantSuffix, 'id_specimen'],
-            'observation'     => ['satu_sehat_observation' . $radSuffix . $variantSuffix, 'id_observation'],
-            'diagnosticReport' => ['satu_sehat_diagnosticreport' . $radSuffix . $variantSuffix, 'id_diagnosticreport'],
+            'serviceRequest'  => ['satu_sehat_servicerequest' . $radSuffix . $labInfix . $variantSuffix, 'id_servicerequest'],
+            'specimen'        => ['satu_sehat_specimen' . $radSuffix . $labInfix . $variantSuffix, 'id_specimen'],
+            'observation'     => ['satu_sehat_observation' . $radSuffix . $labInfix . $variantSuffix, 'id_observation'],
+            'diagnosticReport' => ['satu_sehat_diagnosticreport' . $radSuffix . $labInfix . $variantSuffix, 'id_diagnosticreport'],
         ];
         // NOTE: rad tables are keyed (noorder, kd_jenis_prw); lab tables add
         // id_template. Only keys present on the row are emitted.
@@ -1137,6 +1142,7 @@ class PayloadAdapter
                 SELECT rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, pj.nm_pasien, pj.no_ktp, rp.status_lanjut,
                     sse.id_encounter, pl.noorder, pl.tgl_permintaan, pl.jam_permintaan, pl.diagnosa_klinis,
                     tl.id_template, tl.Pemeriksaan, sml.code, sml.system, sml.display, peg.nama AS nm_dokter,
+                    pdpl.kd_jenis_prw,
                     IFNULL(sssl.id_servicerequest, '') AS id_servicerequest
                 FROM reg_periksa rp JOIN pasien pj ON pj.no_rkm_medis = rp.no_rkm_medis
                 LEFT JOIN pegawai peg ON peg.nik = rp.kd_dokter LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
@@ -1144,7 +1150,7 @@ class PayloadAdapter
                 INNER JOIN {$d} pdpl ON pdpl.noorder = pl.noorder
                 INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
                 LEFT JOIN {$mp} sml ON sml.id_template = tl.id_template
-                LEFT JOIN {$sr} sssl ON sssl.noorder = pdpl.noorder
+                LEFT JOIN {$sr} sssl ON sssl.noorder = pdpl.noorder AND sssl.id_template = pdpl.id_template AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
                 WHERE rp.no_rawat = ? AND sml.code IS NOT NULL
                   AND (sssl.id_servicerequest IS NULL OR sssl.id_servicerequest IN ('', '-'))
             ");
@@ -1210,13 +1216,13 @@ class PayloadAdapter
                 INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
                 LEFT JOIN {$mp} sml ON sml.id_template = tl.id_template
                 LEFT JOIN {$sr} sssr ON sssr.noorder = pdpl.noorder AND sssr.id_template = pdpl.id_template AND sssr.kd_jenis_prw = pdpl.kd_jenis_prw
-                LEFT JOIN {$sp} sssp ON sssr.noorder = sssp.noorder AND sssr.id_template = sssp.id_template AND sssr.kd_jenis_prw = sssp.kd_jenis_prw
+                LEFT JOIN {$sp} sssp ON sssp.noorder = pdpl.noorder AND sssp.id_template = pdpl.id_template AND sssp.kd_jenis_prw = pdpl.kd_jenis_prw
                 INNER JOIN periksa_lab per ON per.no_rawat = pl.no_rawat AND per.tgl_periksa = pl.tgl_hasil AND per.jam = pl.jam_hasil AND per.noorder = pl.noorder
                 LEFT JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat AND per.tgl_periksa = skl.tgl_periksa AND per.jam = skl.jam
-                LEFT JOIN {$ob} sso ON sssp.noorder = sso.noorder AND sssp.id_template = sso.id_template AND sssp.kd_jenis_prw = sso.kd_jenis_prw
+                LEFT JOIN {$ob} sso ON sso.noorder = pdpl.noorder AND sso.id_template = pdpl.id_template AND sso.kd_jenis_prw = pdpl.kd_jenis_prw
                 LEFT JOIN pegawai peg ON peg.nik = per.kd_dokter
                 LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-                LEFT JOIN {$drT} ssdr ON sssr.noorder = ssdr.noorder AND sssr.id_template = ssdr.id_template AND sssr.kd_jenis_prw = ssdr.kd_jenis_prw
+                LEFT JOIN {$drT} ssdr ON ssdr.noorder = pdpl.noorder AND ssdr.id_template = pdpl.id_template AND ssdr.kd_jenis_prw = pdpl.kd_jenis_prw
                 WHERE rp.no_rawat = ? AND sml.code IS NOT NULL
                   AND (ssdr.id_diagnosticreport IS NULL OR ssdr.id_diagnosticreport IN ('', '-'))
             ");

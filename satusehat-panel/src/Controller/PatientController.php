@@ -78,12 +78,16 @@ class PatientController
                 pj.no_ktp,
                 pj.tgl_lahir,
                 pj.jk,
-                COALESCE(nj.tanggal, ni.tanggal) AS tgl_keluar,
-                COALESCE(nj.jam, ni.jam) AS jam_keluar
+                COALESCE(
+                    (SELECT nj.tanggal FROM nota_jalan nj WHERE nj.no_rawat = rp.no_rawat LIMIT 1),
+                    (SELECT ni.tanggal FROM nota_inap ni WHERE ni.no_rawat = rp.no_rawat LIMIT 1)
+                ) AS tgl_keluar,
+                COALESCE(
+                    (SELECT nj.jam FROM nota_jalan nj WHERE nj.no_rawat = rp.no_rawat LIMIT 1),
+                    (SELECT ni.jam FROM nota_inap ni WHERE ni.no_rawat = rp.no_rawat LIMIT 1)
+                ) AS jam_keluar
             FROM reg_periksa rp
             JOIN pasien pj ON pj.no_rkm_medis = rp.no_rkm_medis
-            LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
-            LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
             {$where}
             ORDER BY rp.tgl_registrasi DESC, rp.jam_reg DESC
             LIMIT {$perPage} OFFSET {$offset}
@@ -288,7 +292,11 @@ class PatientController
 
         // Patient row
         $stmt = $db->prepare("
-            SELECT rp.*, pj.nm_pasien, pj.no_ktp, pj.no_rkm_medis, pj.tgl_lahir, pj.jk
+            SELECT rp.*, pj.nm_pasien, pj.no_ktp, pj.no_rkm_medis, pj.tgl_lahir, pj.jk,
+                (SELECT nj.tanggal FROM nota_jalan nj WHERE nj.no_rawat = rp.no_rawat LIMIT 1) AS tgl_keluar,
+                (SELECT nj.jam FROM nota_jalan nj WHERE nj.no_rawat = rp.no_rawat LIMIT 1) AS jam_keluar_jalan,
+                (SELECT ni.tanggal FROM nota_inap ni WHERE ni.no_rawat = rp.no_rawat LIMIT 1) AS tgl_keluar_inap,
+                (SELECT ni.jam FROM nota_inap ni WHERE ni.no_rawat = rp.no_rawat LIMIT 1) AS jam_keluar_inap
             FROM reg_periksa rp
             JOIN pasien pj ON pj.no_rkm_medis = rp.no_rkm_medis
             WHERE rp.no_rawat = ?
@@ -298,6 +306,14 @@ class PatientController
         if (!$patient) {
             return ['success' => false, 'error' => 'Patient not found'];
         }
+        // Merge discharge date from nota_jalan (outpatient) or nota_inap (inpatient).
+        if (empty($patient['tgl_keluar']) && !empty($patient['tgl_keluar_inap'])) {
+            $patient['tgl_keluar'] = $patient['tgl_keluar_inap'];
+            $patient['jam_keluar'] = $patient['jam_keluar_inap'];
+        } else {
+            $patient['jam_keluar'] = $patient['jam_keluar_jalan'] ?? null;
+        }
+        unset($patient['jam_keluar_jalan'], $patient['tgl_keluar_inap'], $patient['jam_keluar_inap']);
 
         $resources = self::buildResourceManifest($noRawat, $patient);
 
@@ -373,6 +389,9 @@ class PatientController
                 INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = rd.kode_brng
                 WHERE ro.no_rawat IN ({$placeholders}) AND ssm.id_medication NOT IN ('', '-') GROUP BY ro.no_rawat",
             'EpisodeOfCare' => "SELECT no_rawat, COUNT(*) as cnt FROM satu_sehat_episode_of_care WHERE no_rawat IN ({$placeholders}) AND id_episode_of_care NOT IN ('', '-') GROUP BY no_rawat",
+            'QuestionnaireResponse' => "SELECT ro.no_rawat, COUNT(*) as cnt FROM resep_obat ro
+                INNER JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = ro.no_resep
+                WHERE ro.no_rawat IN ({$placeholders}) AND ssqr.id_questionresponse NOT IN ('', '-') GROUP BY ro.no_rawat",
         ];
 
         // Lab pipeline counts: per-type UNION over the pk/mb/rad variants,
@@ -398,14 +417,32 @@ class PatientController
             $tables[$resType] = "SELECT nr AS no_rawat, COUNT(*) as cnt FROM (" . implode(' UNION ALL ', $unions) . ") t GROUP BY nr";
         }
 
+        // ObservationTTV: 10 vital-sign mapping tables, each keyed by no_rawat.
+        $ttvTables = [
+            'satu_sehat_observationttvsuhu', 'satu_sehat_observationttvrespirasi', 'satu_sehat_observationttvnadi',
+            'satu_sehat_observationttvspo2', 'satu_sehat_observationttvtb', 'satu_sehat_observationttvbb',
+            'satu_sehat_observationttvlp', 'satu_sehat_observationttvtensi', 'satu_sehat_observationttvgcs',
+            'satu_sehat_observationttvkesadaran',
+        ];
+        $ttvUnions = [];
+        foreach ($ttvTables as $t) {
+            $ph = implode(',', array_fill(0, count($noRawatList), '?'));
+            $ttvUnions[] = "SELECT no_rawat AS nr FROM {$t} WHERE no_rawat IN ({$ph}) AND id_observation NOT IN ('', '-')";
+        }
+        $tables['ObservationTTV'] = "SELECT nr AS no_rawat, COUNT(*) as cnt FROM (" . implode(' UNION ALL ', $ttvUnions) . ") t GROUP BY nr";
+
         foreach ($tables as $resType => $sql) {
             try {
                 $stmt = $db->prepare($sql);
-                // Lab UNION queries embed 3 placeholder sets; regular queries
-                // embed 1. The param list mirrors that shape.
-                $params = in_array($resType, array_keys($labTables), true)
-                    ? array_merge($noRawatList, $noRawatList, $noRawatList)
-                    : $noRawatList;
+                // Lab UNION queries embed 3 placeholder sets; ObservationTTV
+                // embeds 10; regular queries embed 1.
+                if (in_array($resType, array_keys($labTables), true)) {
+                    $params = array_merge($noRawatList, $noRawatList, $noRawatList);
+                } elseif ($resType === 'ObservationTTV') {
+                    $params = array_merge(...array_fill(0, 10, $noRawatList));
+                } else {
+                    $params = $noRawatList;
+                }
                 $stmt->execute($params);
                 while ($row = $stmt->fetch()) {
                     $results[$row['no_rawat']][$resType] = (int) $row['cnt'];
@@ -464,7 +501,7 @@ class PatientController
         $manifest[] = [
             'type' => 'Encounter',
             'available' => true,
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_encounter WHERE no_rawat = ?", [$noRawat]),
+            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_encounter WHERE no_rawat = ? AND id_encounter NOT IN ('', '-')", [$noRawat]),
         ];
 
         // 2. Condition — diagnoses + chief complaints (keluhan utama). Sent only
@@ -574,7 +611,7 @@ class PatientController
             'type' => 'ClinicalImpression',
             'available' => $hasData("SELECT COUNT(*) FROM pemeriksaan_ralan WHERE no_rawat = ? AND penilaian <> ''", [$noRawat])
                 || $hasData("SELECT COUNT(*) FROM pemeriksaan_ranap WHERE no_rawat = ? AND penilaian <> ''", [$noRawat]),
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_clinicalimpression WHERE no_rawat = ?", [$noRawat]),
+            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_clinicalimpression WHERE no_rawat = ? AND id_clinicalimpression NOT IN ('', '-')", [$noRawat]),
         ];
 
         // 8. Lab pipeline — ServiceRequest, Specimen, Observation, DiagnosticReport.
@@ -612,6 +649,10 @@ class PatientController
         ];
         $allLabCovered = function (array $tables, string $idCol) use ($db, $labMapped, $labSrcCounts, $noRawat): bool {
             try {
+                $totalSrc = array_sum($labSrcCounts);
+                if ($totalSrc <= 0) {
+                    return false;
+                }
                 foreach ($labSrcCounts as $variant => $nSrc) {
                     if ($nSrc <= 0) {
                         continue;
@@ -693,7 +734,7 @@ class PatientController
             'type' => 'Composition',
             'available' => $hasData("SELECT COUNT(*) FROM nota_jalan WHERE no_rawat = ?", [$noRawat])
                 || $hasData("SELECT COUNT(*) FROM nota_inap WHERE no_rawat = ?", [$noRawat]),
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_composition WHERE no_rawat = ?", [$noRawat]),
+            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_composition WHERE no_rawat = ? AND id_composition NOT IN ('', '-')", [$noRawat]),
         ];
 
         // 12. QuestionnaireResponse — from telaah_farmasi joined via resep_obat

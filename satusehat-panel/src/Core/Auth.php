@@ -143,7 +143,7 @@ class Auth
                 ");
                 $stmt->execute([$username]);
                 $row = $stmt->fetch();
-                if ($row && $row['passworde'] === $password) {
+                if ($row && is_string($row['passworde']) && hash_equals($row['passworde'], $password)) {
                     $ok = true;
                     self::start();
                     session_regenerate_id(true);

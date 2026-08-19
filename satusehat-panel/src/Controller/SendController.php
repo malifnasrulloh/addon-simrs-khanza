@@ -390,10 +390,10 @@ class SendController
             } elseif ($o['status'] === EntryOutcomeClassifier::NETWORK_UNKNOWN
                 || ($result['code'] ?? 0) >= 500) {
                 // Uncertain: the server may have committed this entry.
-                IdempotencyStore::settle($key, IdempotencyStore::STATUS_UNKNOWN);
+                IdempotencyStore::settle($key, IdempotencyStore::STATUS_UNKNOWN, null);
             } else {
                 // Definitive rejection — safe to retry later.
-                IdempotencyStore::settle($key, IdempotencyStore::STATUS_FAILED);
+                IdempotencyStore::settle($key, IdempotencyStore::STATUS_FAILED, null);
             }
         }
 
@@ -478,7 +478,10 @@ class SendController
 
             $classified = EntryOutcomeClassifier::classify($respEntry);
 
-            $outcomes[] = [
+            // Key by the ORIGINAL bundle index so the settle loop
+            // ($entryKeyHashes[$i]) can look up the correct outcome.
+            $idx = $reqIndex ?? $ri;
+            $outcomes[$idx] = [
                 'status'       => $classified['status'],
                 'rule_number'  => $classified['rule_number'],
                 'issue_text'   => $classified['issue_text'],

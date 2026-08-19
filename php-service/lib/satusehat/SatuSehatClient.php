@@ -283,7 +283,7 @@ class SatuSehatClient
     {
         // ── Denial cap: stop hammering after N denials this run ───────
         if (self::$denialCount >= self::PERMISSION_DENIAL_CAP) {
-            $this->log->warning("[UPDATE] {$endpoint}: Skipped — permission-denial cap ({self::PERMISSION_DENIAL_CAP}) reached this run. Periksa konfigurasi Organization ID / client, lalu reset state yang terkena.");
+            $this->log->warning("[UPDATE] {$endpoint}: Skipped — permission-denial cap (" . self::PERMISSION_DENIAL_CAP . ") reached this run. Periksa konfigurasi Organization ID / client, lalu reset state yang terkena.");
             return [
                 'success'          => true,
                 'code'             => 200,
