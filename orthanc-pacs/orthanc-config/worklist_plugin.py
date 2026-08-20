@@ -598,6 +598,14 @@ if HAS_PYDICOM:
         try:
             ds = pydicom.dcmread(BytesIO(receivedDicom))
 
+            # If AccessionNumber is already present and valid, DO NOT overwrite!
+            existing_acsn = str(getattr(ds, "AccessionNumber", "")).strip()
+            if existing_acsn and existing_acsn not in ("-", "None", ""):
+                logger.info(
+                    f"[AutoSync] Pre-store: Instance already has AccessionNumber='{existing_acsn}'. Keeping tags as-is."
+                )
+                return orthanc.ReceivedInstanceAction.KEEP_AS_IS, receivedDicom
+
             # Extract PatientID and StudyDate
             patient_id = str(getattr(ds, "PatientID", "")).strip()
             study_date_raw = str(getattr(ds, "StudyDate", "")).strip()
