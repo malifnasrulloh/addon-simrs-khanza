@@ -685,19 +685,19 @@ def _upload_jpeg_background(instance_id, exam):
         filename = f"CR_{sop_uid.replace('.', '_')}{ext}"
         rel_path = f"pages/upload/{filename}"
 
-        # Pre-check: Skip if image for this exam (no_rawat, tgl_periksa, jam) already exists in SIMRS gambar_radiologi
+        # Pre-check: Skip if this specific image file already exists in SIMRS gambar_radiologi
         try:
             pool = get_db_pool()
             conn = pool.connection()
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT COUNT(*) AS cnt FROM gambar_radiologi WHERE no_rawat = %s AND tgl_periksa = %s AND jam = %s",
-                    (no_rawat, tgl, jam)
+                    "SELECT COUNT(*) AS cnt FROM gambar_radiologi WHERE no_rawat = %s AND tgl_periksa = %s AND jam = %s AND (lokasi_gambar = %s OR lokasi_gambar LIKE %s)",
+                    (no_rawat, tgl, jam, rel_path, f"%{filename}%")
                 )
                 chk = cur.fetchone()
                 if chk and chk.get("cnt", 0) > 0:
                     logger.info(
-                        f"[AutoSync] Image for no_rawat={no_rawat}, tgl={tgl}, jam={jam} already exists in SIMRS. "
+                        f"[AutoSync] Image '{filename}' for no_rawat={no_rawat}, tgl={tgl}, jam={jam} already exists in SIMRS. "
                         f"Skipping duplicate upload."
                     )
                     return
