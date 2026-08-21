@@ -779,6 +779,49 @@ def _upload_jpeg_background(instance_id, exam):
         logger.error(f"[AutoSync] Background upload exception: {e}", exc_info=True)
 
 
+def is_from_webapps_converter(dicom, tags):
+    """
+    Determines if the DICOM instance originated from the SIMRS webapps converter
+    rather than a real physical modality (CR/DX/CT/MRI/US).
+    Returns True if converted from webapps (should skip re-uploading to webapps),
+    Returns False if from a physical machine (should upload preview to webapps).
+    """
+    try:
+        # Layer 1: Network origin check
+        origin = dicom.GetInstanceOrigin()
+        if origin != orthanc.InstanceOrigin.DICOM_PROTOCOL:
+            return True  # Uploaded via REST API / Lua / Plugin -> Webapps
+        
+        # Check calling AE Title
+        calling_aet = ""
+        if hasattr(dicom, "GetOriginCallingAet"):
+            calling_aet = str(dicom.GetOriginCallingAet() or "").strip().upper()
+        elif hasattr(dicom, "GetOriginAet"):
+            calling_aet = str(dicom.GetOriginAet() or "").strip().upper()
+            
+        if calling_aet in ("SIMRS_CONVERTER", "CONVERTER", "DCMCONVERTER", "PYTHON_SCU", "PYNETDICOM"):
+            return True
+    except Exception:
+        pass
+
+    # Layer 2: Explicit DICOM Tag Markers
+    image_comments = str(tags.get("ImageComments", "")).strip().upper()
+    conversion_type = str(tags.get("ConversionType", "")).strip().upper()
+    sec_mfg = str(tags.get("SecondaryCaptureDeviceManufacturer", "")).strip().upper()
+    
+    if "SOURCE_WEBAPPS" in image_comments or conversion_type == "WSD" or "SIMRS" in sec_mfg or "CONVERTER" in sec_mfg:
+        return True
+
+    # Layer 3: Secondary Capture Signature from DCMTK
+    sop_class = str(tags.get("SOPClassUID", "")).strip()
+    manufacturer = str(tags.get("Manufacturer", "")).strip().upper()
+    # 1.2.840.10008.5.1.4.1.1.7 is Secondary Capture Image Storage
+    if sop_class == "1.2.840.10008.5.1.4.1.1.7" and ("OFFIS" in manufacturer or "DCMTK" in manufacturer or not manufacturer):
+        return True
+
+    return False
+
+
 def OnStoredInstance(dicom, instanceId):
     """
     Post-store callback. Runs AFTER Orthanc has stored the instance.
@@ -805,14 +848,13 @@ def OnStoredInstance(dicom, instanceId):
         if not patient_id or not study_date_raw:
             return  # Unidentifiable instance — nothing to do
 
-        # Check origin: only process instances from DICOM protocol
-        try:
-            origin = dicom.GetInstanceOrigin()
-            if origin != orthanc.InstanceOrigin.DICOM_PROTOCOL:
-                logger.debug(f"[AutoSync] Instance {instanceId} origin={origin}, not DICOM_PROTOCOL. Skip.")
-                return
-        except Exception:
-            pass  # Older SDK may not have GetInstanceOrigin; continue
+        # 3-Layer Check: If instance originated from webapps converter, skip preview upload!
+        if is_from_webapps_converter(dicom, tags):
+            logger.info(
+                f"[AutoSync] Instance {instanceId} originated from webapps converter. "
+                f"Skipping duplicate upload to webapps."
+            )
+            return
 
         # Convert YYYYMMDD → YYYY-MM-DD for SQL
         if len(study_date_raw) == 8:
