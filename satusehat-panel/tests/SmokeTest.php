@@ -57,6 +57,42 @@ final class SmokeTest extends TestCase
         $this->assertTrue(method_exists(\SatuSehatPayloadBuilder::class, 'diagnosticReportLab'));
     }
 
+    public function testConditionPayloadBuilderDefaultsToIcd10(): void
+    {
+        $payload = \SatuSehatPayloadBuilder::condition([
+            'kd_penyakit' => 'A09.0',
+            'nm_penyakit' => 'Other and unspecified gastroenteritis and colitis of infectious origin',
+            'status' => 'Ralan',
+            'tgl_registrasi' => '2026-08-22',
+            'jam_reg' => '10:00:00',
+            'nm_pasien' => 'Test Patient',
+            'id_encounter' => 'enc-123',
+        ], 'P123', '', 'D123', 'Dr. Test');
+
+        $this->assertNotNull($payload);
+        $this->assertSame('http://hl7.org/fhir/sid/icd-10', $payload['code']['coding'][0]['system']);
+        $this->assertSame('A09.0', $payload['code']['coding'][0]['code']);
+        $this->assertSame('Other and unspecified gastroenteritis and colitis of infectious origin', $payload['code']['coding'][0]['display']);
+    }
+
+    public function testDiagnosticReportLabOmitsEmptyConclusion(): void
+    {
+        $payload = \SatuSehatPayloadBuilder::diagnosticReportLab([
+            'noorder' => 'LAB-001',
+            'id_template' => '1',
+            'Pemeriksaan' => 'Darah Lengkap',
+            'tgl_hasil' => '2026-08-22',
+            'jam_hasil' => '11:00:00',
+            'id_encounter' => 'enc-123',
+            'id_servicerequest' => 'sr-123',
+            'id_specimen' => 'sp-123',
+            'id_observation' => 'obs-123',
+            'kesan' => '', // empty conclusion
+        ], 'P123', 'D123', 'org-123');
+
+        $this->assertArrayNotHasKey('conclusion', $payload);
+    }
+
     public function testPayloadBuilderPublicApiSurface(): void
     {
         $this->assertTrue(method_exists(\SatuSehatPayloadBuilder::class, 'encounter'));

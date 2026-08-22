@@ -497,6 +497,8 @@ class SatuSehatDatabase
         'fetchPendingDiagnosticReportLabMBUpdate' => ['phase' => 'visit', 'mode' => 'plain',   'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
         'fetchPendingCarePlanActive' => ['phase' => 'visit', 'mode' => 'derived',  'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
         'fetchPendingCarePlanUpdate' => ['phase' => 'visit', 'mode' => 'derived',  'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingClinicalImpressionActive' => ['phase' => 'visit', 'mode' => 'derived',  'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingClinicalImpressionUpdate' => ['phase' => 'visit', 'mode' => 'derived',  'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
         'fetchPendingAllergyActive' => ['phase' => 'visit', 'mode' => 'derived',  'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
         'fetchPendingAllergyUpdate' => ['phase' => 'visit', 'mode' => 'derived',  'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
         'fetchPendingMedicationRequestActive' => ['phase' => 'visit', 'mode' => 'union',    'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
@@ -541,9 +543,12 @@ class SatuSehatDatabase
      * @param string $mode 'latest' = newest (tgl_masuk, jam_masuk) row per
      *                     visit (Arrived / In-Progress); 'finished' = row
      *                     with the max tgl_keluar among non-removed stays.
-     * Sets ki.* columns (tgl_masuk, jam_masuk, stts_pulang, lama, kd_kamar)
-     * and overlays id_lokasi_satusehat with the ranap location mapping when
-     * the visit had a kamar stay (mirrors the old COALESCE(ranap, ralan)).
+     * Sets tgl_masuk/jam_masuk from the EARLIEST stay (the Encounter timeline
+     * must not move on room transfers — the mode-picked row only drives the
+     * billing-side fields), stts_pulang/lama/kd_kamar/tgl_keluar/jam_keluar
+     * from the mode-picked stay, and overlays id_lokasi_satusehat with the
+     * ranap location mapping when the visit had a kamar stay (mirrors the old
+     * COALESCE(ranap, ralan)).
      */
     private function attachKamar(array $rows, string $mode): array
     {
@@ -571,7 +576,16 @@ class SatuSehatDatabase
         }
 
         $pick = [];
+        $first = [];
         foreach ($byVisit as $nr => $candidates) {
+            // Earliest admission across ALL stays (including transfers) —
+            // the timeline anchor for T1.
+            $sortedForFirst = $candidates;
+            usort($sortedForFirst, function ($a, $b) {
+                return strcmp($a['tgl_masuk'] . ' ' . $a['jam_masuk'], $b['tgl_masuk'] . ' ' . $b['jam_masuk']);
+            });
+            $first[$nr] = $sortedForFirst[0];
+
             if ($mode === 'finished') {
                 $withdrawn = array_values(array_filter($candidates, function ($r) {
                     return !in_array($r['stts_pulang'], ['-', 'Pindah Kamar'], true)
@@ -609,11 +623,17 @@ class SatuSehatDatabase
 
         foreach ($rows as &$row) {
             $ki = $pick[$row['no_rawat']] ?? null;
-            $row['tgl_masuk']   = $ki['tgl_masuk'] ?? null;
-            $row['jam_masuk']   = $ki['jam_masuk'] ?? null;
+            $firstStay = $first[$row['no_rawat']] ?? null;
+            // Timeline: FIRST admission (transfers must not move the start).
+            $row['tgl_masuk']   = $firstStay['tgl_masuk'] ?? null;
+            $row['jam_masuk']   = $firstStay['jam_masuk'] ?? null;
+            // Billing-side fields from the mode-picked stay.
             $row['stts_pulang'] = $ki['stts_pulang'] ?? null;
             $row['lama']        = $ki['lama'] ?? null;
             $row['kd_kamar']    = $ki['kd_kamar'] ?? null;
+            // Final-stay discharge — T2 fallback when nota_inap is missing.
+            $row['kamar_tgl_keluar'] = $ki['tgl_keluar'] ?? null;
+            $row['kamar_jam_keluar'] = $ki['jam_keluar'] ?? null;
             if (($ki['kd_kamar'] ?? null) !== null && isset(self::$lokasiRanapMap[$ki['kd_kamar']])) {
                 $row['id_lokasi_satusehat'] = self::$lokasiRanapMap[$ki['kd_kamar']];
             }
@@ -921,6 +941,21 @@ class SatuSehatDatabase
     /**
      * Fetch pending 'arrived' encounters (Registered but not in satu_sehat_encounter).
      */
+    /**
+     * One deduped mutasi_berkas row per visit (file logistics proxies for the
+     * Encounter timeline): MIN(dikirim) = earliest dispatch to the clinic
+     * (care-start fallback), MAX(kembali) = last return to records
+     * (care-end fallback). Sentinel dates are nulled inside the aggregation
+     * so the payload never sees '0000-...'.
+     */
+    private function mutasiBerkasSubquery(): string
+    {
+        return "SELECT no_rawat,
+                   MIN(CASE WHEN dikirim IS NOT NULL AND dikirim != '' AND dikirim NOT LIKE '0000%' THEN dikirim END) AS mutasi_dikirim,
+                   MAX(CASE WHEN kembali IS NOT NULL AND kembali != '' AND kembali NOT LIKE '0000%' THEN kembali END) AS mutasi_kembali
+                FROM mutasi_berkas GROUP BY no_rawat";
+    }
+
     public function fetchPendingArrived(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
     {
         $sql = "
@@ -929,12 +964,14 @@ class SatuSehatDatabase
                 p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
                 rp.kd_poli, pol.nm_poli,
                 smlr.id_lokasi_satusehat as id_lokasi_satusehat,
+                mbx.mutasi_dikirim, mbx.mutasi_kembali,
                 rp.stts, rp.status_lanjut
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pegawai pg ON pg.nik = rp.kd_dokter
             INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
             LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
+            LEFT JOIN ({$this->mutasiBerkasSubquery()}) mbx ON mbx.no_rawat = rp.no_rawat
             WHERE rp.status_bayar = 'Sudah Bayar'
               AND rp.tgl_registrasi BETWEEN :df AND :dt
               AND rp.no_rawat NOT IN (SELECT no_rawat FROM satu_sehat_encounter)
@@ -962,6 +999,7 @@ class SatuSehatDatabase
                 p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
                 rp.kd_poli, pol.nm_poli,
                 smlr.id_lokasi_satusehat as id_lokasi_satusehat,
+                mbx.mutasi_dikirim, mbx.mutasi_kembali,
                 rp.stts, rp.status_lanjut,
                 sse.id_encounter,
                 CASE
@@ -975,6 +1013,7 @@ class SatuSehatDatabase
             INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
             LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            LEFT JOIN ({$this->mutasiBerkasSubquery()}) mbx ON mbx.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ranap pranap ON pranap.no_rawat = rp.no_rawat
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
@@ -997,6 +1036,7 @@ class SatuSehatDatabase
                 p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
                 rp.kd_poli, pol.nm_poli,
                 smlr.id_lokasi_satusehat as id_lokasi_satusehat,
+                mbx.mutasi_dikirim, mbx.mutasi_kembali,
                 rp.stts, rp.status_lanjut,
                 sse.id_encounter,
                 CASE
@@ -1010,6 +1050,7 @@ class SatuSehatDatabase
             INNER JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
             LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = pol.kd_poli
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            LEFT JOIN ({$this->mutasiBerkasSubquery()}) mbx ON mbx.no_rawat = rp.no_rawat
             LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
             LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
@@ -3209,178 +3250,126 @@ $stmt = $this->mysql->prepare($sql);
 
     public function fetchPendingClinicalImpressionActive(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
     {
-        $ralanSql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
-                p.nm_pasien, p.no_ktp as nik_pasien, rp.stts,
-                'Ralan' as status_lanjut,
-                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
-                sse.id_encounter, 
-                CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
-                pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
-                pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
-                ssc.id_condition, '' as id_clinicalimpression
-            FROM reg_periksa rp
-            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
-            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-            INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ralan'
-            INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
-            INNER JOIN pemeriksaan_ralan pem ON pem.no_rawat = rp.no_rawat
-            INNER JOIN pegawai peg ON pem.nip = peg.nik
-            LEFT JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
-                AND ssci.tgl_perawatan = pem.tgl_perawatan
-                AND ssci.jam_rawat = pem.jam_rawat
-                AND ssci.status = 'Ralan'
-            WHERE pem.penilaian <> ''
-              AND rp.tgl_registrasi BETWEEN :df AND :dt
-              AND ssci.id_clinicalimpression IS NULL
+        $sql = "
+            SELECT * FROM (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                    p.nm_pasien, p.no_ktp as nik_pasien, rp.stts,
+                    'Ralan' as status_lanjut,
+                    CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
+                    sse.id_encounter, 
+                    CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
+                    pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
+                    pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
+                    ssc.id_condition, '' as id_clinicalimpression
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ralan'
+                INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
+                INNER JOIN pemeriksaan_ralan pem ON pem.no_rawat = rp.no_rawat
+                INNER JOIN pegawai peg ON pem.nip = peg.nik
+                LEFT JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
+                    AND ssci.tgl_perawatan = pem.tgl_perawatan
+                    AND ssci.jam_rawat = pem.jam_rawat
+                    AND ssci.status = 'Ralan'
+                WHERE pem.penilaian <> ''
+                  AND rp.tgl_registrasi BETWEEN :df AND :dt
+                  AND ssci.id_clinicalimpression IS NULL
+
+                UNION ALL
+
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                    p.nm_pasien, p.no_ktp as nik_pasien, rp.stts,
+                    'Ranap' as status_lanjut,
+                    CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
+                    sse.id_encounter, 
+                    CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
+                    pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
+                    pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
+                    ssc.id_condition, '' as id_clinicalimpression
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ranap'
+                INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
+                INNER JOIN pemeriksaan_ranap pem ON pem.no_rawat = rp.no_rawat
+                INNER JOIN pegawai peg ON pem.nip = peg.nik
+                LEFT JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
+                    AND ssci.tgl_perawatan = pem.tgl_perawatan
+                    AND ssci.jam_rawat = pem.jam_rawat
+                    AND ssci.status = 'Ranap'
+                WHERE pem.penilaian <> ''
+                  AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+                  AND ssci.id_clinicalimpression IS NULL
+            ) AS combined
          ORDER BY no_rawat ASC
         ";
 
-        $ranapSql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
-                p.nm_pasien, p.no_ktp as nik_pasien, rp.stts,
-                'Ranap' as status_lanjut,
-                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
-                sse.id_encounter, 
-                CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
-                pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
-                pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
-                ssc.id_condition, '' as id_clinicalimpression
-            FROM reg_periksa rp
-            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
-            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-            INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ranap'
-            INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
-            INNER JOIN pemeriksaan_ranap pem ON pem.no_rawat = rp.no_rawat
-            INNER JOIN pegawai peg ON pem.nip = peg.nik
-            LEFT JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
-                AND ssci.tgl_perawatan = pem.tgl_perawatan
-                AND ssci.jam_rawat = pem.jam_rawat
-                AND ssci.status = 'Ranap'
-            WHERE pem.penilaian <> ''
-              AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
-              AND ssci.id_clinicalimpression IS NULL
-         ORDER BY no_rawat ASC
-        ";
-
-        if ($limit !== null) {
-            $ralanSql .= " LIMIT :lim OFFSET :off";
-            $ranapSql .= " LIMIT :lim2 OFFSET :off2";
-        }
-        $legacyOffset = is_int($offsetOrAfter) ? $offsetOrAfter : 0;
-
-        $stmtRalan = $this->mysql->prepare($ralanSql);
-        $ralanParams = ['df' => $dateFrom, 'dt' => $dateTo];
-        if ($limit !== null) {
-            $ralanParams['lim'] = $limit;
-            $ralanParams['off'] = $legacyOffset;
-        }
-        $stmtRalan->execute($ralanParams);
-        $ralan = $stmtRalan->fetchAll(PDO::FETCH_ASSOC);
-
-        $stmtRanap = $this->mysql->prepare($ranapSql);
-        $ranapParams = ['df2' => $dateFrom, 'dt2' => $dateTo];
-        if ($limit !== null) {
-            $ranapParams['lim2'] = $limit;
-            $ranapParams['off2'] = $legacyOffset;
-        }
-        $stmtRanap->execute($ranapParams);
-        $ranap = $stmtRanap->fetchAll(PDO::FETCH_ASSOC);
-
-        $merged = array_merge($ralan, $ranap);
-        if ($limit !== null) {
-            $merged = array_slice($merged, 0, $limit);
-        }
-        return $merged;
+        $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
+        return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function fetchPendingClinicalImpressionUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
     {
-        $ralanSql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
-                p.nm_pasien, p.no_ktp as nik_pasien, rp.stts,
-                'Ralan' as status_lanjut,
-                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
-                sse.id_encounter, 
-                CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
-                pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
-                pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
-                ssc.id_condition, ssci.id_clinicalimpression
-            FROM reg_periksa rp
-            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
-            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-            INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ralan'
-            INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
-            INNER JOIN pemeriksaan_ralan pem ON pem.no_rawat = rp.no_rawat
-            INNER JOIN pegawai peg ON pem.nip = peg.nik
-            INNER JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
-                AND ssci.tgl_perawatan = pem.tgl_perawatan
-                AND ssci.jam_rawat = pem.jam_rawat
-                AND ssci.status = 'Ralan'
-            WHERE pem.penilaian <> ''
-              AND rp.tgl_registrasi BETWEEN :df AND :dt
+        $sql = "
+            SELECT * FROM (
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                    p.nm_pasien, p.no_ktp as nik_pasien, rp.stts,
+                    'Ralan' as status_lanjut,
+                    CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
+                    sse.id_encounter, 
+                    CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
+                    pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
+                    pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
+                    ssc.id_condition, ssci.id_clinicalimpression
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ralan'
+                INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
+                INNER JOIN pemeriksaan_ralan pem ON pem.no_rawat = rp.no_rawat
+                INNER JOIN pegawai peg ON pem.nip = peg.nik
+                INNER JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
+                    AND ssci.tgl_perawatan = pem.tgl_perawatan
+                    AND ssci.jam_rawat = pem.jam_rawat
+                    AND ssci.status = 'Ralan'
+                WHERE pem.penilaian <> ''
+                  AND rp.tgl_registrasi BETWEEN :df AND :dt
+
+                UNION ALL
+
+                SELECT 
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                    p.nm_pasien, p.no_ktp as nik_pasien, rp.stts,
+                    'Ranap' as status_lanjut,
+                    CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
+                    sse.id_encounter, 
+                    CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
+                    pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
+                    pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
+                    ssc.id_condition, ssci.id_clinicalimpression
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ranap'
+                INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
+                INNER JOIN pemeriksaan_ranap pem ON pem.no_rawat = rp.no_rawat
+                INNER JOIN pegawai peg ON pem.nip = peg.nik
+                INNER JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
+                    AND ssci.tgl_perawatan = pem.tgl_perawatan
+                    AND ssci.jam_rawat = pem.jam_rawat
+                    AND ssci.status = 'Ranap'
+                WHERE pem.penilaian <> ''
+                  AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
+            ) AS combined
          ORDER BY no_rawat ASC
         ";
 
-        $ranapSql = "
-            SELECT 
-                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
-                p.nm_pasien, p.no_ktp as nik_pasien, rp.stts,
-                'Ranap' as status_lanjut,
-                CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
-                sse.id_encounter, 
-                CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
-                pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
-                pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
-                ssc.id_condition, ssci.id_clinicalimpression
-            FROM reg_periksa rp
-            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
-            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-            INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ranap'
-            INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
-            INNER JOIN pemeriksaan_ranap pem ON pem.no_rawat = rp.no_rawat
-            INNER JOIN pegawai peg ON pem.nip = peg.nik
-            INNER JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
-                AND ssci.tgl_perawatan = pem.tgl_perawatan
-                AND ssci.jam_rawat = pem.jam_rawat
-                AND ssci.status = 'Ranap'
-            WHERE pem.penilaian <> ''
-              AND rp.tgl_registrasi BETWEEN :df2 AND :dt2
-         ORDER BY no_rawat ASC
-        ";
-
-        if ($limit !== null) {
-            $ralanSql .= " LIMIT :lim OFFSET :off";
-            $ranapSql .= " LIMIT :lim2 OFFSET :off2";
-        }
-        $legacyOffset = is_int($offsetOrAfter) ? $offsetOrAfter : 0;
-
-        $stmtRalan = $this->mysql->prepare($ralanSql);
-        $ralanParams = ['df' => $dateFrom, 'dt' => $dateTo];
-        if ($limit !== null) {
-            $ralanParams['lim'] = $limit;
-            $ralanParams['off'] = $legacyOffset;
-        }
-        $stmtRalan->execute($ralanParams);
-        $ralan = $stmtRalan->fetchAll(PDO::FETCH_ASSOC);
-
-        $stmtRanap = $this->mysql->prepare($ranapSql);
-        $ranapParams = ['df2' => $dateFrom, 'dt2' => $dateTo];
-        if ($limit !== null) {
-            $ranapParams['lim2'] = $limit;
-            $ranapParams['off2'] = $legacyOffset;
-        }
-        $stmtRanap->execute($ranapParams);
-        $ranap = $stmtRanap->fetchAll(PDO::FETCH_ASSOC);
-
-        $merged = array_merge($ralan, $ranap);
-        if ($limit !== null) {
-            $merged = array_slice($merged, 0, $limit);
-        }
-        return $merged;
+        $params = ['df' => $dateFrom, 'dt' => $dateTo, 'df2' => $dateFrom, 'dt2' => $dateTo];
+        return $this->paginatedFetch(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
     }
 
     public function saveClinicalImpression(
@@ -3512,7 +3501,7 @@ $stmt = $this->mysql->prepare($sql);
             INNER JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
             INNER JOIN satu_sehat_imagingstudy_radiologi ssi ON ssi.noorder = ppr.noorder AND ssi.kd_jenis_prw = ppr.kd_jenis_prw
             INNER JOIN satu_sehat_specimen_radiologi sssp ON ssr.noorder = sssp.noorder AND ssr.kd_jenis_prw = sssp.kd_jenis_prw
-            INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil AND prad.dokter_perujuk = pr.dokter_perujuk
+            INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil AND prad.dokter_perujuk = pr.dokter_perujuk AND prad.kd_jenis_prw = ppr.kd_jenis_prw
             INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam
             INNER JOIN satu_sehat_observation_radiologi sso ON sssp.noorder = sso.noorder AND sssp.kd_jenis_prw = sso.kd_jenis_prw
             LEFT JOIN satu_sehat_diagnosticreport_radiologi ssdr ON ssr.noorder = ssdr.noorder AND ssr.kd_jenis_prw = ssdr.kd_jenis_prw
@@ -3547,7 +3536,7 @@ $stmt = $this->mysql->prepare($sql);
             INNER JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
             INNER JOIN satu_sehat_imagingstudy_radiologi ssi ON ssi.noorder = ppr.noorder AND ssi.kd_jenis_prw = ppr.kd_jenis_prw
             INNER JOIN satu_sehat_specimen_radiologi sssp ON ssr.noorder = sssp.noorder AND ssr.kd_jenis_prw = sssp.kd_jenis_prw
-            INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil AND prad.dokter_perujuk = pr.dokter_perujuk
+            INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil AND prad.dokter_perujuk = pr.dokter_perujuk AND prad.kd_jenis_prw = ppr.kd_jenis_prw
             INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam
             INNER JOIN satu_sehat_observation_radiologi sso ON sssp.noorder = sso.noorder AND sssp.kd_jenis_prw = sso.kd_jenis_prw
             INNER JOIN satu_sehat_diagnosticreport_radiologi ssdr ON ssr.noorder = ssdr.noorder AND ssr.kd_jenis_prw = ssdr.kd_jenis_prw
@@ -3667,7 +3656,7 @@ $stmt = $this->mysql->prepare($sql);
             INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
             INNER JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
             INNER JOIN satu_sehat_specimen_radiologi sssp ON sssp.noorder = ppr.noorder AND sssp.kd_jenis_prw = ppr.kd_jenis_prw
-            INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil AND prad.dokter_perujuk = pr.dokter_perujuk
+            INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil AND prad.dokter_perujuk = pr.dokter_perujuk AND prad.kd_jenis_prw = ppr.kd_jenis_prw
             INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam
             INNER JOIN satu_sehat_imagingstudy_radiologi ssi ON sssp.noorder = ssi.noorder AND sssp.kd_jenis_prw = ssi.kd_jenis_prw
             LEFT JOIN satu_sehat_observation_radiologi sso ON sssp.noorder = sso.noorder AND sssp.kd_jenis_prw = sso.kd_jenis_prw
@@ -3700,7 +3689,7 @@ $stmt = $this->mysql->prepare($sql);
             INNER JOIN jns_perawatan_radiologi jpr ON jpr.kd_jenis_prw = ppr.kd_jenis_prw
             INNER JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
             INNER JOIN satu_sehat_specimen_radiologi sssp ON sssp.noorder = ppr.noorder AND sssp.kd_jenis_prw = ppr.kd_jenis_prw
-            INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil AND prad.dokter_perujuk = pr.dokter_perujuk
+            INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil AND prad.dokter_perujuk = pr.dokter_perujuk AND prad.kd_jenis_prw = ppr.kd_jenis_prw
             INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam
             INNER JOIN satu_sehat_imagingstudy_radiologi ssi ON sssp.noorder = ssi.noorder AND sssp.kd_jenis_prw = ssi.kd_jenis_prw
             INNER JOIN satu_sehat_observation_radiologi sso ON sssp.noorder = sso.noorder AND sssp.kd_jenis_prw = sso.kd_jenis_prw
@@ -4084,6 +4073,7 @@ $stmt = $this->mysql->prepare($sql);
               AND per.tgl_periksa = pl.tgl_hasil
               AND per.jam = pl.jam_hasil
               AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
             INNER JOIN detail_periksa_lab dpl ON dpl.no_rawat = per.no_rawat
               AND dpl.tgl_periksa = per.tgl_periksa
               AND dpl.jam = per.jam
@@ -4128,6 +4118,7 @@ $stmt = $this->mysql->prepare($sql);
               AND per.tgl_periksa = pl.tgl_hasil
               AND per.jam = pl.jam_hasil
               AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
             INNER JOIN detail_periksa_lab dpl ON dpl.no_rawat = per.no_rawat
               AND dpl.tgl_periksa = per.tgl_periksa
               AND dpl.jam = per.jam
@@ -4191,6 +4182,7 @@ $stmt = $this->mysql->prepare($sql);
               AND per.tgl_periksa = pl.tgl_hasil
               AND per.jam = pl.jam_hasil
               AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
             INNER JOIN detail_periksa_lab dpl ON dpl.no_rawat = per.no_rawat
               AND dpl.tgl_periksa = per.tgl_periksa
               AND dpl.jam = per.jam
@@ -4235,6 +4227,7 @@ $stmt = $this->mysql->prepare($sql);
               AND per.tgl_periksa = pl.tgl_hasil
               AND per.jam = pl.jam_hasil
               AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
             INNER JOIN detail_periksa_lab dpl ON dpl.no_rawat = per.no_rawat
               AND dpl.tgl_periksa = per.tgl_periksa
               AND dpl.jam = per.jam
@@ -4310,6 +4303,7 @@ $stmt = $this->mysql->prepare($sql);
               AND per.tgl_periksa = pl.tgl_hasil
               AND per.jam = pl.jam_hasil
               AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
             LEFT JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
               AND per.tgl_periksa = skl.tgl_periksa
               AND per.jam = skl.jam
@@ -4360,6 +4354,7 @@ $stmt = $this->mysql->prepare($sql);
               AND per.tgl_periksa = pl.tgl_hasil
               AND per.jam = pl.jam_hasil
               AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
             LEFT JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
               AND per.tgl_periksa = skl.tgl_periksa
               AND per.jam = skl.jam
@@ -4429,6 +4424,7 @@ $stmt = $this->mysql->prepare($sql);
               AND per.tgl_periksa = pl.tgl_hasil
               AND per.jam = pl.jam_hasil
               AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
             LEFT JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
               AND per.tgl_periksa = skl.tgl_periksa
               AND per.jam = skl.jam
@@ -4479,6 +4475,7 @@ $stmt = $this->mysql->prepare($sql);
               AND per.tgl_periksa = pl.tgl_hasil
               AND per.jam = pl.jam_hasil
               AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
             LEFT JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
               AND per.tgl_periksa = skl.tgl_periksa
               AND per.jam = skl.jam
@@ -5681,6 +5678,7 @@ $stmt = $this->mysql->prepare($sql);
                           AND per.tgl_periksa = pl.tgl_hasil
                           AND per.jam = pl.jam_hasil
                           AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
                         INNER JOIN detail_periksa_lab dpl ON dpl.no_rawat = per.no_rawat
                           AND dpl.tgl_periksa = per.tgl_periksa
                           AND dpl.jam = per.jam
@@ -5702,6 +5700,7 @@ $stmt = $this->mysql->prepare($sql);
                           AND per.tgl_periksa = pl.tgl_hasil
                           AND per.jam = pl.jam_hasil
                           AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
                         INNER JOIN detail_periksa_lab dpl ON dpl.no_rawat = per.no_rawat
                           AND dpl.tgl_periksa = per.tgl_periksa
                           AND dpl.jam = per.jam
@@ -5748,6 +5747,7 @@ $stmt = $this->mysql->prepare($sql);
                           AND per.tgl_periksa = pl.tgl_hasil
                           AND per.jam = pl.jam_hasil
                           AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
                         INNER JOIN detail_periksa_lab dpl ON dpl.no_rawat = per.no_rawat
                           AND dpl.tgl_periksa = per.tgl_periksa
                           AND dpl.jam = per.jam
@@ -5769,6 +5769,7 @@ $stmt = $this->mysql->prepare($sql);
                           AND per.tgl_periksa = pl.tgl_hasil
                           AND per.jam = pl.jam_hasil
                           AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
                         INNER JOIN detail_periksa_lab dpl ON dpl.no_rawat = per.no_rawat
                           AND dpl.tgl_periksa = per.tgl_periksa
                           AND dpl.jam = per.jam
@@ -5815,6 +5816,7 @@ $stmt = $this->mysql->prepare($sql);
                           AND per.tgl_periksa = pl.tgl_hasil
                           AND per.jam = pl.jam_hasil
                           AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
                         INNER JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
                           AND per.tgl_periksa = skl.tgl_periksa
                           AND per.jam = skl.jam
@@ -5834,6 +5836,7 @@ $stmt = $this->mysql->prepare($sql);
                           AND per.tgl_periksa = pl.tgl_hasil
                           AND per.jam = pl.jam_hasil
                           AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
                         INNER JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
                           AND per.tgl_periksa = skl.tgl_periksa
                           AND per.jam = skl.jam
@@ -5878,6 +5881,7 @@ $stmt = $this->mysql->prepare($sql);
                           AND per.tgl_periksa = pl.tgl_hasil
                           AND per.jam = pl.jam_hasil
                           AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
                         INNER JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
                           AND per.tgl_periksa = skl.tgl_periksa
                           AND per.jam = skl.jam
@@ -5897,6 +5901,7 @@ $stmt = $this->mysql->prepare($sql);
                           AND per.tgl_periksa = pl.tgl_hasil
                           AND per.jam = pl.jam_hasil
                           AND per.dokter_perujuk = pl.dokter_perujuk
+              AND per.kd_jenis_prw = pdpl.kd_jenis_prw
                         INNER JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat
                           AND per.tgl_periksa = skl.tgl_periksa
                           AND per.jam = skl.jam

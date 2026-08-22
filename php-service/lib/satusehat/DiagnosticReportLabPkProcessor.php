@@ -187,7 +187,7 @@ class SatuSehatDiagnosticReportLabPkProcessor
 
             // Check local SQLite state
             $localState = $this->db->getDiagnosticReportLabPkLocalState($noorder, $idTemplate, $code);
-            if (in_array($localState, ['skipped', 'invalid_code'], true)) {
+            if (in_array($localState, ['updated', 'skipped', 'invalid_code', 'privacy_error', 'failed_rule'], true)) {
                 $this->skipCount++;
                 continue;
             }

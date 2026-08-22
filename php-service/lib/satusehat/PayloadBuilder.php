@@ -69,17 +69,17 @@ class SatuSehatPayloadBuilder
 
     /** Raw SIMRS unit (normalized uppercase, spaces removed) → canonical code. */
     private const DRUG_FORM_MAP = [
-        'TAB' => 'TAB', 'TABLET' => 'TAB',
+        'TAB' => 'TAB', 'TABLET' => 'TAB', 'TABL' => 'TAB', 'ENTAB' => 'TAB',
         'CAP' => 'CAP', 'CAPSUL' => 'CAP', 'CAPSULE' => 'CAP', 'KAPSUL' => 'CAP', 'KAPLET' => 'CAP',
         'SUPP' => 'SUPP', 'SUPPOS' => 'SUPP', 'SUPPOSITORIA' => 'SUPP',
         'SYR' => 'SYR', 'SIRUP' => 'SYR', 'SYRUP' => 'SYR',
         'INH' => 'INH', 'INHAL' => 'INH', 'INHALER' => 'INH',
-        'DROP' => 'DROP', 'DROPS' => 'DROP', 'TETES' => 'DROP',
+        'DROP' => 'DROP', 'DROPS' => 'DROP', 'TETES' => 'DROP', 'DRP' => 'DROP',
         'OINT' => 'OINT', 'OINTMENT' => 'OINT', 'SALEP' => 'OINT',
         'CREAM' => 'CREAM', 'KRIM' => 'CREAM',
         'GEL' => 'GEL',
         'SPRAY' => 'SPRAY', 'SEMPROT' => 'SPRAY',
-        'VIAL' => 'VIAL', 'AMP' => 'AMP', 'AMPUL' => 'AMP', 'AMPOULE' => 'AMP',
+        'VIAL' => 'VIAL', 'AMP' => 'AMP', 'AMPUL' => 'AMP', 'AMPOULE' => 'AMP', 'INJ' => 'AMP',
         'SOL' => 'SOL', 'SOLUTION' => 'SOL',
         'SUSP' => 'SUSP', 'SUSPENSI' => 'SUSP', 'SUSPENSION' => 'SUSP',
         'PIL' => 'PILL', 'PILL' => 'PILL',
@@ -279,6 +279,133 @@ class SatuSehatPayloadBuilder
      * @param string|null $idEpisodeOfCare EpisodeOfCare ID to link (optional)
      * @return array
      */
+    /**
+     * Canonical Encounter timeline boundaries, shared by all three sync
+     * phases (create/in-progress/finished) so every phase tells the same
+     * story regardless of when a poli->ranap conversion happens.
+     *
+     *   T0 = patient arrival ......... reg_periksa.tgl_registrasi + jam_reg
+     *   T1 = care begins ............. Ranap: FIRST kamar_inap admission
+     *                                  Ralan: mutasi_berkas.dikirim -> exam time
+     *                                  (missing/contradictory -> collapses to T0)
+     *   T2 = care ends ............... nota_jalan/nota_inap (waktu_pulang)
+     *                                  fallback Ranap: final kamar_inap discharge
+     *                                  fallback Ralan: mutasi_berkas.kembali
+     *
+     * Returns ['t0'=>?string,'t1'=>?string,'t2'=>?string] as WIB timestamps;
+     * ordering T0 <= T1 <= T2 is enforced — violating boundaries are dropped,
+     * never sent.
+     */
+    public static function resolveEncounterBoundaries(array $p): array
+    {
+        $isRanap = ($p['status_lanjut'] ?? '') === 'Ranap';
+
+        // Candidate parsing MUST NOT fall back to registration internally
+        // (empty row = no fallback), otherwise garbage exam times silently
+        // masquerade as real boundaries. Datetime-tolerant: full timestamp
+        // in date column wins; zero datetimes ('0000-00-00', empty) return null.
+        $parse = function (?string $d, ?string $t = null): ?string {
+            if ($d === null) {
+                return null;
+            }
+            $d = trim($d);
+            if ($d === '' || $d === '0000-00-00' || $d === '0000-00-00 00:00:00' || str_starts_with($d, '0000-')) {
+                return null;
+            }
+            if ($t !== null) {
+                $t = trim($t);
+                if ($t === '' || $t === '00:00:00') {
+                    $t = null;
+                }
+            }
+            if (preg_match('/[ T]\d{2}:\d{2}/', $d) === 1) {
+                // Full timestamp already embedded — ignore separate jam.
+                $value = self::sanitizeDateTime($d, null, []);
+                return ($value === '' || $value === null) ? null : $value;
+            }
+            $value = self::sanitizeDateTime($d, $t, []);
+            return ($value === '' || $value === null) ? null : $value;
+        };
+
+        // T0 — arrival.
+        $t0 = $parse($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null);
+
+        // T1 — care begins.
+        $t1 = null;
+        if ($isRanap) {
+            // Timeline uses the EARLIEST admission: room transfers must not
+            // move the encounter start (Database overlays the first stay).
+            $t1 = $parse($p['tgl_masuk'] ?? null, $p['jam_masuk'] ?? null);
+        }
+        if ($t1 === null) {
+            foreach ([
+                $parse($p['mutasi_dikirim'] ?? null),       // file dispatched to clinic (primary for Ralan)
+                $parse($p['waktu_perawatan'] ?? null),      // examination time (fallback for Ralan)
+            ] as $candidate) {
+                if ($candidate !== null) {
+                    $t1 = $candidate;
+                    break;
+                }
+            }
+        }
+        if ($t1 !== null && $t0 !== null && strtotime($t1) < strtotime($t0)) {
+            $t1 = null; // collapse: care cannot begin before arrival
+        }
+
+        // T2 — care ends.
+        $t2 = $parse($p['waktu_pulang'] ?? null);
+        if ($t2 === null) {
+            $t2 = $isRanap
+                ? $parse($p['kamar_tgl_keluar'] ?? null, $p['kamar_jam_keluar'] ?? null)
+                : $parse($p['mutasi_kembali'] ?? null);
+        }
+        if ($t2 !== null) {
+            $careStart = $t1 ?? $t0;
+            if ($careStart === null || strtotime($t2) < strtotime($careStart)) {
+                $t2 = null; // drop contradictory end rather than send it
+            }
+        }
+
+        return ['t0' => $t0, 't1' => $t1, 't2' => $t2];
+    }
+
+    /**
+     * Contiguous status history from resolved boundaries. Every entry hands
+     * off exactly where the next begins:
+     *   arrived(T0->T1) -> in-progress(T1->T2) -> finished(T2->T2)
+     * A missing T1 leaves arrived open-ended and starts in-progress at T0.
+     */
+    public static function buildEncounterStatusHistory(array $boundaries, string $targetStatus): array
+    {
+        $t0 = $boundaries['t0'] ?? null;
+        $t1 = $boundaries['t1'] ?? null;
+        $t2 = $boundaries['t2'] ?? null;
+
+        $history = [];
+        $arrived = ['status' => 'arrived', 'period' => ['start' => $t0]];
+        if ($t1 !== null) {
+            $arrived['period']['end'] = $t1;
+        }
+        $history[] = $arrived;
+
+        if (in_array($targetStatus, ['in-progress', 'finished'], true)) {
+            $inProgress = ['status' => 'in-progress', 'period' => ['start' => $t1 ?? $t0]];
+            if ($targetStatus === 'finished' && $t2 !== null) {
+                $inProgress['period']['end'] = $t2;
+            }
+            $history[] = $inProgress;
+        }
+
+        if ($targetStatus === 'finished' && $t2 !== null) {
+            $history[] = [
+                'status' => 'finished',
+                'period' => ['start' => $t2, 'end' => $t2],
+            ];
+        }
+
+        return $history;
+    }
+
     public static function encounter(
         string $orgId,
         array $p,
@@ -299,71 +426,13 @@ class SatuSehatPayloadBuilder
             $classDisplay = $isRalan ? 'ambulatory' : 'inpatient encounter';
         }
 
-        // For Ranap, use admission time as start instead of registration time
-        $startWaktu = $isRanap && !empty($p['tgl_masuk'])
-            ? self::sanitizeDateTime($p['tgl_masuk'] ?? null, $p['jam_masuk'] ?? null, $p)
-            : self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
+        // Unified contiguous timeline (identical across poli/IGD/Ranap and
+        // conversions — see resolveEncounterBoundaries()).
+        $boundaries = self::resolveEncounterBoundaries($p);
+        $startWaktu = $boundaries['t0'];          // period.start = arrival
+        $finishedWaktu = $boundaries['t2'];       // period.end = care end
 
-        $inProgressWaktu = self::sanitizeDateTime($p['waktu_perawatan'] ?? null, null, $p);
-        $finishedWaktu = !empty($p['waktu_pulang']) ? self::sanitizeDateTime($p['waktu_pulang'], null, $p) : null;
-
-        // Build history array
-        $statusHistory = [];
-
-        // For Ranap, the first status is 'in-progress' (not 'arrived')
-        if ($isRanap && $classCode === 'IMP') {
-            // Inpatient starts at in-progress
-            $statusHistory[] = [
-                'status' => 'in-progress',
-                'period' => [
-                    'start' => $startWaktu,
-                ]
-            ];
-            if ($status === 'finished' && $finishedWaktu) {
-                $statusHistory[0]['period']['end'] = $finishedWaktu;
-                $statusHistory[] = [
-                    'status' => 'finished',
-                    'period' => [
-                        'start' => $finishedWaktu,
-                        'end'   => $finishedWaktu
-                    ]
-                ];
-            }
-        } else {
-            // Ralan/IGD: arrived -> in-progress -> finished
-            $statusHistory[] = [
-                'status' => 'arrived',
-                'period' => [
-                    'start' => $startWaktu,
-                ]
-            ];
-
-            if (in_array($status, ['in-progress', 'finished'])) {
-                $statusHistory[0]['period']['end'] = $inProgressWaktu;
-
-                $historyInProgress = [
-                    'status' => 'in-progress',
-                    'period' => [
-                        'start' => $inProgressWaktu,
-                    ]
-                ];
-
-                if ($status === 'finished' && $finishedWaktu) {
-                    $historyInProgress['period']['end'] = $finishedWaktu;
-                }
-                $statusHistory[] = $historyInProgress;
-            }
-
-            if ($status === 'finished' && $finishedWaktu) {
-                $statusHistory[] = [
-                    'status' => 'finished',
-                    'period' => [
-                        'start' => $finishedWaktu,
-                        'end'   => $finishedWaktu
-                    ]
-                ];
-            }
-        }
+        $statusHistory = self::buildEncounterStatusHistory($boundaries, $status);
 
         // Build location entries with period and ServiceClass extension.
         // Never emit an empty Location/ reference (rule 10120) — when the
@@ -823,17 +892,20 @@ class SatuSehatPayloadBuilder
                     ]
                 ]
             ],
-'code' => [
+            'code' => [
                 'coding' => [
                     [
-                        // Mapping tables carry trailing spaces (rule 10010) —
-                        // trim; missing system falls back to LOINC when the
-                        // code looks like one (never an empty string).
+                        // Explicit mapping fields if present; default to ICD-10
+                        // coding from diagnosa_pasien (kd_penyakit / nm_penyakit).
                         'system'  => !empty(trim((string) ($p['system'] ?? '')))
                             ? trim((string) $p['system'])
-                            : (preg_match('/^\d+-\d/', trim((string) ($p['code'] ?? ''))) ? 'http://loinc.org' : ''),
-                        'code'    => trim((string) ($p['code'] ?? '')),
-                        'display' => trim((string) ($p['display'] ?? ''))
+                            : 'http://hl7.org/fhir/sid/icd-10',
+                        'code'    => !empty(trim((string) ($p['code'] ?? '')))
+                            ? trim((string) $p['code'])
+                            : $kdPenyakit,
+                        'display' => !empty(trim((string) ($p['display'] ?? '')))
+                            ? trim((string) $p['display'])
+                            : trim((string) ($p['nm_penyakit'] ?? ''))
                     ]
                 ]
             ],
@@ -1152,8 +1224,11 @@ class SatuSehatPayloadBuilder
         // Add period if available
         $startWaktu = self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
         $endWaktu = !empty($p['waktu_pulang']) ? self::sanitizeDateTime($p['waktu_pulang'], null, $p) : null;
+        if ($endWaktu !== null && strtotime($endWaktu) < strtotime($startWaktu)) {
+            $endWaktu = null; // Drop contradictory end date (Rule: start <= end)
+        }
         $period = ['start' => $startWaktu];
-        if ($endWaktu) {
+        if ($endWaktu !== null) {
             $period['end'] = $endWaktu;
         }
         $payload['period'] = $period;
@@ -1462,10 +1537,10 @@ class SatuSehatPayloadBuilder
         ?string $idMedicationRequest = null
     ): array {
         $p = self::cleanMappingRow($p);
-        // Parse signa aturan pakai
+        // Parse signa aturan pakai (e.g. "3x1", "1x0.5") — ensure positive values
         $signa1 = 1.0;
         $signa2 = 1.0;
-        $aturan = $p['aturan_pakai'] ?? '';
+        $aturan = $p['aturan_pakai'] ?? $p['aturan'] ?? '';
         $parts = explode('x', strtolower($aturan));
         if (isset($parts[0])) {
             $signa1 = \SatuSehatNumber::parse($parts[0]) ?? 1.0;
@@ -1557,7 +1632,7 @@ class SatuSehatPayloadBuilder
                     'patientInstruction' => $aturan,
                     'timing' => [
                         'repeat' => [
-                            'frequency'  => (int)$signa2,
+                            'frequency'  => max(1, (int) round($signa2)),
                             'period'     => 1,
                             'periodUnit' => 'd'
                         ]
@@ -1621,16 +1696,22 @@ class SatuSehatPayloadBuilder
         ?string $idMedicationDispense = null
     ): array {
         $p = self::cleanMappingRow($p);
-        // Parse signa aturan pakai
+        // Parse signa aturan pakai (e.g. "3x1", "1x0.5") — ensure positive values
         $signa1 = 1.0;
         $signa2 = 1.0;
-        $aturan = $p['aturan'] ?? '';
+        $aturan = $p['aturan'] ?? $p['aturan_pakai'] ?? '';
         $parts = explode('x', strtolower($aturan));
         if (isset($parts[0])) {
-            $signa1 = \SatuSehatNumber::parse($parts[0]) ?? 1.0;
+            $parsed1 = \SatuSehatNumber::parse($parts[0]);
+            if ($parsed1 !== null && $parsed1 > 0) {
+                $signa1 = $parsed1;
+            }
         }
         if (isset($parts[1])) {
-            $signa2 = \SatuSehatNumber::parse($parts[1]) ?? 1.0;
+            $parsed2 = \SatuSehatNumber::parse($parts[1]);
+            if ($parsed2 !== null && $parsed2 > 0) {
+                $signa2 = $parsed2;
+            }
         }
 
         // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
@@ -1703,7 +1784,7 @@ class SatuSehatPayloadBuilder
                     'text'     => $aturan,
                     'timing' => [
                         'repeat' => [
-                            'frequency'  => (int)$signa2,
+                            'frequency'  => max(1, (int) round($signa2)),
                             'period'     => 1,
                             'periodUnit' => 'd'
                         ]
@@ -1785,16 +1866,22 @@ class SatuSehatPayloadBuilder
         ?string $idMedicationStatement = null
     ): array {
         $p = self::cleanMappingRow($p);
-        // Parse signa aturan pakai
+        // Parse signa aturan pakai (e.g. "3x1", "1x0.5") — ensure positive values
         $signa1 = 1.0;
         $signa2 = 1.0;
-        $aturan = $p['aturan_pakai'] ?? '';
+        $aturan = $p['aturan_pakai'] ?? $p['aturan'] ?? '';
         $parts = explode('x', strtolower($aturan));
         if (isset($parts[0])) {
-            $signa1 = \SatuSehatNumber::parse($parts[0]) ?? 1.0;
+            $parsed1 = \SatuSehatNumber::parse($parts[0]);
+            if ($parsed1 !== null && $parsed1 > 0) {
+                $signa1 = $parsed1;
+            }
         }
         if (isset($parts[1])) {
-            $signa2 = \SatuSehatNumber::parse($parts[1]) ?? 1.0;
+            $parsed2 = \SatuSehatNumber::parse($parts[1]);
+            if ($parsed2 !== null && $parsed2 > 0) {
+                $signa2 = $parsed2;
+            }
         }
 
         // Format dates: e.g. "2026-02-09 10:15:30" -> "2026-02-09T10:15:30+07:00"
@@ -1830,7 +1917,7 @@ class SatuSehatPayloadBuilder
             'category' => [
                 'coding' => [
                     [
-                        'system'  => 'http://terminology.hl7.org/fhir/CodeSystem/medication-statement-category',
+                        'system'  => 'http://terminology.hl7.org/CodeSystem/medication-statement-category',
                         'code'    => 'community',
                         'display' => 'Community'
                     ]
@@ -1849,7 +1936,7 @@ class SatuSehatPayloadBuilder
                     'text'   => $aturan,
                     'timing' => [
                         'repeat' => [
-                            'frequency'  => (int)$signa2,
+                            'frequency'  => max(1, (int) round($signa2)),
                             'period'     => 1,
                             'periodUnit' => 'd'
                         ]
@@ -2815,9 +2902,12 @@ class SatuSehatPayloadBuilder
                 [
                     'reference' => 'ServiceRequest/' . $p['id_servicerequest']
                 ]
-            ],
-            'conclusion' => $conclusion
+            ]
         ];
+
+        if ($conclusion !== '') {
+            $payload['conclusion'] = $conclusion;
+        }
 
         if (!empty($idDiagnosticReport) && $idDiagnosticReport !== '-') {
             $payload['id'] = $idDiagnosticReport;

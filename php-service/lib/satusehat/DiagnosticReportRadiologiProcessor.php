@@ -99,14 +99,6 @@ class SatuSehatDiagnosticReportRadiologiProcessor
                 continue;
             }
 
-            // Dependency check: Specimen must be synced first
-            if (empty($p['id_specimen']) || $p['id_specimen'] === '-') {
-                $this->log->warning("[PHASE 1] {$noorder} [{$kdJenisPrw}]: Missing Specimen ID. Skipped.");
-                $this->db->updateDiagnosticReportRadiologiLocalState($noorder, $kdJenisPrw, 'skipped_missing_specimen');
-                $this->skipCount++;
-                continue;
-            }
-
             // Dependency check: Observation must be synced first
             if (empty($p['id_observation']) || $p['id_observation'] === '-') {
                 $this->log->warning("[PHASE 1] {$noorder} [{$kdJenisPrw}]: Missing Observation ID. Skipped.");

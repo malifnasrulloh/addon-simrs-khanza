@@ -175,13 +175,6 @@ $isCode = \SatuSehatClient::classifyError($result) === 'invalid_code';
             $idPasien = $this->db->getIhsPatient($p['no_ktp']);
             if (!$idPasien) {
                 $this->log->warning("[PHASE 2] [SKIPPED] Patient {$p['no_rkm_medis']} has no valid IHS ID.");
-                $this->failCount++;
-                continue;
-            }
-
-            $idPasien = $this->db->getIhsPatient($p['no_ktp']);
-            if (!$idPasien) {
-                $this->log->warning("[PHASE 2] [SKIPPED] Patient {$p['no_rkm_medis']} has no valid IHS ID.");
                 $this->skipCount++;
                 continue;
             }
