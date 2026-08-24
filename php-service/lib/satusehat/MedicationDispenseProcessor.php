@@ -104,7 +104,7 @@ class SatuSehatMedicationDispenseProcessor
             }
 
             // Authorizing prescription lookup (MedicationRequest)
-            $idMedicationRequest = $this->db->getMedicationRequestId($noResep, $kodeBrng);
+            $idMedicationRequest = $this->db->getMedicationRequestId($noResep, $kodeBrng, $p['no_racik'] ?? '');
             if (empty($idMedicationRequest)) {
                 $reqState = $this->db->getMedicationRequestLocalState($noResep, $kodeBrng, '');
                 if (in_array($reqState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {

@@ -1390,17 +1390,26 @@ class SatuSehatDatabase
 
     // ─── CONDITION STATE TRACKING ──────────────────────────────────────────────
 
-    public function getConditionLocalState(string $noRawat, string $kdPenyakit): ?string
+    public function getConditionLocalState(string $noRawat, string $kdPenyakit, string $statusRawat = ''): ?string
     {
+        if ($statusRawat !== '') {
+            $compositeKey = $noRawat . '_' . $kdPenyakit . '_' . $statusRawat;
+            $stmt = $this->sqliteQuery("SELECT status FROM condition_state WHERE composite_key = :ck", ['ck' => $compositeKey]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                return $row['status'];
+            }
+        }
         $compositeKey = $noRawat . '_' . $kdPenyakit;
         $stmt = $this->sqliteQuery("SELECT status FROM condition_state WHERE composite_key = :ck", ['ck' => $compositeKey]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return $row ? $row['status'] : null;
     }
 
-    public function updateConditionLocalState(string $noRawat, string $kdPenyakit, string $status): void
+    public function updateConditionLocalState(string $noRawat, string $kdPenyakit, string $status, string $statusRawat = ''): void
     {
-        $compositeKey = $noRawat . '_' . $kdPenyakit;
+        $suffix = $statusRawat !== '' ? '_' . $statusRawat : '';
+        $compositeKey = $noRawat . '_' . $kdPenyakit . $suffix;
         $stmt = $this->sqliteQuery("
             INSERT INTO condition_state (composite_key, status, updated_at) 
             VALUES (:ck, :st, CURRENT_TIMESTAMP)
@@ -1929,17 +1938,26 @@ class SatuSehatDatabase
 
     // ─── PROCEDURE STATE TRACKING ──────────────────────────────────────────────
 
-    public function getProcedureLocalState(string $noRawat, string $kode): ?string
+    public function getProcedureLocalState(string $noRawat, string $kode, string $statusRawat = ''): ?string
     {
+        if ($statusRawat !== '') {
+            $compositeKey = $noRawat . '_' . $kode . '_' . $statusRawat;
+            $stmt = $this->sqliteQuery("SELECT status FROM procedure_state WHERE composite_key = :ck", ['ck' => $compositeKey]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                return $row['status'];
+            }
+        }
         $compositeKey = $noRawat . '_' . $kode;
         $stmt = $this->sqliteQuery("SELECT status FROM procedure_state WHERE composite_key = :ck", ['ck' => $compositeKey]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return $row ? $row['status'] : null;
     }
 
-    public function updateProcedureLocalState(string $noRawat, string $kode, string $status): void
+    public function updateProcedureLocalState(string $noRawat, string $kode, string $status, string $statusRawat = ''): void
     {
-        $compositeKey = $noRawat . '_' . $kode;
+        $suffix = $statusRawat !== '' ? '_' . $statusRawat : '';
+        $compositeKey = $noRawat . '_' . $kode . $suffix;
         $stmt = $this->sqliteQuery("
             INSERT INTO procedure_state (composite_key, status, updated_at) 
             VALUES (:ck, :st, CURRENT_TIMESTAMP)
@@ -2803,9 +2821,26 @@ class SatuSehatDatabase
     /**
      * Helper to retrieve ID of synced MedicationRequest (if any).
      */
-    public function getMedicationRequestId(string $noResep, string $kodeBrng): string
+    public function getMedicationRequestId(string $noResep, string $kodeBrng, string $noRacik = ''): string
     {
-        $sql = "SELECT id_medicationrequest FROM satu_sehat_medicationrequest WHERE no_resep = :nr AND kode_brng = :kb";
+        if ($noRacik !== '') {
+            $sql = "SELECT id_medicationrequest FROM satu_sehat_medicationrequest_racikan WHERE no_resep = :nr AND kode_brng = :kb AND no_racik = :nrc LIMIT 1";
+            $stmt = $this->mysql->prepare($sql);
+            $stmt->execute(['nr' => $noResep, 'kb' => $kodeBrng, 'nrc' => $noRacik]);
+            $id = $stmt->fetchColumn();
+            if ($id) {
+                return (string) $id;
+            }
+        }
+        $sql = "SELECT id_medicationrequest FROM satu_sehat_medicationrequest WHERE no_resep = :nr AND kode_brng = :kb LIMIT 1";
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute(['nr' => $noResep, 'kb' => $kodeBrng]);
+        $id = $stmt->fetchColumn();
+        if ($id) {
+            return (string) $id;
+        }
+        // Fallback: check racikan table in case no_racik was omitted
+        $sql = "SELECT id_medicationrequest FROM satu_sehat_medicationrequest_racikan WHERE no_resep = :nr AND kode_brng = :kb LIMIT 1";
         $stmt = $this->mysql->prepare($sql);
         $stmt->execute(['nr' => $noResep, 'kb' => $kodeBrng]);
         return $stmt->fetchColumn() ?: '';

@@ -698,6 +698,9 @@ class SatuSehatPayloadBuilder
     ): array {
         $startWaktu = self::sanitizeDateTime($p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p);
         $finishedWaktu = !empty($p['waktu_pulang']) ? self::sanitizeDateTime($p['waktu_pulang'], null, $p) : null;
+        if ($finishedWaktu !== null && strtotime($finishedWaktu) < strtotime($startWaktu)) {
+            $finishedWaktu = null; // Drop contradictory end date (Rule: start <= end)
+        }
 
         $statusHistory = [
             [
@@ -1047,11 +1050,13 @@ class SatuSehatPayloadBuilder
                 'text' => $textVal
             ];
         } elseif ($def['type'] === 'blood_pressure') {
-            // Tensi component structure
-            // DB format: "120/80"
+            // Tensi component structure (e.g. "120/80") — must have valid positive readings
             $parts = explode('/', $val);
             $systolic = \SatuSehatNumber::parse($parts[0] ?? '') ?? 0.0;
             $diastolic = \SatuSehatNumber::parse($parts[1] ?? '') ?? 0.0;
+            if ($systolic <= 0.0 || $diastolic <= 0.0) {
+                return []; // Invalid blood pressure reading
+            }
 
             $payload['component'] = [
                 [

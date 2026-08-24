@@ -231,22 +231,20 @@ class SatuSehatEpisodeOfCareProcessor
                 $dischargeWaktu = SatuSehatPayloadBuilder::sanitizeDateTime($p['waktu_pulang'], null, $p);
             }
             if (!$dischargeWaktu) {
-                // Fallback: start + 1 day
+                // Fallback: start + 1 day with consistent +07:00 timezone
                 try {
                     $startDt = new \DateTime($startWaktu);
                     $endDt = (clone $startDt)->modify('+1 day');
-                    $dischargeWaktu = $endDt->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d\TH:i:s\Z');
+                    $dischargeWaktu = $endDt->format('Y-m-d\TH:i:s+07:00');
                     $this->log->info("[PHASE 2] {$noRawat}: No discharge time → fallback to start+1day ({$dischargeWaktu})");
                 } catch (\Throwable $e) {
-                    $dischargeWaktu = (new \DateTime('now', new \DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z');
+                    $dischargeWaktu = (new \DateTime('now', new \DateTimeZone('Asia/Jakarta')))->format('Y-m-d\TH:i:s+07:00');
                     $this->log->warning("[PHASE 2] {$noRawat}: Cannot parse start → fallback to NOW ({$dischargeWaktu})");
                 }
             }
-            // Guard: sanitizeDateTime returns '' for unparseable dates — an
-            // empty period.start breaks the server's FHIRPath constraint
-            // (the merge_failed errors). Never emit an empty period field.
-            if ($startWaktu === '') {
-                $startWaktu = $dischargeWaktu;
+            // Enforce start <= end constraint
+            if (strtotime($dischargeWaktu) < strtotime($startWaktu)) {
+                $dischargeWaktu = $startWaktu;
             }
 
             // ── Build PATCH operations (dynamic ─ only include what we have) ──

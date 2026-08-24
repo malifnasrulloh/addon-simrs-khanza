@@ -77,6 +77,12 @@ class SatuSehatProcedureProcessor
             $statusRawat = $p['status'];
             $idEncounter = $p['id_encounter'];
 
+            $localState = $this->db->getProcedureLocalState($noRawat, $kode, $statusRawat);
+            if ($localState === 'active' || $localState === 'updated' || $localState === 'privacy_error' || $localState === 'failed_rule' || $localState === 'invalid_code') {
+                $this->skipCount++;
+                continue;
+            }
+
             $nik = $p['no_ktp'];
 
             $idPasien = $this->db->getIhsPatient($nik);
@@ -99,7 +105,7 @@ class SatuSehatProcedureProcessor
             $idProcedure = $this->resolveDuplicateProcedure($idPasien, $idEncounter, $kode);
             if ($idProcedure) {
                 $this->db->saveProcedure($noRawat, $kode, $statusRawat, $idProcedure);
-                $this->db->updateProcedureLocalState($noRawat, $kode, 'active');
+                $this->db->updateProcedureLocalState($noRawat, $kode, 'active', $statusRawat);
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered existing Procedure {$idProcedure} from Satu Sehat (ICD-9: {$kode})");
                 $this->successCount++;
                 continue;
@@ -119,25 +125,25 @@ class SatuSehatProcedureProcessor
             if ($result['success'] && isset($result['data']['id'])) {
                 $idProcedure = $result['data']['id'];
                 $this->db->saveProcedure($noRawat, $kode, $statusRawat, $idProcedure);
-                $this->db->updateProcedureLocalState($noRawat, $kode, 'active');
+                $this->db->updateProcedureLocalState($noRawat, $kode, 'active', $statusRawat);
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created Procedure {$idProcedure}");
                 $this->successCount++;
             } else {
                 $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
                 // Cache permanent API failures
-$isPrivacy = \SatuSehatClient::classifyError($result) === 'privacy_error';
-$isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
-$isCode = \SatuSehatClient::classifyError($result) === 'invalid_code';
+                $isPrivacy = \SatuSehatClient::classifyError($result) === 'privacy_error';
+                $isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
+                $isCode = \SatuSehatClient::classifyError($result) === 'invalid_code';
 
                 if ($isPrivacy) {
-                    $this->db->updateProcedureLocalState($noRawat, $kode, 'privacy_error');
+                    $this->db->updateProcedureLocalState($noRawat, $kode, 'privacy_error', $statusRawat);
                     $this->log->warning("[PHASE 1] {$noRawat}: ✗ Permanent Privacy Error -> {$errorMessage}");
                 } elseif ($isRule) {
-                    $this->db->updateProcedureLocalState($noRawat, $kode, 'failed_rule');
+                    $this->db->updateProcedureLocalState($noRawat, $kode, 'failed_rule', $statusRawat);
                     $this->log->warning("[PHASE 1] {$noRawat}: ✗ Permanent Rule Error -> {$errorMessage}");
                 } elseif ($isCode) {
-                    $this->db->updateProcedureLocalState($noRawat, $kode, 'invalid_code');
+                    $this->db->updateProcedureLocalState($noRawat, $kode, 'invalid_code', $statusRawat);
                     $this->log->warning("[PHASE 1] {$noRawat}: ✗ Permanent Code Error -> {$errorMessage}");
                 } else {
                     $this->log->warning("[PHASE 1] {$noRawat}: ✗ Failed -> " . $errorMessage);
@@ -154,7 +160,7 @@ $isCode = \SatuSehatClient::classifyError($result) === 'invalid_code';
         }
 
         if (empty($patients)) {
-            $this->log->info("[PHASE 2] No pending procedures to PATCH.");
+            $this->log->info("[PHASE 2] No pending Procedure to PATCH.");
             return;
         }
 
@@ -163,8 +169,9 @@ $isCode = \SatuSehatClient::classifyError($result) === 'invalid_code';
         foreach ($patients as $p) {
             $noRawat = $p['no_rawat'];
             $kode = $p['kode'];
+            $statusRawat = $p['status'] ?? '';
             $idProcedure = $p['id_procedure'];
-            $localState = $this->db->getProcedureLocalState($noRawat, $kode);
+            $localState = $this->db->getProcedureLocalState($noRawat, $kode, $statusRawat);
 
             if ($localState === 'updated') {
                 $this->skipCount++;
@@ -197,7 +204,7 @@ $isCode = \SatuSehatClient::classifyError($result) === 'invalid_code';
             $result = $this->api->patch("/Procedure/{$idProcedure}", $ops, $payload);
 
             if ($result['success']) {
-                $this->db->updateProcedureLocalState($noRawat, $kode, 'updated');
+                $this->db->updateProcedureLocalState($noRawat, $kode, 'updated', $statusRawat);
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Procedure {$idProcedure} via PATCH");
                 $this->successCount++;
             } else {

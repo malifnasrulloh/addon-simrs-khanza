@@ -76,7 +76,7 @@ class SatuSehatConditionProcessor
             $kdPenyakit = $p['kd_penyakit'];
             $statusRawat = $p['status'];
 
-            $localState = $this->db->getConditionLocalState($noRawat, $kdPenyakit);
+            $localState = $this->db->getConditionLocalState($noRawat, $kdPenyakit, $statusRawat);
             if ($localState === 'active' || $localState === 'updated' || $localState === 'skipped' || $localState === 'invalid_code') {
                 $this->skipCount++;
                 continue;
@@ -111,7 +111,7 @@ class SatuSehatConditionProcessor
             // null means the ICD-10 code is empty or invalid — skip before sending to API
             if ($payload === null) {
                 $this->log->warning("[PHASE 1] {$noRawat}: ✗ Skipped -> Empty or invalid ICD-10 code '{$kdPenyakit}' (pre-validation)");
-                $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code');
+                $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code', $statusRawat);
                 $this->skipCount++;
                 continue;
             }
@@ -122,7 +122,7 @@ class SatuSehatConditionProcessor
             if ($result['success'] && isset($result['data']['id'])) {
                 $idCondition = $result['data']['id'];
                 $this->db->saveCondition($noRawat, $kdPenyakit, $statusRawat, $idCondition);
-                $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'active');
+                $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'active', $statusRawat);
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created Condition {$idCondition}");
                 $this->successCount++;
             } else {
@@ -134,7 +134,7 @@ class SatuSehatConditionProcessor
 
                 if ($isValidationError) {
                     $this->log->warning("[PHASE 1] {$noRawat}: ✗ Skipped -> Invalid ICD-10 Code '{$kdPenyakit}' (Satu Sehat Terminology rejected it)");
-                    $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code');
+                    $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code', $statusRawat);
                     $this->skipCount++;
                 } else if (stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("[PHASE 1] {$noRawat}: Duplicated Condition detected. Searching existing records...");
@@ -142,7 +142,7 @@ class SatuSehatConditionProcessor
 
                     if ($idCondition) {
                         $this->db->saveCondition($noRawat, $kdPenyakit, $statusRawat, $idCondition);
-                        $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'active');
+                        $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'active', $statusRawat);
                         $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered Condition {$idCondition} from Satu Sehat");
                         $this->successCount++;
                     } else {
@@ -174,7 +174,8 @@ class SatuSehatConditionProcessor
             $noRawat = $p['no_rawat'];
             $kdPenyakit = $p['kd_penyakit'];
             $idCondition = $p['id_condition'];
-            $localState = $this->db->getConditionLocalState($noRawat, $kdPenyakit);
+            $statusRawat = $p['status'] ?? '';
+            $localState = $this->db->getConditionLocalState($noRawat, $kdPenyakit, $statusRawat);
 
             if ($localState === 'updated' || $localState === 'skipped' || $localState === 'invalid_code') {
                 $this->skipCount++;
@@ -206,7 +207,7 @@ class SatuSehatConditionProcessor
             $result = $this->api->patch("/Condition/{$idCondition}", $ops);
 
             if ($result['success']) {
-                $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'updated');
+                $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'updated', $statusRawat);
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Condition {$idCondition} via PATCH");
                 $this->successCount++;
             } else {
@@ -218,7 +219,7 @@ class SatuSehatConditionProcessor
 
                 if ($isValidationError) {
                     $this->log->warning("[PHASE 2] {$noRawat}: ✗ Skipped -> Invalid ICD-10 Code '{$kdPenyakit}' (Satu Sehat Terminology rejected it on update)");
-                    $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code');
+                    $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'invalid_code', $statusRawat);
                     $this->skipCount++;
                 } else {
                     $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . $errorMessage);

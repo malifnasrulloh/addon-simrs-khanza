@@ -83,6 +83,12 @@ class SatuSehatObservationTTVProcessor
                 $def
             );
 
+            if (empty($payload)) {
+                $this->log->warning("  [SKIP] {$noRawat} / {$ttvType}: Invalid numeric reading '{$value}'");
+                $delta['skip']++;
+                continue;
+            }
+
             $this->log->info("  [POST] {$noRawat} / {$ttvType} = {$value}");
             $result = $this->api->post('/Observation', $payload);
 

@@ -235,6 +235,12 @@ class SatuSehatImagingStudyProcessor
                     $scheduledTime = str_pad($scheduledTime, 6, '0');
                 }
 
+                $studyDate = !empty($tgl_periksa) ? str_replace('-', '', substr($tgl_periksa, 0, 10)) : $scheduledDate;
+                $studyTime = !empty($jam_periksa) ? str_replace(':', '', $jam_periksa) : $scheduledTime;
+                if (strlen($studyTime) < 6) {
+                    $studyTime = str_pad($studyTime, 6, '0');
+                }
+
                 $dobDicom = str_replace('-', '', substr($tgl_lahir, 0, 10));
                 $sexDicom = ($jk === 'L') ? 'M' : (($jk === 'P') ? 'F' : 'O');
                 $patientNameDicom = $this->sanitizeDicomPersonName($nm_pasien);
@@ -247,8 +253,8 @@ class SatuSehatImagingStudyProcessor
                     'PatientName' => $patientNameDicom,
                     'PatientBirthDate' => $dobDicom,
                     'PatientSex' => $sexDicom,
-                    'StudyDate' => $scheduledDate,
-                    'StudyTime' => $scheduledTime,
+                    'StudyDate' => $studyDate,
+                    'StudyTime' => $studyTime,
                     'Modality' => $modality,
                     'AccessionNumber' => $acsn
                 ];
@@ -264,8 +270,8 @@ class SatuSehatImagingStudyProcessor
                     'RequestedProcedureID' => $noorder,
                     'ReferringPhysicianName' => $this->sanitizeDicomPersonName($nm_dokter_perujuk),
                     'RequestingPhysician' => $this->sanitizeDicomPersonName($nm_dokter_perujuk),
-                    'StudyDate' => $scheduledDate,
-                    'StudyTime' => $scheduledTime,
+                    'StudyDate' => $studyDate,
+                    'StudyTime' => $studyTime,
                     'InstitutionName' => $instName,
                     'Modality' => $modality,
                     'ScheduledStationAETitle' => $aeTitle,
