@@ -1838,19 +1838,23 @@ class SatuSehatDatabase
         $sql = "
             SELECT
                 rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
-                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
+                p.nm_pasien, p.no_ktp, rp.kd_dokter,
+                COALESCE(pg.nama, pg_dok.nama, '') as nama,
+                COALESCE(pg.no_ktp, '') as ktpdokter,
+                COALESCE(pg_dok.no_ktp, '') as ktpdokter_dpjp,
                 rp.stts, 'Ralan' as status,
                 CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
-                sse.id_encounter, pol.nm_poli,
+                sse.id_encounter, COALESCE(pol.nm_poli, 'Rawat Jalan/IGD') as nm_poli,
                 {$selectCols},
                 pr.tgl_perawatan as tgl_observasi, pr.jam_rawat as jam_observasi,
                 {$syncedSelectSql}
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
-            INNER JOIN pegawai pg ON pg.nik = pr.nip
+            LEFT JOIN pegawai pg ON pg.nik = pr.nip
+            LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-            INNER JOIN poliklinik pol ON pol.kd_poli = rp.kd_poli
+            LEFT JOIN poliklinik pol ON pol.kd_poli = rp.kd_poli
             {$stateJoinSuffix}
             WHERE rp.tgl_registrasi BETWEEN :df AND :dt
               AND (" . implode(' OR ', $hasValue) . ")
@@ -1861,19 +1865,23 @@ class SatuSehatDatabase
 
             SELECT
                 rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
-                p.nm_pasien, p.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp as ktpdokter,
+                p.nm_pasien, p.no_ktp, rp.kd_dokter,
+                COALESCE(pg.nama, pg_dok.nama, '') as nama,
+                COALESCE(pg.no_ktp, '') as ktpdokter,
+                COALESCE(pg_dok.no_ktp, '') as ktpdokter_dpjp,
                 rp.stts, 'Ranap' as status,
                 CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
-                sse.id_encounter, pol.nm_poli,
+                sse.id_encounter, COALESCE(pol.nm_poli, 'Rawat Inap') as nm_poli,
                 {$selectColsRanap},
                 pi.tgl_perawatan as tgl_observasi, pi.jam_rawat as jam_observasi,
                 {$syncedSelectSql}
             FROM reg_periksa rp
             INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
             INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat
-            INNER JOIN pegawai pg ON pg.nik = pi.nip
+            LEFT JOIN pegawai pg ON pg.nik = pi.nip
+            LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
             INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-            INNER JOIN poliklinik pol ON pol.kd_poli = rp.kd_poli
+            LEFT JOIN poliklinik pol ON pol.kd_poli = rp.kd_poli
             {$ranapJoins}
             WHERE rp.tgl_registrasi BETWEEN :df2 AND :dt2
               AND (" . implode(' OR ', $hasValueRanap) . ")
@@ -2047,13 +2055,17 @@ class SatuSehatDatabase
                 SELECT 
                     rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
                     p.nm_pasien, p.no_ktp, sse.id_encounter, pr.rtl, 
-                    pg.nama, pg.no_ktp as ktppraktisi, pr.tgl_perawatan, pr.jam_rawat, 
+                    COALESCE(pg.nama, pg_dok.nama, '') as nama,
+                    COALESCE(pg.no_ktp, '') as ktppraktisi,
+                    COALESCE(pg_dok.no_ktp, '') as ktpdokter_dpjp,
+                    pr.tgl_perawatan, pr.jam_rawat, 
                     ssc.id_careplan, 'Ralan' as status_lanjut, rp.kd_poli
                 FROM reg_periksa rp 
                 INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
                 INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
                 INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat 
-                INNER JOIN pegawai pg ON pr.nip = pg.nik 
+                LEFT JOIN pegawai pg ON pr.nip = pg.nik 
+                LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
                 LEFT JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pr.no_rawat 
                     AND ssc.tgl_perawatan = pr.tgl_perawatan 
                     AND ssc.jam_rawat = pr.jam_rawat 
@@ -2067,13 +2079,17 @@ class SatuSehatDatabase
                 SELECT 
                     rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
                     p.nm_pasien, p.no_ktp, sse.id_encounter, pi.rtl, 
-                    pg.nama, pg.no_ktp as ktppraktisi, pi.tgl_perawatan, pi.jam_rawat, 
+                    COALESCE(pg.nama, pg_dok.nama, '') as nama,
+                    COALESCE(pg.no_ktp, '') as ktppraktisi,
+                    COALESCE(pg_dok.no_ktp, '') as ktpdokter_dpjp,
+                    pi.tgl_perawatan, pi.jam_rawat, 
                     ssc.id_careplan, 'Ranap' as status_lanjut, rp.kd_poli
                 FROM reg_periksa rp 
                 INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
                 INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
                 INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat 
-                INNER JOIN pegawai pg ON pi.nip = pg.nik 
+                LEFT JOIN pegawai pg ON pi.nip = pg.nik 
+                LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
                 LEFT JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pi.no_rawat 
                     AND ssc.tgl_perawatan = pi.tgl_perawatan 
                     AND ssc.jam_rawat = pi.jam_rawat 
@@ -2096,14 +2112,18 @@ class SatuSehatDatabase
                 SELECT
                     rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
                     p.nm_pasien, p.no_ktp, sse.id_encounter, pr.rtl,
-                    pg.nama, pg.no_ktp as ktppraktisi, pr.tgl_perawatan, pr.jam_rawat,
+                    COALESCE(pg.nama, pg_dok.nama, '') as nama,
+                    COALESCE(pg.no_ktp, '') as ktppraktisi,
+                    COALESCE(pg_dok.no_ktp, '') as ktpdokter_dpjp,
+                    pr.tgl_perawatan, pr.jam_rawat,
                     CONCAT(nj.tanggal, 'T', nj.jam, '+07:00') as waktu_pulang,
                     ssc.id_careplan, 'Ralan' as status_lanjut, rp.kd_poli
                 FROM reg_periksa rp
                 INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                 INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
                 INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
-                INNER JOIN pegawai pg ON pr.nip = pg.nik
+                LEFT JOIN pegawai pg ON pr.nip = pg.nik
+                LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
                 INNER JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pr.no_rawat
                     AND ssc.tgl_perawatan = pr.tgl_perawatan
                     AND ssc.jam_rawat = pr.jam_rawat
@@ -2117,14 +2137,18 @@ class SatuSehatDatabase
                 SELECT
                     rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
                     p.nm_pasien, p.no_ktp, sse.id_encounter, pi.rtl,
-                    pg.nama, pg.no_ktp as ktppraktisi, pi.tgl_perawatan, pi.jam_rawat,
+                    COALESCE(pg.nama, pg_dok.nama, '') as nama,
+                    COALESCE(pg.no_ktp, '') as ktppraktisi,
+                    COALESCE(pg_dok.no_ktp, '') as ktpdokter_dpjp,
+                    pi.tgl_perawatan, pi.jam_rawat,
                     CONCAT(ni.tanggal, 'T', ni.jam, '+07:00') as waktu_pulang,
                     ssc.id_careplan, 'Ranap' as status_lanjut, rp.kd_poli
                 FROM reg_periksa rp
                 INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
                 INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
                 INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat
-                INNER JOIN pegawai pg ON pi.nip = pg.nik
+                LEFT JOIN pegawai pg ON pi.nip = pg.nik
+                LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
                 INNER JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pi.no_rawat
                     AND ssc.tgl_perawatan = pi.tgl_perawatan
                     AND ssc.jam_rawat = pi.jam_rawat
@@ -2185,13 +2209,17 @@ class SatuSehatDatabase
                 SELECT 
                     rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
                     p.nm_pasien, p.no_ktp, sse.id_encounter, pr.alergi, 
-                    pg.nama, pg.no_ktp as ktppraktisi, pr.tgl_perawatan, pr.jam_rawat, 
+                    COALESCE(pg.nama, pg_dok.nama, '') as nama,
+                    COALESCE(pg.no_ktp, '') as ktppraktisi,
+                    COALESCE(pg_dok.no_ktp, '') as ktpdokter_dpjp,
+                    pr.tgl_perawatan, pr.jam_rawat, 
                     ssai.id_allergy_intolerance, 'Ralan' as status_rawat
                 FROM reg_periksa rp 
                 INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
                 INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
                 INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat 
-                INNER JOIN pegawai pg ON pr.nip = pg.nik 
+                LEFT JOIN pegawai pg ON pr.nip = pg.nik 
+                LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
                 LEFT JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pr.no_rawat 
                     AND ssai.tgl_perawatan = pr.tgl_perawatan 
                     AND ssai.jam_rawat = pr.jam_rawat 
@@ -2204,13 +2232,17 @@ class SatuSehatDatabase
                 SELECT 
                     rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
                     p.nm_pasien, p.no_ktp, sse.id_encounter, pi.alergi, 
-                    pg.nama, pg.no_ktp as ktppraktisi, pi.tgl_perawatan, pi.jam_rawat, 
+                    COALESCE(pg.nama, pg_dok.nama, '') as nama,
+                    COALESCE(pg.no_ktp, '') as ktppraktisi,
+                    COALESCE(pg_dok.no_ktp, '') as ktpdokter_dpjp,
+                    pi.tgl_perawatan, pi.jam_rawat, 
                     ssai.id_allergy_intolerance, 'Ranap' as status_rawat
                 FROM reg_periksa rp 
                 INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
                 INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
                 INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat 
-                INNER JOIN pegawai pg ON pi.nip = pg.nik 
+                LEFT JOIN pegawai pg ON pi.nip = pg.nik 
+                LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
                 LEFT JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pi.no_rawat 
                     AND ssai.tgl_perawatan = pi.tgl_perawatan 
                     AND ssai.jam_rawat = pi.jam_rawat 
@@ -2232,13 +2264,17 @@ class SatuSehatDatabase
                 SELECT 
                     rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
                     p.nm_pasien, p.no_ktp, sse.id_encounter, pr.alergi, 
-                    pg.nama, pg.no_ktp as ktppraktisi, pr.tgl_perawatan, pr.jam_rawat, 
+                    COALESCE(pg.nama, pg_dok.nama, '') as nama,
+                    COALESCE(pg.no_ktp, '') as ktppraktisi,
+                    COALESCE(pg_dok.no_ktp, '') as ktpdokter_dpjp,
+                    pr.tgl_perawatan, pr.jam_rawat, 
                     ssai.id_allergy_intolerance, 'Ralan' as status_rawat
                 FROM reg_periksa rp 
                 INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
                 INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
                 INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat 
-                INNER JOIN pegawai pg ON pr.nip = pg.nik 
+                LEFT JOIN pegawai pg ON pr.nip = pg.nik 
+                LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
                 INNER JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pr.no_rawat 
                     AND ssai.tgl_perawatan = pr.tgl_perawatan 
                     AND ssai.jam_rawat = pr.jam_rawat 
@@ -2250,13 +2286,17 @@ class SatuSehatDatabase
                 SELECT 
                     rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, 
                     p.nm_pasien, p.no_ktp, sse.id_encounter, pi.alergi, 
-                    pg.nama, pg.no_ktp as ktppraktisi, pi.tgl_perawatan, pi.jam_rawat, 
+                    COALESCE(pg.nama, pg_dok.nama, '') as nama,
+                    COALESCE(pg.no_ktp, '') as ktppraktisi,
+                    COALESCE(pg_dok.no_ktp, '') as ktpdokter_dpjp,
+                    pi.tgl_perawatan, pi.jam_rawat, 
                     ssai.id_allergy_intolerance, 'Ranap' as status_rawat
                 FROM reg_periksa rp 
                 INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis 
                 INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat 
                 INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat 
-                INNER JOIN pegawai pg ON pi.nip = pg.nik 
+                LEFT JOIN pegawai pg ON pi.nip = pg.nik 
+                LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
                 INNER JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pi.no_rawat 
                     AND ssai.tgl_perawatan = pi.tgl_perawatan 
                     AND ssai.jam_rawat = pi.jam_rawat 
@@ -3299,7 +3339,10 @@ class SatuSehatDatabase
                     CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
                     sse.id_encounter, 
                     CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
-                    pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
+                    pem.penilaian, 
+                    COALESCE(peg.nama, peg_dok.nama, '') as nm_praktisi,
+                    COALESCE(peg.no_ktp, '') as nik_praktisi,
+                    COALESCE(peg_dok.no_ktp, '') as ktpdokter_dpjp,
                     pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
                     ssc.id_condition, '' as id_clinicalimpression
                 FROM reg_periksa rp
@@ -3308,7 +3351,8 @@ class SatuSehatDatabase
                 INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ralan'
                 INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
                 INNER JOIN pemeriksaan_ralan pem ON pem.no_rawat = rp.no_rawat
-                INNER JOIN pegawai peg ON pem.nip = peg.nik
+                LEFT JOIN pegawai peg ON pem.nip = peg.nik
+                LEFT JOIN pegawai peg_dok ON peg_dok.nik = rp.kd_dokter
                 LEFT JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
                     AND ssci.tgl_perawatan = pem.tgl_perawatan
                     AND ssci.jam_rawat = pem.jam_rawat
@@ -3326,7 +3370,10 @@ class SatuSehatDatabase
                     CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
                     sse.id_encounter, 
                     CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
-                    pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
+                    pem.penilaian, 
+                    COALESCE(peg.nama, peg_dok.nama, '') as nm_praktisi,
+                    COALESCE(peg.no_ktp, '') as nik_praktisi,
+                    COALESCE(peg_dok.no_ktp, '') as ktpdokter_dpjp,
                     pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
                     ssc.id_condition, '' as id_clinicalimpression
                 FROM reg_periksa rp
@@ -3335,7 +3382,8 @@ class SatuSehatDatabase
                 INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ranap'
                 INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
                 INNER JOIN pemeriksaan_ranap pem ON pem.no_rawat = rp.no_rawat
-                INNER JOIN pegawai peg ON pem.nip = peg.nik
+                LEFT JOIN pegawai peg ON pem.nip = peg.nik
+                LEFT JOIN pegawai peg_dok ON peg_dok.nik = rp.kd_dokter
                 LEFT JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
                     AND ssci.tgl_perawatan = pem.tgl_perawatan
                     AND ssci.jam_rawat = pem.jam_rawat
@@ -3362,7 +3410,10 @@ class SatuSehatDatabase
                     CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
                     sse.id_encounter, 
                     CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
-                    pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
+                    pem.penilaian, 
+                    COALESCE(peg.nama, peg_dok.nama, '') as nm_praktisi,
+                    COALESCE(peg.no_ktp, '') as nik_praktisi,
+                    COALESCE(peg_dok.no_ktp, '') as ktpdokter_dpjp,
                     pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
                     ssc.id_condition, ssci.id_clinicalimpression
                 FROM reg_periksa rp
@@ -3371,7 +3422,8 @@ class SatuSehatDatabase
                 INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ralan'
                 INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
                 INNER JOIN pemeriksaan_ralan pem ON pem.no_rawat = rp.no_rawat
-                INNER JOIN pegawai peg ON pem.nip = peg.nik
+                LEFT JOIN pegawai peg ON pem.nip = peg.nik
+                LEFT JOIN pegawai peg_dok ON peg_dok.nik = rp.kd_dokter
                 INNER JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
                     AND ssci.tgl_perawatan = pem.tgl_perawatan
                     AND ssci.jam_rawat = pem.jam_rawat
@@ -3388,7 +3440,10 @@ class SatuSehatDatabase
                     CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as pulang,
                     sse.id_encounter, 
                     CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
-                    pem.penilaian, peg.nama as nm_praktisi, peg.no_ktp as nik_praktisi,
+                    pem.penilaian, 
+                    COALESCE(peg.nama, peg_dok.nama, '') as nm_praktisi,
+                    COALESCE(peg.no_ktp, '') as nik_praktisi,
+                    COALESCE(peg_dok.no_ktp, '') as ktpdokter_dpjp,
                     pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
                     ssc.id_condition, ssci.id_clinicalimpression
                 FROM reg_periksa rp
@@ -3397,7 +3452,8 @@ class SatuSehatDatabase
                 INNER JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ranap'
                 INNER JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
                 INNER JOIN pemeriksaan_ranap pem ON pem.no_rawat = rp.no_rawat
-                INNER JOIN pegawai peg ON pem.nip = peg.nik
+                LEFT JOIN pegawai peg ON pem.nip = peg.nik
+                LEFT JOIN pegawai peg_dok ON peg_dok.nik = rp.kd_dokter
                 INNER JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
                     AND ssci.tgl_perawatan = pem.tgl_perawatan
                     AND ssci.jam_rawat = pem.jam_rawat

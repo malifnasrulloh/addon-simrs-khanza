@@ -86,6 +86,9 @@ class SatuSehatClinicalImpressionProcessor
 
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_praktisi']);
+            if (!$idDokter && !empty($p['ktpdokter_dpjp'])) {
+                $idDokter = $this->db->getIhsPractitioner($p['ktpdokter_dpjp']);
+            }
 
             if (!$idPasien || !$idDokter) {
                 $this->log->warning("[PHASE 1] {$noRawat} [{$tglPerawatan} {$jamRawat}]: Missing IHS ID for Patient or Practitioner. Skipped.");
@@ -181,6 +184,9 @@ $isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
 
             $idPasien = $this->db->getIhsPatient($p['nik_pasien']);
             $idDokter = $this->db->getIhsPractitioner($p['nik_praktisi']);
+            if (!$idDokter && !empty($p['ktpdokter_dpjp'])) {
+                $idDokter = $this->db->getIhsPractitioner($p['ktpdokter_dpjp']);
+            }
             if (!$idPasien || !$idDokter) {
                 $this->log->warning("[PHASE 2] {$noRawat} [{$tglPerawatan} {$jamRawat}]: Missing IHS ID. Skipped.");
                 $this->skipCount++;

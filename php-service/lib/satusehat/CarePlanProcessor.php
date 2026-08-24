@@ -89,6 +89,9 @@ class SatuSehatCarePlanProcessor
             }
 
             $idDokter = $this->db->getIhsPractitioner($nikPraktisi);
+            if (!$idDokter && !empty($p['ktpdokter_dpjp'])) {
+                $idDokter = $this->db->getIhsPractitioner($p['ktpdokter_dpjp']);
+            }
             if (!$idDokter) {
                 $this->log->warning("[PHASE 1] {$noRawat}: Missing IHS ID for Practitioner. Skipped.");
                 $this->skipCount++;
@@ -196,13 +199,16 @@ class SatuSehatCarePlanProcessor
                 $this->skipCount++;
                 continue;
             }
+
             $idDokter = $this->db->getIhsPractitioner($nikPraktisi);
+            if (!$idDokter && !empty($p['ktpdokter_dpjp'])) {
+                $idDokter = $this->db->getIhsPractitioner($p['ktpdokter_dpjp']);
+            }
             if (!$idDokter) {
                 $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Practitioner. Skipped.");
                 $this->skipCount++;
                 continue;
             }
-
             $payload = SatuSehatPayloadBuilder::carePlan(
                 $this->config->orgId,
                 $p,

@@ -47,6 +47,10 @@ class SatuSehatObservationTTVProcessor
         // IHS lookups are shared by all 10 types of this row (memoized in DB).
         $idPasien = $this->db->getIhsPatient($row['no_ktp'] ?? '');
         $idDokter = $this->db->getIhsPractitioner($row['ktpdokter'] ?? '');
+        // If nurse/paramedis has no IHS ID, fall back to the attending doctor (DPJP)
+        if (!$idDokter && !empty($row['ktpdokter_dpjp'])) {
+            $idDokter = $this->db->getIhsPractitioner($row['ktpdokter_dpjp']);
+        }
         $missingIhs = (!$idPasien || !$idDokter);
 
         foreach (ObservationTTVDictionary::getDefinitions() as $ttvType => $def) {

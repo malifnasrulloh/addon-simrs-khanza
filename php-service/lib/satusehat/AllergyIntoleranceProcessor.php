@@ -96,6 +96,9 @@ class SatuSehatAllergyIntoleranceProcessor
             }
 
             $idPraktisi = $this->db->getIhsPractitioner($nikPraktisi);
+            if (!$idPraktisi && !empty($a['ktpdokter_dpjp'])) {
+                $idPraktisi = $this->db->getIhsPractitioner($a['ktpdokter_dpjp']);
+            }
             if (!$idPraktisi) {
                 $this->log->warning("[PHASE 1] {$noRawat}: Missing IHS ID for Practitioner. Skipped.");
                 $this->skipCount++;
