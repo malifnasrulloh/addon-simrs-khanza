@@ -45,8 +45,8 @@ class PayloadAdapter
             'MedicationRequest' => self::buildMedicationFamilyMulti($db, $patient, $orgId, 'request'),
             'MedicationDispense' => self::buildMedicationFamilyMulti($db, $patient, $orgId, 'dispense'),
             'MedicationStatement' => self::buildMedicationFamilyMulti($db, $patient, $orgId, 'statement'),
-            'CarePlan' => self::wrapSingle(self::buildCarePlan($db, $patient, $orgId)),
-            'AllergyIntolerance' => self::wrapSingle(self::buildAllergy($db, $patient)),
+            'CarePlan' => self::buildCarePlanMulti($db, $patient, $orgId),
+            'AllergyIntolerance' => self::buildAllergyMulti($db, $patient),
             'Immunization' => self::buildImmunizationMulti($db, $patient),
             'ClinicalImpression' => self::buildClinicalImpressionMulti($db, $patient),
             'ServiceRequest' => self::buildLabPipelineMulti($db, $patient, $orgId, 'serviceRequest'),
@@ -55,7 +55,7 @@ class PayloadAdapter
             'DiagnosticReport' => self::buildLabPipelineMulti($db, $patient, $orgId, 'diagnosticReport'),
             'Composition' => self::wrapSingle(self::buildComposition($db, $patient, $orgId, $refs)),
             'QuestionnaireResponse' => self::buildQuestionnaireResponseMulti($db, $patient),
-            'EpisodeOfCare' => self::wrapSingle(self::buildEpisodeOfCare($db, $patient, $orgId)),
+            'EpisodeOfCare' => self::buildEpisodeOfCareMulti($db, $patient, $orgId),
             'ObservationTTV' => self::buildObservationTTVMulti($db, $patient),
             default => [],
         };
@@ -66,8 +66,6 @@ class PayloadAdapter
     {
         return $payload !== null ? [$payload] : [];
     }
-
-    // Patient removed from the sendable manifest (T35) — IHS lookup stays.
 
     // Patient removed from the sendable manifest (T35) — IHS lookup stays.
 
@@ -127,9 +125,9 @@ class PayloadAdapter
         return 'N-DOKTER-IHS-PLACEHOLDER';
     }
 
-    // EpisodeOfCare (single per visit)
+    // EpisodeOfCare (MULTI-ROW per visit & diagnosis)
 
-    private static function buildEpisodeOfCare(\PDO $db, array $patient, string $orgId): ?array
+    private static function buildEpisodeOfCareMulti(\PDO $db, array $patient, string $orgId): array
     {
         $ihs = self::getIhsIds($patient);
         $stmt = $db->prepare("
@@ -142,29 +140,40 @@ class PayloadAdapter
             FROM reg_periksa rp
             JOIN pasien pj ON pj.no_rkm_medis = rp.no_rkm_medis
             LEFT JOIN pegawai pg ON pg.nik = rp.kd_dokter
-            LEFT JOIN diagnosa_pasien dp ON dp.no_rawat = rp.no_rawat
+            INNER JOIN diagnosa_pasien dp ON dp.no_rawat = rp.no_rawat
             LEFT JOIN penyakit py ON py.kd_penyakit = dp.kd_penyakit
             LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
             LEFT JOIN kamar_inap ki ON ki.no_rawat = rp.no_rawat
             LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.kd_penyakit = dp.kd_penyakit
             LEFT JOIN satu_sehat_episode_of_care sseo ON sseo.no_rawat = rp.no_rawat
+                AND sseo.kd_penyakit = dp.kd_penyakit
+                AND sseo.status = dp.status
             WHERE rp.no_rawat = ?
               AND (sseo.id_episode_of_care IS NULL OR sseo.id_episode_of_care IN ('', '-'))
-            LIMIT 1
         ");
         $stmt->execute([$patient['no_rawat']]);
-        $row = $stmt->fetch();
-        if (!$row) return null;
+        $rows = $stmt->fetchAll();
+        $payloads = [];
 
-        $type = \EpisodeOfCareType::fromIcdCode($row['kd_penyakit'] ?? '');
-        if ($type === null) return null;
+        foreach ($rows as $row) {
+            $type = \EpisodeOfCareType::fromIcdCode($row['kd_penyakit'] ?? '');
+            if ($type === null) {
+                continue; // Not a recognized government health program ICD code (e.g. TB, HIV, ANC)
+            }
 
-        $payload = \SatuSehatPayloadBuilder::episodeOfCare($orgId, $row, $ihs['pasien'], $ihs['dokter'], 'active', $type, $row['id_episode_of_care'] ?? '');
-        if ($payload !== null) {
-            $payload = self::withPersistKeys($payload, 'satu_sehat_episode_of_care', 'id_episode_of_care', $row, ['no_rawat', 'kd_penyakit', 'status']);
+            $payload = \SatuSehatPayloadBuilder::episodeOfCare(
+                $orgId, $row, $ihs['pasien'], $ihs['dokter'], 'active', $type, $row['id_episode_of_care'] ?? ''
+            );
+            if ($payload !== null) {
+                $payload = self::withPersistKeys(
+                    $payload, 'satu_sehat_episode_of_care', 'id_episode_of_care', $row, ['no_rawat', 'kd_penyakit', 'status']
+                );
+                $payloads[] = $payload;
+            }
         }
-        return $payload;
+
+        return $payloads;
     }
 
     // Shared helpers
@@ -578,21 +587,21 @@ class PayloadAdapter
             if (trim((string) ($row['id_medicationdispense'] ?? '')) !== '') {
                 continue; // already synced (real id present)
             }
-            // CLI parity: no authorizing MedicationRequest → skip with warning
-            // (rule 10393/10394 rejections otherwise).
-            if (empty(trim((string) ($row['id_medicationrequest'] ?? '')))) {
-                PayloadAdapterWarnings::add("MedicationDispense ({$row['no_resep']}/{$row['kode_brng']}): MedicationRequest belum terkirim — dilewati");
-                continue;
-            }
+            // In-bundle or synced MedicationRequest check:
+            // If MedicationRequest is not yet in MySQL, emit empty id ('')
+            // so SendController::rewriteRefs can resolve it via in-bundle urn:uuid if present.
+            // Persist keys {no_rawat, tgl_perawatan, jam, kode_brng, no_batch, no_faktur, no_resep}
+            // allow ReferenceRegistry to match {no_resep, kode_brng} on MedicationRequest.
             $row['nm_pasien'] = $patient['nm_pasien'];
             $row['no_ktp'] = $patient['no_ktp'];
+            $idMedReq = (string) ($row['id_medicationrequest'] ?? '');
             $payload = \SatuSehatPayloadBuilder::medicationDispense(
-                $orgId, $row, $ihs['pasien'], $ihs['dokter'], $row['id_medicationrequest'] ?? '', $row['id_medicationdispense'] ?? null
+                $orgId, $row, $ihs['pasien'], $ihs['dokter'], $idMedReq, $row['id_medicationdispense'] ?? null
             );
             if ($payload !== null) {
                 $payload = self::withPersistKeys(
                     $payload, 'satu_sehat_medicationdispense', 'id_medicationdispanse', $row,
-                    ['no_rawat', 'tgl_perawatan', 'jam', 'kode_brng', 'no_batch', 'no_faktur']
+                    ['no_rawat', 'tgl_perawatan', 'jam', 'kode_brng', 'no_batch', 'no_faktur', 'no_resep']
                 );
                 $payloads[] = $payload;
             }
@@ -749,30 +758,48 @@ class PayloadAdapter
         return $payloads;
     }
 
-    // CarePlan (single - uses first pemeriksaan with rtl)
+    // CarePlan (MULTI-ROW: ralan + ranap)
 
-    private static function buildCarePlan(\PDO $db, array $patient, string $orgId): ?array
+    private static function buildCarePlanMulti(\PDO $db, array $patient, string $orgId): array
     {
         $ihs = self::getIhsIds($patient);
-        $statusRawat = 'Ralan';
-        $stmt = $db->prepare("
-            SELECT pr.no_rawat, pr.rtl, pr.tgl_perawatan, pr.jam_rawat,
-                   rp.tgl_registrasi, rp.jam_reg, rp.status_lanjut, rp.kd_poli,
-                   pg.nama AS nama, sse.id_encounter, IFNULL(ssc.id_careplan, '') AS id_careplan
-            FROM pemeriksaan_ralan pr
-            JOIN reg_periksa rp ON rp.no_rawat = pr.no_rawat
-            LEFT JOIN pegawai pg ON pg.nik = pr.nip
-            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
-            LEFT JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pr.no_rawat AND ssc.tgl_perawatan = pr.tgl_perawatan AND ssc.jam_rawat = pr.jam_rawat AND ssc.status = 'Ralan'
-            WHERE pr.no_rawat = ? AND pr.rtl IS NOT NULL AND pr.rtl != ''
-                AND (ssc.id_careplan IS NULL OR ssc.id_careplan IN ('', '-'))
-            LIMIT 1
-        ");
-        $stmt->execute([$patient['no_rawat']]);
-        $row = $stmt->fetch();
-        if (!$row) {
-            $statusRawat = 'Ranap';
-            $stmt = $db->prepare("
+        $noRawat = $patient['no_rawat'];
+        $payloads = [];
+
+        // Ralan CarePlans
+        try {
+            $stmtR = $db->prepare("
+                SELECT pr.no_rawat, pr.rtl, pr.tgl_perawatan, pr.jam_rawat,
+                       rp.tgl_registrasi, rp.jam_reg, rp.status_lanjut, rp.kd_poli,
+                       pg.nama AS nama, sse.id_encounter, IFNULL(ssc.id_careplan, '') AS id_careplan
+                FROM pemeriksaan_ralan pr
+                JOIN reg_periksa rp ON rp.no_rawat = pr.no_rawat
+                LEFT JOIN pegawai pg ON pg.nik = pr.nip
+                LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
+                LEFT JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pr.no_rawat
+                    AND ssc.tgl_perawatan = pr.tgl_perawatan
+                    AND ssc.jam_rawat = pr.jam_rawat
+                    AND ssc.status = 'Ralan'
+                WHERE pr.no_rawat = ? AND pr.rtl IS NOT NULL AND pr.rtl != ''
+                  AND (ssc.id_careplan IS NULL OR ssc.id_careplan IN ('', '-'))
+            ");
+            $stmtR->execute([$noRawat]);
+            $ralanRows = $stmtR->fetchAll();
+            foreach ($ralanRows as $row) {
+                $row['nm_pasien'] = $patient['nm_pasien'];
+                $row['no_ktp'] = $patient['no_ktp'];
+                $row['status'] = 'Ralan';
+                $p = \SatuSehatPayloadBuilder::carePlan($orgId, $row, $ihs['pasien'], $ihs['dokter'], $row['id_careplan'] ?? '');
+                if ($p !== null) {
+                    $p = self::withPersistKeys($p, 'satu_sehat_careplan', 'id_careplan', $row, ['no_rawat', 'tgl_perawatan', 'jam_rawat', 'status']);
+                    $payloads[] = $p;
+                }
+            }
+        } catch (\Throwable $e) { /* table or column might differ */ }
+
+        // Ranap CarePlans
+        try {
+            $stmtN = $db->prepare("
                 SELECT pr.no_rawat, pr.rtl, pr.tgl_perawatan, pr.jam_rawat,
                        rp.tgl_registrasi, rp.jam_reg, rp.status_lanjut, rp.kd_poli,
                        pg.nama AS nama, sse.id_encounter, IFNULL(ssc.id_careplan, '') AS id_careplan
@@ -780,68 +807,37 @@ class PayloadAdapter
                 JOIN reg_periksa rp ON rp.no_rawat = pr.no_rawat
                 LEFT JOIN pegawai pg ON pg.nik = pr.nip
                 LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
-                LEFT JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pr.no_rawat AND ssc.tgl_perawatan = pr.tgl_perawatan AND ssc.jam_rawat = pr.jam_rawat AND ssc.status = 'Ranap'
+                LEFT JOIN satu_sehat_careplan ssc ON ssc.no_rawat = pr.no_rawat
+                    AND ssc.tgl_perawatan = pr.tgl_perawatan
+                    AND ssc.jam_rawat = pr.jam_rawat
+                    AND ssc.status = 'Ranap'
                 WHERE pr.no_rawat = ? AND pr.rtl IS NOT NULL AND pr.rtl != ''
-                    AND (ssc.id_careplan IS NULL OR ssc.id_careplan IN ('', '-'))
-                LIMIT 1
+                  AND (ssc.id_careplan IS NULL OR ssc.id_careplan IN ('', '-'))
             ");
-            $stmt->execute([$patient['no_rawat']]);
-            $row = $stmt->fetch();
-        }
-        if (!$row) return null;
-        $row['nm_pasien'] = $patient['nm_pasien'];
-        $row['no_ktp'] = $patient['no_ktp'];
-        $p = \SatuSehatPayloadBuilder::carePlan($orgId, $row, $ihs['pasien'], $ihs['dokter'], $row['id_careplan'] ?? '');
-        if ($p !== null) {
-            $p['_panel_persist_keys'] = [
-                'table' => 'satu_sehat_careplan',
-                'id_col' => 'id_careplan',
-                'keys' => ['no_rawat' => $patient['no_rawat'], 'tgl_perawatan' => $row['tgl_perawatan'], 'jam_rawat' => $row['jam_rawat'], 'status' => $statusRawat],
-            ];
-        }
-        return $p;
+            $stmtN->execute([$noRawat]);
+            $ranapRows = $stmtN->fetchAll();
+            foreach ($ranapRows as $row) {
+                $row['nm_pasien'] = $patient['nm_pasien'];
+                $row['no_ktp'] = $patient['no_ktp'];
+                $row['status'] = 'Ranap';
+                $p = \SatuSehatPayloadBuilder::carePlan($orgId, $row, $ihs['pasien'], $ihs['dokter'], $row['id_careplan'] ?? '');
+                if ($p !== null) {
+                    $p = self::withPersistKeys($p, 'satu_sehat_careplan', 'id_careplan', $row, ['no_rawat', 'tgl_perawatan', 'jam_rawat', 'status']);
+                    $payloads[] = $p;
+                }
+            }
+        } catch (\Throwable $e) { /* table or column might differ */ }
+
+        return $payloads;
     }
 
-    // AllergyIntolerance (single per visit)
+    // AllergyIntolerance (MULTI-ROW: ralan + ranap)
 
-    private static function buildAllergy(\PDO $db, array $patient): ?array
+    private static function buildAllergyMulti(\PDO $db, array $patient): array
     {
         $ihs = self::getIhsIds($patient);
-        $stmt = $db->prepare("
-            SELECT pr.no_rawat, pr.alergi, pr.tgl_perawatan, pr.jam_rawat,
-                   pg.nama, pg.no_ktp AS ktpdokter, sse.id_encounter,
-                   IFNULL(ssai.id_allergy_intolerance, '') AS id_allergy
-            FROM pemeriksaan_ralan pr
-            LEFT JOIN pegawai pg ON pg.nik = pr.nip
-            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
-            LEFT JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pr.no_rawat AND ssai.tgl_perawatan = pr.tgl_perawatan AND ssai.jam_rawat = pr.jam_rawat
-            WHERE pr.no_rawat = ? AND pr.alergi IS NOT NULL AND pr.alergi != '' AND pr.alergi != '-'
-                AND (ssai.id_allergy_intolerance IS NULL OR ssai.id_allergy_intolerance IN ('', '-'))
-            LIMIT 1
-        ");
-        $stmt->execute([$patient['no_rawat']]);
-        $row = $stmt->fetch();
-        if (!$row) {
-            $stmt = $db->prepare("
-                SELECT pr.no_rawat, pr.alergi, pr.tgl_perawatan, pr.jam_rawat,
-                       pg.nama, pg.no_ktp AS ktpdokter, sse.id_encounter,
-                       IFNULL(ssai.id_allergy_intolerance, '') AS id_allergy
-                FROM pemeriksaan_ranap pr
-                LEFT JOIN pegawai pg ON pg.nik = pr.nip
-                LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
-                LEFT JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pr.no_rawat AND ssai.tgl_perawatan = pr.tgl_perawatan AND ssai.jam_rawat = pr.jam_rawat
-                WHERE pr.no_rawat = ? AND pr.alergi IS NOT NULL AND pr.alergi != '' AND pr.alergi != '-'
-                    AND (ssai.id_allergy_intolerance IS NULL OR ssai.id_allergy_intolerance IN ('', '-'))
-                LIMIT 1
-            ");
-            $stmt->execute([$patient['no_rawat']]);
-            $row = $stmt->fetch();
-        }
-        if (!$row) return null;
-        $row['tgl_registrasi'] = $patient['tgl_registrasi'];
-        $row['jam_reg'] = $patient['jam_reg'];
-        $row['nm_pasien'] = $patient['nm_pasien'];
-        $row['no_ktp'] = $patient['no_ktp'];
+        $noRawat = $patient['no_rawat'];
+        $payloads = [];
         $dictionary = new \SatuSehatAllergyDictionary(
             defined('BASE_DIR') ? BASE_DIR . '/cache/alergisatusehat.iyem' : __DIR__ . '/../../cache/alergisatusehat.iyem',
             new \Logger(
@@ -849,16 +845,77 @@ class PayloadAdapter
                 'panel_allergy'
             )
         );
-        $allergyData = $dictionary->lookup($row['alergi'] ?? '');
-        $p = \SatuSehatPayloadBuilder::allergyIntolerance($row, $allergyData, $ihs['pasien'], $ihs['dokter'], (string) Config::get('satusehat.org_id', ''), $row['id_allergy'] ?? '');
-        if ($p !== null) {
-            $p['_panel_persist_keys'] = [
-                'table' => 'satu_sehat_allergy_intolerance',
-                'id_col' => 'id_allergy_intolerance',
-                'keys' => ['no_rawat' => $patient['no_rawat'], 'tgl_perawatan' => $row['tgl_perawatan'], 'jam_rawat' => $row['jam_rawat']],
-            ];
-        }
-        return $p;
+        $orgId = (string) Config::get('satusehat.org_id', '');
+
+        // Ralan allergies
+        try {
+            $stmtR = $db->prepare("
+                SELECT pr.no_rawat, pr.alergi, pr.tgl_perawatan, pr.jam_rawat,
+                       pg.nama, pg.no_ktp AS ktpdokter, sse.id_encounter,
+                       IFNULL(ssai.id_allergy_intolerance, '') AS id_allergy
+                FROM pemeriksaan_ralan pr
+                LEFT JOIN pegawai pg ON pg.nik = pr.nip
+                LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
+                LEFT JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pr.no_rawat
+                    AND ssai.tgl_perawatan = pr.tgl_perawatan
+                    AND ssai.jam_rawat = pr.jam_rawat
+                    AND ssai.status = 'Ralan'
+                WHERE pr.no_rawat = ?
+                  AND pr.alergi IS NOT NULL AND pr.alergi != '' AND pr.alergi != '-'
+                  AND (ssai.id_allergy_intolerance IS NULL OR ssai.id_allergy_intolerance IN ('', '-'))
+            ");
+            $stmtR->execute([$noRawat]);
+            $ralanRows = $stmtR->fetchAll();
+            foreach ($ralanRows as $row) {
+                $row['tgl_registrasi'] = $patient['tgl_registrasi'];
+                $row['jam_reg'] = $patient['jam_reg'];
+                $row['nm_pasien'] = $patient['nm_pasien'];
+                $row['no_ktp'] = $patient['no_ktp'];
+                $row['status'] = 'Ralan';
+                $allergyData = $dictionary->lookup($row['alergi'] ?? '');
+                $p = \SatuSehatPayloadBuilder::allergyIntolerance($row, $allergyData, $ihs['pasien'], $ihs['dokter'], $orgId, $row['id_allergy'] ?? '');
+                if ($p !== null) {
+                    $p = self::withPersistKeys($p, 'satu_sehat_allergy_intolerance', 'id_allergy_intolerance', $row, ['no_rawat', 'tgl_perawatan', 'jam_rawat', 'status']);
+                    $payloads[] = $p;
+                }
+            }
+        } catch (\Throwable $e) { /* table or column might differ */ }
+
+        // Ranap allergies
+        try {
+            $stmtN = $db->prepare("
+                SELECT pr.no_rawat, pr.alergi, pr.tgl_perawatan, pr.jam_rawat,
+                       pg.nama, pg.no_ktp AS ktpdokter, sse.id_encounter,
+                       IFNULL(ssai.id_allergy_intolerance, '') AS id_allergy
+                FROM pemeriksaan_ranap pr
+                LEFT JOIN pegawai pg ON pg.nik = pr.nip
+                LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
+                LEFT JOIN satu_sehat_allergy_intolerance ssai ON ssai.no_rawat = pr.no_rawat
+                    AND ssai.tgl_perawatan = pr.tgl_perawatan
+                    AND ssai.jam_rawat = pr.jam_rawat
+                    AND ssai.status = 'Ranap'
+                WHERE pr.no_rawat = ?
+                  AND pr.alergi IS NOT NULL AND pr.alergi != '' AND pr.alergi != '-'
+                  AND (ssai.id_allergy_intolerance IS NULL OR ssai.id_allergy_intolerance IN ('', '-'))
+            ");
+            $stmtN->execute([$noRawat]);
+            $ranapRows = $stmtN->fetchAll();
+            foreach ($ranapRows as $row) {
+                $row['tgl_registrasi'] = $patient['tgl_registrasi'];
+                $row['jam_reg'] = $patient['jam_reg'];
+                $row['nm_pasien'] = $patient['nm_pasien'];
+                $row['no_ktp'] = $patient['no_ktp'];
+                $row['status'] = 'Ranap';
+                $allergyData = $dictionary->lookup($row['alergi'] ?? '');
+                $p = \SatuSehatPayloadBuilder::allergyIntolerance($row, $allergyData, $ihs['pasien'], $ihs['dokter'], $orgId, $row['id_allergy'] ?? '');
+                if ($p !== null) {
+                    $p = self::withPersistKeys($p, 'satu_sehat_allergy_intolerance', 'id_allergy_intolerance', $row, ['no_rawat', 'tgl_perawatan', 'jam_rawat', 'status']);
+                    $payloads[] = $p;
+                }
+            }
+        } catch (\Throwable $e) { /* table or column might differ */ }
+
+        return $payloads;
     }
 
     // Immunization (MULTI-ROW)
@@ -905,7 +962,7 @@ class PayloadAdapter
         return $payloads;
     }
 
-    // ClinicalImpression (MULTI - ralan + ranap, matching CLI Database.php L2716-2800)
+    // ClinicalImpression (MULTI-ROW: ralan + ranap)
 
     private static function buildClinicalImpressionMulti(\PDO $db, array $patient): array
     {
@@ -938,66 +995,58 @@ class PayloadAdapter
                     AND ssci.status = 'Ralan'
                 WHERE pem.penilaian <> '' AND rp.no_rawat = ?
                     AND (ssci.id_clinicalimpression IS NULL OR ssci.id_clinicalimpression IN ('', '-'))
-                LIMIT 1
             ");
             $stmtR->execute([$noRawat]);
-            $rowR = $stmtR->fetch();
-            if ($rowR) {
+            $ralanRows = $stmtR->fetchAll();
+            foreach ($ralanRows as $rowR) {
+                $rowR['nm_pasien'] = $patient['nm_pasien'];
+                $rowR['status'] = 'Ralan';
                 $p = \SatuSehatPayloadBuilder::clinicalImpression($rowR, $ihs['pasien'], $ihs['dokter'], $rowR['id_clinicalimpression'] ?? '');
                 if ($p !== null) {
-                    $p['_panel_persist_keys'] = [
-                        'table' => 'satu_sehat_clinicalimpression',
-                        'id_col' => 'id_clinicalimpression',
-                        'keys' => ['no_rawat' => $noRawat, 'tgl_perawatan' => $rowR['tgl_perawatan'], 'jam_rawat' => $rowR['jam_rawat'], 'status' => 'Ralan'],
-                    ];
+                    $p = self::withPersistKeys($p, 'satu_sehat_clinicalimpression', 'id_clinicalimpression', $rowR, ['no_rawat', 'tgl_perawatan', 'jam_rawat', 'status']);
                     $payloads[] = $p;
                 }
             }
         } catch (\Throwable $e) { /* pemeriksaan_ralan may not have data */ }
 
-        // Ranap ClinicalImpressions (only if no ralan found)
-        if (empty($payloads)) {
-            try {
-                $stmtN = $db->prepare("
-                    SELECT
-                        rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
-                        p.nm_pasien, p.no_ktp AS nik_pasien, rp.stts,
-                        'Ranap' as status_lanjut,
-                        sse.id_encounter,
-                        CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
-                        pem.penilaian, peg.nama AS nm_praktisi, peg.no_ktp AS nik_praktisi,
-                        pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
-                        ssc.id_condition, IFNULL(ssci.id_clinicalimpression, '') AS id_clinicalimpression
-                    FROM reg_periksa rp
-                    INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
-                    LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-                    LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ranap'
-                    LEFT JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
-                    INNER JOIN pemeriksaan_ranap pem ON pem.no_rawat = rp.no_rawat
-                    INNER JOIN pegawai peg ON pem.nip = peg.nik
-                    LEFT JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
-                        AND ssci.tgl_perawatan = pem.tgl_perawatan
-                        AND ssci.jam_rawat = pem.jam_rawat
-                        AND ssci.status = 'Ranap'
-                    WHERE pem.penilaian <> '' AND rp.no_rawat = ?
-                        AND (ssci.id_clinicalimpression IS NULL OR ssci.id_clinicalimpression IN ('', '-'))
-                    LIMIT 1
-                ");
-                $stmtN->execute([$noRawat]);
-                $rowN = $stmtN->fetch();
-                if ($rowN) {
-                    $p = \SatuSehatPayloadBuilder::clinicalImpression($rowN, $ihs['pasien'], $ihs['dokter'], $rowN['id_clinicalimpression'] ?? '');
-                    if ($p !== null) {
-                        $p['_panel_persist_keys'] = [
-                            'table' => 'satu_sehat_clinicalimpression',
-                            'id_col' => 'id_clinicalimpression',
-                            'keys' => ['no_rawat' => $noRawat, 'tgl_perawatan' => $rowN['tgl_perawatan'], 'jam_rawat' => $rowN['jam_rawat'], 'status' => 'Ranap'],
-                        ];
-                        $payloads[] = $p;
-                    }
+        // Ranap ClinicalImpressions
+        try {
+            $stmtN = $db->prepare("
+                SELECT
+                    rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                    p.nm_pasien, p.no_ktp AS nik_pasien, rp.stts,
+                    'Ranap' as status_lanjut,
+                    sse.id_encounter,
+                    CONCAT(pem.keluhan, ', ', pem.pemeriksaan) as keluhan_pemeriksaan,
+                    pem.penilaian, peg.nama AS nm_praktisi, peg.no_ktp AS nik_praktisi,
+                    pem.tgl_perawatan, pem.jam_rawat, ssc.kd_penyakit, py.nm_penyakit,
+                    ssc.id_condition, IFNULL(ssci.id_clinicalimpression, '') AS id_clinicalimpression
+                FROM reg_periksa rp
+                INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+                LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.status = 'Ranap'
+                LEFT JOIN penyakit py ON py.kd_penyakit = ssc.kd_penyakit
+                INNER JOIN pemeriksaan_ranap pem ON pem.no_rawat = rp.no_rawat
+                INNER JOIN pegawai peg ON pem.nip = peg.nik
+                LEFT JOIN satu_sehat_clinicalimpression ssci ON ssci.no_rawat = pem.no_rawat
+                    AND ssci.tgl_perawatan = pem.tgl_perawatan
+                    AND ssci.jam_rawat = pem.jam_rawat
+                    AND ssci.status = 'Ranap'
+                WHERE pem.penilaian <> '' AND rp.no_rawat = ?
+                    AND (ssci.id_clinicalimpression IS NULL OR ssci.id_clinicalimpression IN ('', '-'))
+            ");
+            $stmtN->execute([$noRawat]);
+            $ranapRows = $stmtN->fetchAll();
+            foreach ($ranapRows as $rowN) {
+                $rowN['nm_pasien'] = $patient['nm_pasien'];
+                $rowN['status'] = 'Ranap';
+                $p = \SatuSehatPayloadBuilder::clinicalImpression($rowN, $ihs['pasien'], $ihs['dokter'], $rowN['id_clinicalimpression'] ?? '');
+                if ($p !== null) {
+                    $p = self::withPersistKeys($p, 'satu_sehat_clinicalimpression', 'id_clinicalimpression', $rowN, ['no_rawat', 'tgl_perawatan', 'jam_rawat', 'status']);
+                    $payloads[] = $p;
                 }
-            } catch (\Throwable $e) { /* pemeriksaan_ranap may not have data */ }
-        }
+            }
+        } catch (\Throwable $e) { /* pemeriksaan_ranap may not have data */ }
 
         return $payloads;
     }
@@ -1384,7 +1433,7 @@ if ($stage === 'observation') {
             LEFT JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = ro.no_resep
             WHERE ro.no_rawat = ?
               AND (ssqr.id_questionresponse IS NULL OR ssqr.id_questionresponse IN ('', '-'))
-            ORDER BY tf.tgl_telaah, tf.jam_telaah
+            ORDER BY ro.tgl_peresepan, ro.jam_peresepan
         ");
         $stmt->execute([$patient['no_rawat']]);
         $rows = $stmt->fetchAll();
@@ -1393,6 +1442,9 @@ if ($stage === 'observation') {
         foreach ($rows as $row) {
             $row['nm_pasien'] = $patient['nm_pasien'];
             $row['no_ktp'] = $patient['no_ktp'];
+            $row['no_rawat'] = $patient['no_rawat'];
+            $row['no_rkm_medis'] = $patient['no_rkm_medis'] ?? '';
+            $row['nama'] = $patient['nm_pasien'];
             $payload = \SatuSehatPayloadBuilder::questionnaireResponse($row, $ihs['pasien'], $ihs['dokter'], $row['id_questionresponse'] ?? '');
             if ($payload !== null) {
                 $payload = self::withPersistKeys($payload, 'satu_sehat_questionresponse_telaah_farmasi', 'id_questionresponse', $row, ['no_resep']);

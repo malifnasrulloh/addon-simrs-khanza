@@ -64,7 +64,7 @@ if (isset($_GET['r']) && is_string($_GET['r'])) {
 } else {
     $uri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
     // Strip the folder prefix + leading /api so we get /api/... as-is
-    if (preg_match('#/(?:api/.*)$#', $uri, $m)) {
+    if (preg_match('#/(api/.*)$#', $uri, $m)) {
         $apiPath = '/' . ltrim($m[1], '/');
     }
 }
@@ -109,59 +109,6 @@ $router = new Router();
 // ?r= value (or the /api suffix), already root-relative — no base strip.
 $router->setRequestUri($apiPath);
 
-// Auth endpoints
-$router->add('POST', '/api/auth/login', function () {
-    return SatusehatPanel\Controller\AuthController::login();
-});
-$router->add('POST', '/api/auth/logout', function () {
-    return SatusehatPanel\Controller\AuthController::logout();
-});
-$router->add('GET', '/api/auth/status', function () {
-    return SatusehatPanel\Controller\AuthController::status();
-});
-
-// API: patient list
-$router->add('GET', '/api/patients', function () {
-    return SatusehatPanel\Controller\PatientController::list();
-});
-
-// API: resource payload preview (MOST SPECIFIC first)
-$router->add('GET', '/api/patients/{noRawat:any}/resources/{resource}', function (array $params) {
-    return SatusehatPanel\Controller\ResourceController::preview($params['noRawat'], $params['resource']);
-});
-
-// API: send selected resources via Bundle
-$router->add('POST', '/api/patients/{noRawat:any}/send', function (array $params) {
-    return SatusehatPanel\Controller\SendController::sendBundle($params['noRawat']);
-});
-
-// API: patient detail
-$router->add('GET', '/api/patients/{noRawat:any}', function (array $params) {
-    return SatusehatPanel\Controller\PatientController::detail($params['noRawat']);
-});
-
-// API: audit log
-// NOTE: stats/export must be registered BEFORE {id:any} — the catch-all
-// would otherwise shadow them (matched first).
-$router->add('GET', '/api/audit/stats', function () {
-    return SatusehatPanel\Controller\AuditController::stats();
-});
-$router->add('GET', '/api/audit/export', function () {
-    return SatusehatPanel\Controller\AuditController::export();
-});
-$router->add('GET', '/api/audit/{id:any}', function (array $params) {
-    return SatusehatPanel\Controller\AuditController::detail((int) $params['id']);
-});
-$router->add('GET', '/api/audit', function () {
-    return SatusehatPanel\Controller\AuditController::list();
-});
-
-// API: settings
-$router->add('GET', '/api/settings', function () {
-    return SatusehatPanel\Controller\SettingsController::get();
-});
-$router->add('POST', '/api/settings', function () {
-    return SatusehatPanel\Controller\SettingsController::save();
-});
+SatusehatPanel\Core\Routes::register($router);
 
 $router->dispatch();

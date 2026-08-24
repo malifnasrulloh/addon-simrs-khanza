@@ -60,18 +60,21 @@ if (preg_match('#(?:^|/)(\.env|\.git|config|src|storage)(?:/|$)#i', $path)) {
     return true;
 }
 
-// Front-controller alias (mirrors production): /index.php?r=/api/...
-// The SPA fetches APIs via index.php?r= in every deployment mode;
-// rewrite REQUEST_URI to the ?r= value so the public/auth checks and
-// router dispatch behave exactly like the drop-in root index.php.
-if ($path === '/index.php' && isset($_GET['r']) && is_string($_GET['r'])) {
-    $apiPath = '/' . ltrim($_GET['r'], '/');
-    if ($apiPath !== '' && str_starts_with($apiPath, '/api/')) {
-        $query = (string) ($_SERVER['QUERY_STRING'] ?? '');
-        $_SERVER['REQUEST_URI'] = $apiPath . ($query !== '' ? '?' . $query : '');
-        require __DIR__ . '/index.php';
-        return true;
+// Front-controller alias: /index.php (or /index.php?r=/api/...)
+// If /index.php is requested directly without ?r=, serve the SPA shell.
+// If requested with ?r=/api/..., rewrite REQUEST_URI to the ?r= value.
+if ($path === '/index.php') {
+    if (isset($_GET['r']) && is_string($_GET['r'])) {
+        $apiPath = '/' . ltrim($_GET['r'], '/');
+        if ($apiPath !== '' && str_starts_with($apiPath, '/api/')) {
+            $query = (string) ($_SERVER['QUERY_STRING'] ?? '');
+            $_SERVER['REQUEST_URI'] = $apiPath . ($query !== '' ? '?' . $query : '');
+            require __DIR__ . '/index.php';
+            return true;
+        }
     }
+    require __DIR__ . '/shell.php';
+    return true;
 }
 
 // Serve existing static files directly (css/js/images only reachable here)

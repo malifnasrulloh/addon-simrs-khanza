@@ -988,40 +988,40 @@
             "keyword": "jamur",
             "category": "environment",
             "coding_system": "http://snomed.info/sct",
-            "coding_code": "105824000",
-            "coding_display": "Mold",
+            "coding_code": "419474003",
+            "coding_display": "Allergy to mold",
             "text": "Alergi jamur / kapang (Aspergillus, Alternaria, Cladosporium)"
         },
         {
             "keyword": "kapang",
             "category": "environment",
             "coding_system": "http://snomed.info/sct",
-            "coding_code": "105824000",
-            "coding_display": "Mold",
+            "coding_code": "419474003",
+            "coding_display": "Allergy to mold",
             "text": "Alergi jamur / kapang (Aspergillus, Alternaria, Cladosporium)"
         },
         {
             "keyword": "mold",
             "category": "environment",
             "coding_system": "http://snomed.info/sct",
-            "coding_code": "105824000",
-            "coding_display": "Mold",
+            "coding_code": "419474003",
+            "coding_display": "Allergy to mold",
             "text": "Alergi jamur / kapang (Aspergillus, Alternaria, Cladosporium)"
         },
         {
             "keyword": "aspergillus",
             "category": "environment",
             "coding_system": "http://snomed.info/sct",
-            "coding_code": "105824000",
-            "coding_display": "Mold",
+            "coding_code": "419474003",
+            "coding_display": "Allergy to mold",
             "text": "Alergi jamur / kapang (Aspergillus, Alternaria, Cladosporium)"
         },
         {
             "keyword": "alternaria",
             "category": "environment",
             "coding_system": "http://snomed.info/sct",
-            "coding_code": "105824000",
-            "coding_display": "Mold",
+            "coding_code": "419474003",
+            "coding_display": "Allergy to mold",
             "text": "Alergi jamur / kapang (Aspergillus, Alternaria, Cladosporium)"
         },
         {

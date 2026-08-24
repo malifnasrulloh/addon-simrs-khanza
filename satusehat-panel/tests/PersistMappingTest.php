@@ -43,13 +43,28 @@ final class PersistMappingTest extends TestCase
     public function testDispenseKeysFollowCliNoResepSchema(): void
     {
         // CLI: satu_sehat_medicationdispense (no_rawat, tgl_perawatan, jam,
-        // kode_brng, no_batch, no_faktur) — NO no_resep column.
-        $row = ['no_rawat' => 'V-1', 'tgl_perawatan' => '2026-08-08', 'jam' => '10:00:00', 'kode_brng' => 'P-001', 'no_batch' => 'B-1', 'no_faktur' => 'F-1'];
-        $p = self::withKeys([], 'satu_sehat_medicationdispense', 'id_medicationdispanse', $row, ['no_rawat', 'tgl_perawatan', 'jam', 'kode_brng', 'no_batch', 'no_faktur']);
+        // kode_brng, no_batch, no_faktur)
+        $row = ['no_rawat' => 'V-1', 'tgl_perawatan' => '2026-08-08', 'jam' => '10:00:00', 'kode_brng' => 'P-001', 'no_batch' => 'B-1', 'no_faktur' => 'F-1', 'no_resep' => 'R-9'];
+        $p = self::withKeys([], 'satu_sehat_medicationdispense', 'id_medicationdispanse', $row, ['no_rawat', 'tgl_perawatan', 'jam', 'kode_brng', 'no_batch', 'no_faktur', 'no_resep']);
         $keys = $p['_panel_persist_keys']['keys'];
         $this->assertSame('V-1', $keys['no_rawat']);
-        $this->assertArrayNotHasKey('no_resep', $keys);
+        $this->assertSame('R-9', $keys['no_resep']);
         $this->assertSame('id_medicationdispanse', $p['_panel_persist_keys']['id_col']);
+    }
+
+    public function testAllergyAndEpisodeOfCareAndCarePlanKeys(): void
+    {
+        $allergyRow = ['no_rawat' => 'V-1', 'tgl_perawatan' => '2026-08-08', 'jam_rawat' => '10:00:00', 'status' => 'Ralan'];
+        $pAllergy = self::withKeys([], 'satu_sehat_allergy_intolerance', 'id_allergy_intolerance', $allergyRow, ['no_rawat', 'tgl_perawatan', 'jam_rawat', 'status']);
+        $this->assertSame(['no_rawat' => 'V-1', 'tgl_perawatan' => '2026-08-08', 'jam_rawat' => '10:00:00', 'status' => 'Ralan'], $pAllergy['_panel_persist_keys']['keys']);
+
+        $eocRow = ['no_rawat' => 'V-1', 'kd_penyakit' => 'A15.0', 'status' => 'Ralan'];
+        $pEoc = self::withKeys([], 'satu_sehat_episode_of_care', 'id_episode_of_care', $eocRow, ['no_rawat', 'kd_penyakit', 'status']);
+        $this->assertSame(['no_rawat' => 'V-1', 'kd_penyakit' => 'A15.0', 'status' => 'Ralan'], $pEoc['_panel_persist_keys']['keys']);
+
+        $cpRow = ['no_rawat' => 'V-1', 'tgl_perawatan' => '2026-08-08', 'jam_rawat' => '10:00:00', 'status' => 'Ranap'];
+        $pCp = self::withKeys([], 'satu_sehat_careplan', 'id_careplan', $cpRow, ['no_rawat', 'tgl_perawatan', 'jam_rawat', 'status']);
+        $this->assertSame(['no_rawat' => 'V-1', 'tgl_perawatan' => '2026-08-08', 'jam_rawat' => '10:00:00', 'status' => 'Ranap'], $pCp['_panel_persist_keys']['keys']);
     }
 
     public function testLabPipelineKeysMatchCliSchema(): void

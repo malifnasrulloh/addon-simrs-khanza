@@ -18,18 +18,22 @@ class Auth
     public static function start(): void
     {
         if (session_status() === PHP_SESSION_NONE) {
-            // Proxy-aware Secure flag: trust X-Forwarded-Proto only when the
-            // operator opted in (PANEL_TRUST_PROXY=true) — avoids silently
-            // downgrading cookie security on non-TLS setups.
-            $isHttps = !empty($_SERVER['HTTPS'])
-                || (Config::env('PANEL_TRUST_PROXY', 'false') === 'true'
-                    && ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
-            session_set_cookie_params([
-                'httponly' => true,
-                'samesite' => 'Lax',
-                'secure'   => $isHttps,
-            ]);
-            session_start();
+            if (!headers_sent()) {
+                // Proxy-aware Secure flag: trust X-Forwarded-Proto only when the
+                // operator opted in (PANEL_TRUST_PROXY=true) — avoids silently
+                // downgrading cookie security on non-TLS setups.
+                $isHttps = !empty($_SERVER['HTTPS'])
+                    || (Config::env('PANEL_TRUST_PROXY', 'false') === 'true'
+                        && ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+                session_set_cookie_params([
+                    'httponly' => true,
+                    'samesite' => 'Lax',
+                    'secure'   => $isHttps,
+                ]);
+                @session_start();
+            } else {
+                @session_start();
+            }
         }
     }
 

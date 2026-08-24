@@ -100,6 +100,9 @@ class SatuSehatDiagnosticReportLabMbProcessor
                 continue;
             }
 
+            // Phase-1 create: no prior id — initialize before the builder call
+            $idDiagnosticReport = '';
+
             $payload = SatuSehatPayloadBuilder::diagnosticReportLab(
                 $p,
                 $idPasien,
@@ -183,7 +186,7 @@ class SatuSehatDiagnosticReportLabMbProcessor
 
             // Check local SQLite state
             $localState = $this->db->getDiagnosticReportLabMbLocalState($noorder, $idTemplate, $code);
-            if (in_array($localState, ['skipped', 'invalid_code'], true)) {
+            if (in_array($localState, ['updated', 'skipped', 'invalid_code', 'privacy_error', 'failed_rule'], true)) {
                 $this->skipCount++;
                 continue;
             }

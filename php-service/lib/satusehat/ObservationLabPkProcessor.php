@@ -79,7 +79,7 @@ class SatuSehatObservationLabPkProcessor
 
             // SQLite Local State Check
             $localState = $this->db->getObservationLabPKLocalState($noorder, $kdJenisPrw, $idTemplate);
-            if ($localState === 'sent' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+            if (in_array($localState, ['active', 'updated', 'privacy_error', 'failed_rule', 'invalid_code'], true)) {
                 $this->skipCount++;
                 continue;
             }
@@ -117,7 +117,7 @@ class SatuSehatObservationLabPkProcessor
             if ($result['success'] && isset($result['data']['id'])) {
                 $idObservation = $result['data']['id'];
                 $this->db->saveObservationLabPK($noorder, $kdJenisPrw, $idTemplate, $idObservation);
-                $this->db->updateObservationLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'sent');
+                $this->db->updateObservationLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'active');
                 $this->log->info("[PHASE 1] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Created Observation {$idObservation}");
                 $this->successCount++;
             } else {
@@ -179,7 +179,7 @@ class SatuSehatObservationLabPkProcessor
 
             // SQLite Local State Check
             $localState = $this->db->getObservationLabPKLocalState($noorder, $kdJenisPrw, $idTemplate);
-            if ($localState === 'sent' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
+            if (in_array($localState, ['updated', 'privacy_error', 'failed_rule', 'invalid_code'], true)) {
                 $this->skipCount++;
                 continue;
             }
@@ -213,7 +213,7 @@ $this->log->info("[PHASE 2] {$noorder} [{$kdJenisPrw}]: PATCH /Observation/{$idO
             $result = $this->api->patch("/Observation/{$idObservation}", $ops, $payload);
 
             if ($result['success']) {
-                $this->db->updateObservationLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'sent');
+                $this->db->updateObservationLabPKLocalState($noorder, $kdJenisPrw, $idTemplate, 'updated');
                 $this->log->info("[PHASE 2] {$noorder} [{$idTemplate}/{$kdJenisPrw}]: ✓ Updated Observation {$idObservation}");
                 $this->successCount++;
             } else {

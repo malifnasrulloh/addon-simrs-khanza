@@ -192,6 +192,23 @@ $isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
                 continue;
             }
 
+            $nikPasien = $imm['no_ktp'];
+            $nikPraktisi = $imm['ktppraktisi'];
+
+            $idPasien = $this->db->getIhsPatient($nikPasien);
+            if (!$idPasien) {
+                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Patient (NIK: {$nikPasien}). Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+
+            $idDokter = $this->db->getIhsPractitioner($nikPraktisi);
+            if (!$idDokter) {
+                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Practitioner (NIK: {$nikPraktisi}). Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+
             // Build PATCH operations — confirm completed status
             $payload = SatuSehatPayloadBuilder::immunization($imm, $idPasien, $idDokter, $idImmunization);
             $ops = SatuSehatPayloadBuilder::payloadToPatchOps($payload);

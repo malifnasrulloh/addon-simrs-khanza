@@ -230,7 +230,7 @@ class PatientController
                 . " AND {$anyReal('satu_sehat_careplan', 'id_careplan')}",
             'ClinicalImpression' => "((SELECT COUNT(*) FROM pemeriksaan_ralan pr WHERE pr.no_rawat = rp.no_rawat AND pr.penilaian <> '')"
                 . " + (SELECT COUNT(*) FROM pemeriksaan_ranap pr WHERE pr.no_rawat = rp.no_rawat AND pr.penilaian <> '')) > 0"
-                . " AND NOT EXISTS (SELECT 1 FROM satu_sehat_clinicalimpression ci WHERE ci.no_rawat = rp.no_rawat)",
+                . " AND {$anyReal('satu_sehat_clinicalimpression', 'id_clinicalimpression')}",
             'Immunization' => "((SELECT COUNT(*) FROM detail_pemberian_obat dpo JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng"
                 . " WHERE dpo.no_rawat = rp.no_rawat AND dpo.no_batch <> '')) > 0"
                 . " AND {$anyReal('satu_sehat_immunization', 'id_immunization')}",

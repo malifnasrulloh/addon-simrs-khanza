@@ -60,7 +60,7 @@ class SatuSehatObservationTTVProcessor
                 continue; // already sent in a previous run
             }
 
-            $localState = $this->db->getObservationLocalState($ttvType, $noRawat, $tglObs, $jamObs);
+            $localState = $this->db->getObservationLocalState($ttvType, $noRawat, $tglObs, $jamObs, (string) ($row['status'] ?? ''));
             if ($localState === 'sent' || in_array($localState, ['privacy_error', 'failed_rule', 'invalid_code'], true)) {
                 $delta['skip']++;
                 continue;
@@ -94,7 +94,7 @@ class SatuSehatObservationTTVProcessor
                     $row['status'],
                     $idObservation
                 );
-                $this->db->updateObservationLocalState($ttvType, $noRawat, $tglObs, $jamObs, 'sent');
+                $this->db->updateObservationLocalState($ttvType, $noRawat, $tglObs, $jamObs, 'sent', (string) ($row['status'] ?? ''));
                 $this->log->info("    ✓ Created {$idObservation}");
                 $delta['success']++;
             } else {
@@ -115,7 +115,7 @@ class SatuSehatObservationTTVProcessor
                             $row['status'],
                             $idObservation
                         );
-                        $this->db->updateObservationLocalState($ttvType, $noRawat, $tglObs, $jamObs, 'sent');
+                        $this->db->updateObservationLocalState($ttvType, $noRawat, $tglObs, $jamObs, 'sent', (string) ($row['status'] ?? ''));
                         $this->log->info("    ✓ Recovered {$idObservation} from Server");
                         $delta['success']++;
                     } else {
@@ -135,7 +135,7 @@ class SatuSehatObservationTTVProcessor
                         $state = 'invalid_code';
                     }
 
-                    $this->db->updateObservationLocalState($ttvType, $noRawat, $tglObs, $jamObs, $state);
+                    $this->db->updateObservationLocalState($ttvType, $noRawat, $tglObs, $jamObs, $state, (string) ($row['status'] ?? ''));
                     $delta['fail']++;
                 }
             }

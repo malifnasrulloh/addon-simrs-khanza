@@ -187,20 +187,10 @@ class SatuSehatEncounterProcessor
 
             $idEncounter = $p['id_encounter'];
 
-            // Build PATCH operations for in-progress transition
-            $startWaktu = SatuSehatPayloadBuilder::sanitizeDateTime(
-                $p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p
-            );
-            $inProgressWaktu = !empty($p['waktu_perawatan'])
-                ? SatuSehatPayloadBuilder::sanitizeDateTime($p['waktu_perawatan'], null, $p)
-                : $startWaktu;
-
-            // merge_failed guard: period/statusHistory entries whose end
-            // precedes the visit start violate FHIRPath constraints and the
-            // server rejects the whole PATCH. Clamp anomalies locally instead.
-            if (!self::validPeriod($startWaktu, $inProgressWaktu)) {
-                $inProgressWaktu = $startWaktu;
-            }
+            // Build PATCH operations for in-progress transition — boundaries
+            // come from the SHARED resolver so this history matches the
+            // phase-1 create and phase-3 finish payloads exactly.
+            $boundaries = SatuSehatPayloadBuilder::resolveEncounterBoundaries($p);
 
             $ops = [
                 [
@@ -210,28 +200,11 @@ class SatuSehatEncounterProcessor
                 ],
                 [
                     'op' => 'replace',
-                    'path' => '/period/end',
-                    'value' => $inProgressWaktu
-                ],
-                [
-                    'op' => 'replace',
                     'path' => '/statusHistory',
-                    'value' => [
-                        [
-                            'status' => 'arrived',
-                            'period' => [
-                                'start' => $startWaktu,
-                                'end'   => $inProgressWaktu
-                            ]
-                        ],
-                        [
-                            'status' => 'in-progress',
-                            'period' => [
-                                'start' => $inProgressWaktu
-                            ]
-                        ]
-                    ]
+                    'value' => SatuSehatPayloadBuilder::buildEncounterStatusHistory($boundaries, 'in-progress')
                 ]
+                // NOTE: period/end intentionally untouched — it belongs to
+                // the finished transition only (open period while active).
             ];
 
             $this->log->info("[PHASE 2] {$noRawat}: PATCH /Encounter/{$idEncounter} (in-progress)");
@@ -305,80 +278,22 @@ class SatuSehatEncounterProcessor
 
             $idEncounter = $p['id_encounter'];
 
-            // Build PATCH operations dynamically for finished transition
-            $startWaktu = SatuSehatPayloadBuilder::sanitizeDateTime(
-                $p['tgl_registrasi'] ?? null, $p['jam_reg'] ?? null, $p
-            );
-            $finishedWaktu = !empty($p['waktu_pulang'])
-                ? SatuSehatPayloadBuilder::sanitizeDateTime($p['waktu_pulang'], null, $p)
-                : null;
+            // Build PATCH operations dynamically for finished transition —
+            // boundaries from the SHARED resolver (identical to phases 1/2).
+            $boundaries = SatuSehatPayloadBuilder::resolveEncounterBoundaries($p);
+            $finishedWaktu = $boundaries['t2'];
 
-            // merge_failed guard: a discharge time before the visit start
-            // violates FHIRPath on Encounter.period / statusHistory[i].period
-            // (server rejects the PATCH with merge_failed). Treat it as
-            // "no valid discharge time" — status still flips to finished, end
-            // timestamps are simply not sent.
-            if (!self::validPeriod($startWaktu, $finishedWaktu)) {
-                $this->log->warning("[PHASE 3] {$noRawat}: discharge time precedes visit start ({$finishedWaktu} < {$startWaktu}) — sending finished without end times (merge_failed guard).");
-                $finishedWaktu = null;
+            // merge_failed guard: a discharge time that contradicts the
+            // timeline violates FHIRPath on Encounter.period/statusHistory
+            // and the server rejects the PATCH with merge_failed. The
+            // resolver already drops such ends; warn when source data had a
+            // discharge time but it was judged unusable.
+            if (!empty($p['waktu_pulang']) && $finishedWaktu === null) {
+                $this->log->warning("[PHASE 3] {$noRawat}: discharge time unusable or precedes care start — sending finished without end times (merge_failed guard).");
             }
 
-            // Compute statusHistory based on encounter type
-            $isRanap = ($p['status_lanjut'] ?? '') === 'Ranap';
-            if ($isRanap) {
-                // Ranap: in-progress -> finished
-                $statusHistory = [
-                    [
-                        'status' => 'in-progress',
-                        'period' => [
-                            'start' => $startWaktu,
-                            'end'   => $finishedWaktu
-                        ]
-                    ]
-                ];
-                if ($finishedWaktu) {
-                    $statusHistory[] = [
-                        'status' => 'finished',
-                        'period' => [
-                            'start' => $finishedWaktu,
-                            'end'   => $finishedWaktu
-                        ]
-                    ];
-                }
-            } else {
-                // Ralan/IGD: arrived -> in-progress -> finished
-                $inProgressWaktu = SatuSehatPayloadBuilder::sanitizeDateTime(
-                    $p['waktu_perawatan'] ?? null, null, $p
-                );
-                if (!$inProgressWaktu) {
-                    $inProgressWaktu = $startWaktu;
-                }
-                $statusHistory = [
-                    [
-                        'status' => 'arrived',
-                        'period' => [
-                            'start' => $startWaktu,
-                            'end'   => $inProgressWaktu
-                        ]
-                    ],
-                    [
-                        'status' => 'in-progress',
-                        'period' => [
-                            'start' => $inProgressWaktu,
-                            'end'   => $finishedWaktu
-                        ]
-                    ]
-                ];
-                if ($finishedWaktu) {
-                    $statusHistory[] = [
-                        'status' => 'finished',
-                        'period' => [
-                            'start' => $finishedWaktu,
-                            'end'   => $finishedWaktu
-                        ]
-                    ];
-                }
-            }
+            // Contiguous chain identical to the create/in-progress payloads.
+            $statusHistory = SatuSehatPayloadBuilder::buildEncounterStatusHistory($boundaries, 'finished');
 
             $ops = [
                 [
@@ -460,7 +375,8 @@ class SatuSehatEncounterProcessor
             }
 
             // Add length (duration)
-            if ($finishedWaktu) {
+            $startWaktu = $boundaries['t0'] ?? null;
+            if ($finishedWaktu !== null && $startWaktu !== null) {
                 $durationSeconds = strtotime($finishedWaktu) - strtotime($startWaktu);
                 if ($durationSeconds > 0) {
                     $unit = $isRanap ? 'd' : 'min';
@@ -507,27 +423,6 @@ class SatuSehatEncounterProcessor
                 $this->failCount++;
             }
         }
-    }
-
-    /**
-     * A FHIR Period is valid when both ends are present and end >= start
-     * (SATUSEHAT rejects start > end with merge_failed). Null/missing parts
-     * are accepted (open period).
-     */
-    private static function validPeriod(?string $start, ?string $end): bool
-    {
-        if ($start === null || $start === '') {
-            return true;
-        }
-        if ($end === null || $end === '') {
-            return true;
-        }
-        $s = strtotime($start);
-        $e = strtotime($end);
-        if ($s === false || $e === false) {
-            return false;
-        }
-        return $e >= $s;
     }
 
     /**

@@ -73,5 +73,20 @@ final class NumberUtilTest extends TestCase
         $d = \SatuSehatPayloadBuilder::medicationDispense('1000000001', $row, 'ihs-1', 'ihs-dok', 'MR-1');
         $dose = $d['dosageInstruction'][0]['doseAndRate'][0]['doseQuantity']['value'] ?? null;
         $this->assertSame(0.5, $dose);
+
+        // Zero value in doseQuantity clamped to 1.0 (Rule 10343 / 10356)
+        $ucum = \SatuSehatPayloadBuilder::sanitizeUcum(['value' => 0, 'unit' => 'TAB']);
+        $this->assertSame(1.0, $ucum['value']);
+    }
+
+    public function testIcd10CodeNormalizationAndMapping(): void
+    {
+        $this->assertSame('E87.0', \SatuSehatPayloadBuilder::mapIcd10('E870'));
+        $this->assertSame('P00.0', \SatuSehatPayloadBuilder::mapIcd10('P000'));
+        $this->assertSame('E88.7', \SatuSehatPayloadBuilder::mapIcd10('E887'));
+        $this->assertSame('O00', \SatuSehatPayloadBuilder::mapIcd10('O00.'));
+        $this->assertSame('O00.8', \SatuSehatPayloadBuilder::mapIcd10('O00.81'));
+        $this->assertSame('J96', \SatuSehatPayloadBuilder::mapIcd10('J96.90'));
+        $this->assertSame('I84.9', \SatuSehatPayloadBuilder::mapIcd10('K64'));
     }
 }
