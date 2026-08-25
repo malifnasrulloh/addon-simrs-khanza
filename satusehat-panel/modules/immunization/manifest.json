@@ -1,0 +1,9 @@
+{
+  "id": "immunization",
+  "title": "Immunization (Vaksinasi & Imunisasi)",
+  "category": "Farmasi & Obat",
+  "order": 14,
+  "icon": "💉",
+  "fhir_resource": "Immunization",
+  "description": "Sinkronisasi pemberian vaksin dan imunisasi pasien rawat jalan dan rawat inap."
+}

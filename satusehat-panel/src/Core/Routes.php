@@ -74,5 +74,8 @@ final class Routes
         $router->add('POST', '/api/settings', function () {
             return SettingsController::save();
         });
+
+        // Dynamic Modular Architecture Routes: /api/modules, /api/modules/{id}/*
+        ModuleManager::registerRoutes($router);
     }
 }

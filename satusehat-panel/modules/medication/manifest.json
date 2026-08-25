@@ -1,0 +1,9 @@
+{
+  "id": "medication",
+  "title": "Medication (Master Obat KFA)",
+  "category": "Farmasi & Obat",
+  "order": 10,
+  "icon": "💊",
+  "fhir_resource": "Medication",
+  "description": "Sinkronisasi master data obat SIMRS Khanza yang telah dipetakan ke Kamus Farmasi Alkes (KFA)."
+}

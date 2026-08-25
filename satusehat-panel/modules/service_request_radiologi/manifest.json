@@ -1,0 +1,9 @@
+{
+  "id": "service_request_radiologi",
+  "title": "Service Request Radiologi (Permintaan Radiologi)",
+  "category": "Radiologi & Imaging",
+  "order": 19,
+  "icon": "🩻",
+  "fhir_resource": "ServiceRequest",
+  "description": "Sinkronisasi surat permintaan dan order pemeriksaan foto radiologi (Rontgen, USG, CT Scan, dll)."
+}

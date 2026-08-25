@@ -77,17 +77,23 @@ if ($path === '/index.php') {
     return true;
 }
 
-// Serve existing static files directly (css/js/images only reachable here)
+// Serve existing static files directly (css/js/images and modules/ assets)
 $file = __DIR__ . $path;
+if (!is_file($file) && str_starts_with($path, '/modules/')) {
+    // Check in parent directory (satusehat-panel/modules/)
+    $parentModuleFile = __DIR__ . '/..' . $path;
+    if (is_file($parentModuleFile)) {
+        $file = $parentModuleFile;
+    }
+}
+
 if ($path !== '/' && is_file($file)) {
-    // Only serve whitelisted static extensions from public/
+    // Only serve whitelisted static extensions
     $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-    if (in_array($ext, ['css', 'js', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'woff', 'woff2', 'ttf'], true)) {
-        // Serve through the router so the no-store header applies
-        // (otherwise PHP's built-in server caches the file content and
-        //  the browser can keep running a stale app.js after an edit)
+    if (in_array($ext, ['css', 'js', 'json', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'woff', 'woff2', 'ttf'], true)) {
         $mime = [
             'css' => 'text/css', 'js' => 'application/javascript',
+            'json' => 'application/json',
             'png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg',
             'gif' => 'image/gif', 'svg' => 'image/svg+xml', 'ico' => 'image/x-icon',
             'woff' => 'font/woff', 'woff2' => 'font/woff2', 'ttf' => 'font/ttf',

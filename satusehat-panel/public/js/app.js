@@ -15,6 +15,8 @@ import { initSettingsView, showSettingsView } from './views/settings.js';
 import { initPayloadEditor, hidePayloadModal } from './payload.js';
 import { initBatchView, hideBatchModal, resetBatchRun } from './batch.js';
 import { initPalette, openPalette, closePalette } from './palette.js';
+import { showLaunchpadView } from './views/launchpad.js';
+import { initModuleWorkspace, showModuleView } from './views/module_workspace.js';
 
 /* ── Theme ────────────────────────────────────────────────── */
 function initTheme() {
@@ -145,9 +147,23 @@ function shakeLogin() {
 /* ── Routing ──────────────────────────────────────────────── */
 function route() {
     const h = location.hash || '#/';
-    if (h.startsWith('#/audit')) showAuditView();
-    else if (h.startsWith('#/settings')) showSettingsView();
-    else showPatientsView();
+    if (h.startsWith('#/module/')) {
+        const raw = h.slice('#/module/'.length);
+        const [modId, qs] = raw.split('?', 2);
+        const params = {};
+        if (qs) {
+            new URLSearchParams(qs).forEach((v, k) => { params[k] = v; });
+        }
+        showModuleView(modId, params);
+    } else if (h.startsWith('#/audit')) {
+        showAuditView();
+    } else if (h.startsWith('#/settings')) {
+        showSettingsView();
+    } else if (h.startsWith('#/patients')) {
+        showPatientsView();
+    } else {
+        showLaunchpadView();
+    }
 }
 window.addEventListener('hashchange', route);
 
@@ -250,6 +266,7 @@ function buildLoginAmbient() {
 /* ── Boot ─────────────────────────────────────────────────── */
 (async () => {
     initTheme();
+    initModuleWorkspace();
     initPatientsView();
     initDrawerView();
     initAuditView();
@@ -263,7 +280,6 @@ function buildLoginAmbient() {
     if (authed) {
         showApp();
         route();
-        loadPatients();
     } else {
         showLogin();
     }

@@ -1504,25 +1504,25 @@ class SatuSehatPayloadBuilder
                 [
                     'system' => 'http://sys-ids.kemkes.go.id/medication/' . $orgId,
                     'use'    => 'official',
-                    'value'  => trim($p['kode_brng'])
+                    'value'  => trim((string)($p['kode_brng'] ?? ''))
                 ]
             ],
             'code' => [
                 'coding' => [
                     [
-                        'system'  => str_replace(' ', '', trim($p['obat_system'])),
-                        'code'    => trim($p['obat_code']),
-                        'display' => trim($p['obat_display'])
+                        'system'  => str_replace(' ', '', trim((string)($p['obat_system'] ?? ''))),
+                        'code'    => trim((string)($p['obat_code'] ?? '')),
+                        'display' => trim((string)($p['obat_display'] ?? ''))
                     ]
                 ]
             ],
-            'status' => $p['status'] === '0' ? 'inactive' : 'active',
+            'status' => ($p['status'] ?? '1') === '0' ? 'inactive' : 'active',
             'form' => [
                 'coding' => [
                     [
-                        'system'  => str_replace(' ', '', trim($p['form_system'])),
-                        'code'    => trim($p['form_code']),
-                        'display' => trim($p['form_display'])
+                        'system'  => str_replace(' ', '', trim((string)($p['form_system'] ?? ''))),
+                        'code'    => trim((string)($p['form_code'] ?? '')),
+                        'display' => trim((string)($p['form_display'] ?? ''))
                     ]
                 ]
             ],

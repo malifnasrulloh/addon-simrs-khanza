@@ -1,0 +1,9 @@
+{
+  "id": "observation_ttv",
+  "title": "Observation TTV (Tanda Vital)",
+  "category": "Rekam Klinis",
+  "order": 5,
+  "icon": "🩺",
+  "fhir_resource": "Observation",
+  "description": "Sinkronisasi 10 jenis tanda-tanda vital (Suhu, Tensi, Nadi, Respirasi, SpO2, TB, BB, LP, GCS, Kesadaran)."
+}

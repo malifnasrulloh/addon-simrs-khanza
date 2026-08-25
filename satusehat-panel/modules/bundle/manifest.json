@@ -1,0 +1,9 @@
+{
+  "id": "bundle",
+  "title": "Kirim via Bundle Transaksi",
+  "category": "Featured",
+  "order": 1,
+  "icon": "⚡",
+  "fhir_resource": "Bundle",
+  "description": "Kirim multi-resource sekaligus dalam satu transaksi FHIR transaction bundle terenkapsulasi."
+}

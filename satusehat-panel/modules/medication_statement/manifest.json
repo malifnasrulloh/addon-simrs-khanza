@@ -1,0 +1,9 @@
+{
+  "id": "medication_statement",
+  "title": "Medication Statement (Pernyataan Obat)",
+  "category": "Farmasi & Obat",
+  "order": 13,
+  "icon": "💊",
+  "fhir_resource": "MedicationStatement",
+  "description": "Sinkronisasi pernyataan konsumsi dan pemahaman penggunaan obat oleh pasien."
+}

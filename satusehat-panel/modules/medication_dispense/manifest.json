@@ -1,0 +1,9 @@
+{
+  "id": "medication_dispense",
+  "title": "Medication Dispense (Penyerahan Obat)",
+  "category": "Farmasi & Obat",
+  "order": 12,
+  "icon": "💊",
+  "fhir_resource": "MedicationDispense",
+  "description": "Sinkronisasi penyerahan/pemberian obat dan peracikan farmasi ke pasien."
+}

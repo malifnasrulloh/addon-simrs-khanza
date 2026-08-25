@@ -182,12 +182,111 @@
             </aside>
 
             <section class="content">
+                <!-- Launchpad view (hash route #/ or #/launchpad) -->
+                <div id="launchpad-view" class="launchpad-view" hidden>
+                    <div class="launchpad-head">
+                        <h2>Menu Modul SATUSEHAT</h2>
+                        <p>Pilih modul resource untuk filter spesifik, tinjau status kirim per item, dan kirim langsung ke SATUSEHAT.</p>
+                    </div>
+                    <div id="launchpad-categories" class="launchpad-categories">
+                        <div class="empty-state">Memuat daftar modul...</div>
+                    </div>
+                </div>
+
+                <!-- Module workspace view (hash route #/module/{id}) -->
+                <div id="module-view" class="module-view" hidden>
+                    <div class="content-head">
+                        <div class="content-title">
+                            <div class="breadcrumb-wrap" id="module-breadcrumb">
+                                <a href="#/" class="breadcrumb-link">
+                                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                                    Launchpad
+                                </a>
+                                <span class="breadcrumb-sep">/</span>
+                                <div class="breadcrumb-current" id="module-switcher-trigger">
+                                    <span id="module-title">Modul Resource</span>
+                                    <svg class="icon" style="width:14px;height:14px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                                    <div class="quick-switcher-dropdown" id="quick-switcher-dropdown" hidden></div>
+                                </div>
+                            </div>
+                            <p id="module-subtitle" class="muted small">Memuat data modul...</p>
+                        </div>
+                        <div class="content-actions" id="module-actions">
+                            <button class="btn btn-primary btn-sm" id="btn-module-send-selected" type="button" disabled>
+                                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+                                <span class="btn-label">Kirim Terpilih</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="audit-filters module-filters" id="module-filters" aria-label="Filter modul">
+                        <div class="field">
+                            <label class="field-label" for="mod-filter-since">Dari</label>
+                            <input type="date" id="mod-filter-since" class="input">
+                        </div>
+                        <div class="field">
+                            <label class="field-label" for="mod-filter-until">Sampai</label>
+                            <input type="date" id="mod-filter-until" class="input">
+                        </div>
+                        <div class="field">
+                            <label class="field-label" for="mod-filter-billing">Billing</label>
+                            <select id="mod-filter-billing" class="input">
+                                <option value="all">Semua</option>
+                                <option value="Sudah Bayar">Sudah Bayar</option>
+                                <option value="Belum Bayar">Belum Bayar</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label class="field-label" for="mod-filter-sync">Status Kirim</label>
+                            <select id="mod-filter-sync" class="input">
+                                <option value="all">Semua Status</option>
+                                <option value="ready">Siap Kirim</option>
+                                <option value="sent">Sudah Terkirim</option>
+                                <option value="failed">Gagal Kirim</option>
+                                <option value="blocked">Terblokir (Prasyarat)</option>
+                            </select>
+                        </div>
+                        <div class="field" style="flex:1;min-width:180px">
+                            <label class="field-label" for="mod-filter-search">Cari</label>
+                            <input type="search" id="mod-filter-search" class="input" placeholder="No. Rawat / RM / Pasien...">
+                        </div>
+                        <button class="btn btn-ghost btn-sm" id="btn-mod-filter-reset" type="button" title="Reset filter ke hari ini">Reset</button>
+                    </div>
+
+                    <div id="module-alert" class="list-alert" hidden role="alert"></div>
+
+                    <div class="table-wrap" id="module-table-wrap">
+                        <div class="empty-state">Pilih modul untuk memulai</div>
+                    </div>
+
+                    <div class="pagination-bar" id="module-pagination-bar" hidden>
+                        <span class="pagination-info" id="module-pagination-info">Menampilkan 0 data</span>
+                        <div class="pagination-controls">
+                            <button class="btn btn-ghost btn-sm" id="btn-mod-page-prev" type="button" disabled>
+                                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+                                Sebelumnya
+                            </button>
+                            <span class="pagination-page" id="module-pagination-page">Halaman 1 dari 1</span>
+                            <button class="btn btn-ghost btn-sm" id="btn-mod-page-next" type="button" disabled>
+                                Berikutnya
+                                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Patient list view (used by bundle or legacy #/patients) -->
+                <div id="patient-list-view">
                 <div class="content-head">
                     <div class="content-title">
                         <h2 id="list-title">Daftar Pasien</h2>
                         <p id="list-subtitle" class="muted small">Memuat data...</p>
                     </div>
                     <div class="content-actions" id="list-actions">
+                        <a class="btn btn-ghost btn-sm" href="#/" id="btn-nav-launchpad" title="Kembali ke Menu Utama / Launchpad">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                            Launchpad
+                        </a>
                         <button class="btn btn-ghost btn-sm rail-toggle" id="btn-filter-toggle" type="button" aria-expanded="false">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
                             Filter
@@ -251,6 +350,7 @@
                         </button>
                     </div>
                 </div>
+                </div> <!-- End #patient-list-view -->
 
                 <!-- Audit view (hash route #/audit) -->
                 <div id="audit-view" class="audit-view" hidden>
@@ -453,6 +553,49 @@
             <button class="btn btn-ghost" id="batch-cancel" type="button">Batalkan</button>
         </footer>
     </div>
+
+    <!-- Response & Audit Inspector Drawer -->
+    <div class="drawer-backdrop" id="response-backdrop" hidden></div>
+    <aside class="drawer" id="response-drawer" hidden role="dialog" aria-modal="true" aria-labelledby="resp-drawer-title">
+        <header class="drawer-head">
+            <div class="drawer-head-title">
+                <span class="avatar avatar-lg" id="resp-drawer-avatar" aria-hidden="true">FHIR</span>
+                <div>
+                    <h2 id="resp-drawer-title">Detail Respon SATUSEHAT</h2>
+                    <p id="resp-drawer-subtitle" class="muted small"></p>
+                </div>
+            </div>
+            <button class="btn-icon" id="resp-drawer-close" type="button" aria-label="Tutup">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+        </header>
+
+        <div class="drawer-body">
+            <div class="tab-bar" role="tablist">
+                <button class="tab-btn active" type="button" role="tab" id="tab-btn-summary" data-tab="summary">Ringkasan</button>
+                <button class="tab-btn" type="button" role="tab" id="tab-btn-req" data-tab="req">Request (JSON)</button>
+                <button class="tab-btn" type="button" role="tab" id="tab-btn-resp" data-tab="resp">Response (JSON)</button>
+            </div>
+
+            <div id="tab-content-summary">
+                <div class="response-summary-card" id="resp-summary-card"></div>
+                <div id="resp-blocker-box" class="list-alert" hidden></div>
+            </div>
+
+            <div id="tab-content-req" hidden>
+                <textarea id="resp-req-json" class="editor" readonly spellcheck="false"></textarea>
+            </div>
+
+            <div id="tab-content-resp" hidden>
+                <textarea id="resp-resp-json" class="editor" readonly spellcheck="false"></textarea>
+            </div>
+        </div>
+
+        <footer class="drawer-foot">
+            <button class="btn btn-ghost" id="resp-drawer-btn-close" type="button">Tutup</button>
+            <button class="btn btn-primary" id="resp-drawer-btn-send" type="button" hidden>Kirim Ulang</button>
+        </footer>
+    </aside>
 
     <!-- Command palette -->
     <div class="palette-backdrop" id="palette-backdrop" hidden>

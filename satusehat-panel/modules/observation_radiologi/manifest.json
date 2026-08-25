@@ -1,0 +1,9 @@
+{
+  "id": "observation_radiologi",
+  "title": "Observation Radiologi (Hasil Bacaan Foto)",
+  "category": "Radiologi & Imaging",
+  "order": 21,
+  "icon": "🩻",
+  "fhir_resource": "Observation",
+  "description": "Sinkronisasi hasil ekspertise dan bacaan foto radiologi oleh dokter spesialis radiologi."
+}

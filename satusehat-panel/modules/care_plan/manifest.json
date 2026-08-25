@@ -1,0 +1,9 @@
+{
+  "id": "care_plan",
+  "title": "Care Plan (Rencana Tindak Lanjut)",
+  "category": "Rekam Klinis",
+  "order": 8,
+  "icon": "🩺",
+  "fhir_resource": "CarePlan",
+  "description": "Sinkronisasi rencana asuhan medis dan keperawatan (Rencana Tindak Lanjut / RTL) pasien."
+}

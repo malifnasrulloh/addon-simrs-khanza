@@ -1,0 +1,9 @@
+{
+  "id": "clinical_impression",
+  "title": "Clinical Impression (Penilaian Klinis)",
+  "category": "Rekam Klinis",
+  "order": 9,
+  "icon": "🩺",
+  "fhir_resource": "ClinicalImpression",
+  "description": "Sinkronisasi hasil penilaian dan evaluasi klinis dokter terhadap kondisi pasien."
+}

@@ -1,0 +1,9 @@
+{
+  "id": "allergy_intolerance",
+  "title": "Allergy Intolerance (Riwayat Alergi)",
+  "category": "Rekam Klinis",
+  "order": 7,
+  "icon": "🩺",
+  "fhir_resource": "AllergyIntolerance",
+  "description": "Sinkronisasi riwayat alergi obat, makanan, dan lingkungan pasien."
+}

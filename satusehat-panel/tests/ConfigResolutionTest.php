@@ -126,7 +126,7 @@ final class ConfigResolutionTest extends TestCase
 
     public function testNeitherSourceThrowsControlledException(): void
     {
-        CredentialLocator::setPathsForTesting(null, null);
+        CredentialLocator::setPathsForTesting($this->dir . '/missing.env', $this->dir . '/missing.json');
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessageMatches('/Kredensial SATUSEHAT/');
         CredentialLocator::buildSatuSehatConfig();

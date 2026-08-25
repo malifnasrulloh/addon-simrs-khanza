@@ -1,0 +1,9 @@
+{
+  "id": "diagnostic_report_lab",
+  "title": "Diagnostic Report Lab (Hasil & Kesan Lab)",
+  "category": "Laboratorium",
+  "order": 18,
+  "icon": "🧪",
+  "fhir_resource": "DiagnosticReport",
+  "description": "Sinkronisasi laporan diagnostik lengkap laboratorium beserta kesimpulan/saran dokter patologi."
+}

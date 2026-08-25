@@ -1,0 +1,9 @@
+{
+  "id": "encounter",
+  "title": "Encounter (Kunjungan)",
+  "category": "Kunjungan & Registrasi",
+  "order": 2,
+  "icon": "🏥",
+  "fhir_resource": "Encounter",
+  "description": "Sinkronisasi status kedatangan (arrived), pemeriksaan (in-progress), dan kepulangan (finished) pasien."
+}

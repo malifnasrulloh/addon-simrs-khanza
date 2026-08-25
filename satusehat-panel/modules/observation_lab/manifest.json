@@ -1,0 +1,9 @@
+{
+  "id": "observation_lab",
+  "title": "Observation Lab (Hasil Pemeriksaan Lab)",
+  "category": "Laboratorium",
+  "order": 17,
+  "icon": "🧪",
+  "fhir_resource": "Observation",
+  "description": "Sinkronisasi hasil tes parameter laboratorium (nilai numerik, nilai rujukan, dan interpretasi)."
+}

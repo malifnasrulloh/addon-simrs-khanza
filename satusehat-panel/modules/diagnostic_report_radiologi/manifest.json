@@ -1,0 +1,9 @@
+{
+  "id": "diagnostic_report_radiologi",
+  "title": "Diagnostic Report Radiologi (Laporan Radiologi)",
+  "category": "Radiologi & Imaging",
+  "order": 22,
+  "icon": "🩻",
+  "fhir_resource": "DiagnosticReport",
+  "description": "Sinkronisasi laporan diagnostik radiologi lengkap beserta kesimpulan dan tautan ke studi citra (ImagingStudy)."
+}

@@ -1,0 +1,9 @@
+{
+  "id": "procedure",
+  "title": "Procedure (Tindakan & Prosedur)",
+  "category": "Rekam Klinis",
+  "order": 6,
+  "icon": "🩺",
+  "fhir_resource": "Procedure",
+  "description": "Sinkronisasi tindakan medis dan prosedur ICD-9-CM pasien rawat jalan dan rawat inap."
+}

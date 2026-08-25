@@ -1,0 +1,9 @@
+{
+  "id": "episode_of_care",
+  "title": "Episode of Care (Program Kesehatan)",
+  "category": "Kunjungan & Registrasi",
+  "order": 3,
+  "icon": "📋",
+  "fhir_resource": "EpisodeOfCare",
+  "description": "Sinkronisasi episode program kesehatan pemerintah (ANC, TB, HIV, Stunting, dll)."
+}

@@ -74,6 +74,9 @@ export function initPatientsView() {
 }
 
 export function showPatientsView() {
+    $('patient-list-view').hidden = false;
+    $('launchpad-view').hidden = true;
+    if ($('module-view')) $('module-view').hidden = true;
     $('table-wrap').hidden = false;
     $('audit-view').hidden = true;
     $('settings-view').hidden = true;

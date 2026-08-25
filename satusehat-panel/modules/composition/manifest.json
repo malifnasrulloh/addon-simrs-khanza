@@ -1,0 +1,9 @@
+{
+  "id": "composition",
+  "title": "Composition (Resume Medis)",
+  "category": "Dokumen & Resume",
+  "order": 24,
+  "icon": "📄",
+  "fhir_resource": "Composition",
+  "description": "Sinkronisasi dokumen resume medis (ringkasan kepulangan dan asuhan rawat jalan/inap)."
+}

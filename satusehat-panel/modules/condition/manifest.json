@@ -1,0 +1,9 @@
+{
+  "id": "condition",
+  "title": "Condition (Diagnosa & Keluhan)",
+  "category": "Rekam Klinis",
+  "order": 4,
+  "icon": "🩺",
+  "fhir_resource": "Condition",
+  "description": "Sinkronisasi diagnosa primer/sekunder ICD-10 dan keluhan utama (chief complaint) pasien."
+}

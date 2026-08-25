@@ -1,0 +1,9 @@
+{
+  "id": "medication_request",
+  "title": "Medication Request (Resep Dokter)",
+  "category": "Farmasi & Obat",
+  "order": 11,
+  "icon": "💊",
+  "fhir_resource": "MedicationRequest",
+  "description": "Sinkronisasi peresepan obat dokter (resep reguler dan racikan) pasien rawat jalan dan rawat inap."
+}

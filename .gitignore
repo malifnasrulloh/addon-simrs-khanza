@@ -5,3 +5,4 @@ graphify-out/
 # Local agent/planning docs — never committed
 AGENTS.md
 tasks/
+workflows/

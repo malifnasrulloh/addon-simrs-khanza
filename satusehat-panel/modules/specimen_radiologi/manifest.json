@@ -1,0 +1,9 @@
+{
+  "id": "specimen_radiologi",
+  "title": "Specimen Radiologi (Spesimen Radiologi)",
+  "category": "Radiologi & Imaging",
+  "order": 20,
+  "icon": "🩻",
+  "fhir_resource": "Specimen",
+  "description": "Sinkronisasi data spesimen atau target pemeriksaan radiologi."
+}

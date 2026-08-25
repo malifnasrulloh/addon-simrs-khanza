@@ -1,0 +1,9 @@
+{
+  "id": "imaging_study",
+  "title": "Imaging Study (DICOM / PACS)",
+  "category": "Radiologi & Imaging",
+  "order": 23,
+  "icon": "🩻",
+  "fhir_resource": "ImagingStudy",
+  "description": "Sinkronisasi metadata studi citra medis DICOM PACS (Rontgen, CT, USG) beserta Accession Number (ACSN)."
+}

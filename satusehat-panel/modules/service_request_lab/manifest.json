@@ -1,0 +1,9 @@
+{
+  "id": "service_request_lab",
+  "title": "Service Request Lab (Permintaan Lab)",
+  "category": "Laboratorium",
+  "order": 15,
+  "icon": "🧪",
+  "fhir_resource": "ServiceRequest",
+  "description": "Sinkronisasi surat permintaan dan order pemeriksaan laboratorium (PK & MB)."
+}

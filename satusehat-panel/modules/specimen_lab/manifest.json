@@ -1,0 +1,9 @@
+{
+  "id": "specimen_lab",
+  "title": "Specimen Lab (Sampel Laboratorium)",
+  "category": "Laboratorium",
+  "order": 16,
+  "icon": "🧪",
+  "fhir_resource": "Specimen",
+  "description": "Sinkronisasi pengambilan dan penerimaan sampel spesimen laboratorium (darah, urin, swab, dll)."
+}

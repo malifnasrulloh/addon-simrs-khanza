@@ -1,0 +1,9 @@
+{
+  "id": "questionnaire_response",
+  "title": "Questionnaire Response (Telaah Resep)",
+  "category": "Dokumen & Resume",
+  "order": 25,
+  "icon": "📋",
+  "fhir_resource": "QuestionnaireResponse",
+  "description": "Sinkronisasi hasil telaah resep farmasi (tepat pasien, tepat obat, tepat dosis, dan duplikasi)."
+}
