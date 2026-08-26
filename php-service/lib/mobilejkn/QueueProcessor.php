@@ -424,10 +424,14 @@ class QueueProcessor
                 $addResult = $this->api->addAntrean($payload);
                 $addCode   = $addResult['code'] ?? '';
                 if ($addResult['success'] || $addCode === '208') {
+                    $this->db->saveToReferensiMobileJkn($p, $kodebooking, $nomorRef);
                     $this->log->info("[BLOCK 4] {$noRawat}: ✓ /antrean/add accepted (code={$addCode})");
                     $this->successCount++;
                 } else {
                     $this->log->warning("[BLOCK 4] {$noRawat}: ✗ /antrean/add failed ({$addCode}) — {$addResult['message']}");
+                    $this->db->deleteReferensiMobileJkn($noRawat, $kodebooking);
+                    $this->failCount++;
+                    continue; // Skip task chain because booking was not accepted on BPJS
                 }
             }
 
@@ -621,6 +625,8 @@ class QueueProcessor
                                     $this->log->info("[{$label}] {$noRawat}: dynamic /antrean/add recovery accepted (code={$addCode}). Retrying Task ID 3 immediately.");
                                     if ($isJkn && !empty($bookingData['nobooking'])) {
                                         $this->db->markBookingAsSent($bookingData['nobooking']);
+                                    } else {
+                                        $this->db->saveToReferensiMobileJkn($patient, $kodebooking, $nomorRef ?? '');
                                     }
                                     // Retry sending Task 3
                                     $retryR = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3Str, $label, $jenisresep);
@@ -632,6 +638,7 @@ class QueueProcessor
                                     }
                                 } else {
                                     $this->log->warning("[{$label}] {$noRawat}: dynamic /antrean/add recovery failed ({$addCode}): {$addResult['message']}");
+                                    $this->db->deleteReferensiMobileJkn($noRawat, $kodebooking);
                                     $state['3'] = 'Belum';
                                 }
                             } else {
@@ -1330,10 +1337,14 @@ class QueueProcessor
                 $addResult = $this->api->addAntrean($payload);
                 $addCode   = $addResult['code'] ?? '';
                 if ($addResult['success'] || $addCode === '208') {
+                    $this->db->saveToReferensiMobileJkn($p, $kodebooking, $nomorRef);
                     $this->log->info("[BLOCK 5] {$noRawat}: ✓ /antrean/add accepted (code={$addCode})");
                     $this->successCount++;
                 } else {
                     $this->log->warning("[BLOCK 5] {$noRawat}: ✗ /antrean/add failed ({$addCode}) — {$addResult['message']}");
+                    $this->db->deleteReferensiMobileJkn($noRawat, $kodebooking);
+                    $this->failCount++;
+                    continue; // Skip task chain because booking was not accepted on BPJS
                 }
             }
 

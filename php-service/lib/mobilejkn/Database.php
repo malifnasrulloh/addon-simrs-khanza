@@ -412,6 +412,7 @@ SQL;
     /**
      * Fetch existing nobooking from referensi_mobilejkn_bpjs, or generate a unified MAX+1
      * nobooking (matching index.php lines 523–524) for on-site patients when formatOnsite is enabled.
+     * Note: This method only computes/resolves the nobooking string and does NOT insert into referensi_mobilejkn_bpjs.
      */
     public function fetchOrGenerateNobooking(array $p, bool $formatOnsite = true): string
     {
@@ -440,9 +441,18 @@ SQL;
         $maxRow = $stmtMax->fetch();
         $maxNum = (int) ($maxRow['maxb'] ?? 1);
 
-        $nobooking = str_replace('-', '', $tglPeriksa) . sprintf('%06d', $maxNum);
+        return str_replace('-', '', $tglPeriksa) . sprintf('%06d', $maxNum);
+    }
 
-        // 4. Save to referensi_mobilejkn_bpjs to keep table in sync
+    /**
+     * Save/synchronize booking record to referensi_mobilejkn_bpjs upon successful /antrean/add response.
+     */
+    public function saveToReferensiMobileJkn(array $p, string $nobooking, string $nomorRef = ''): bool
+    {
+        $noRawat = $p['no_rawat'] ?? '';
+        if (empty($noRawat) || empty($nobooking)) return false;
+
+        $tglPeriksa = $p['tgl_registrasi'] ?? date('Y-m-d');
         $noReg      = (int) ($p['no_reg'] ?? 1);
         $isJkn      = (($p['kd_pj'] ?? '') === 'BPJ');
         $statusDaftar = match ($p['stts_daftar'] ?? '-') {
@@ -457,12 +467,13 @@ SQL;
         $kuota      = (int) ($p['kuota'] ?? 30);
         $estimasiMs = strtotime("{$tglPeriksa} {$jamMulai}") * 1000;
 
-        $insertSql = "INSERT IGNORE INTO referensi_mobilejkn_bpjs 
+        $insertSql = "INSERT INTO referensi_mobilejkn_bpjs 
             (nobooking, no_rawat, nomorkartu, nik, nohp, kodepoli, pasienbaru, norm, tanggalperiksa, kodedokter, jampraktek, jeniskunjungan, nomorreferensi, nomorantrean, angkaantrean, estimasidilayani, sisakuotajkn, kuotajkn, sisakuotanonjkn, kuotanonjkn, status, validasi, statuskirim)
-            VALUES (:nb, :nr, :nk, :nik, :hp, :kp, :pb, :rm, :tgl, :kd, :jp, '3 (Kontrol)', '', :na, :aa, :est, :skj, :kj, :sknj, :knj, 'Checkin', NOW(), 'Sudah')";
+            VALUES (:nb, :nr, :nk, :nik, :hp, :kp, :pb, :rm, :tgl, :kd, :jp, '3 (Kontrol)', :ref, :na, :aa, :est, :skj, :kj, :sknj, :knj, 'Checkin', NOW(), 'Sudah')
+            ON DUPLICATE KEY UPDATE statuskirim = 'Sudah'";
 
         $stmtIns = $this->pdo->prepare($insertSql);
-        $stmtIns->execute([
+        return $stmtIns->execute([
             'nb' => $nobooking,
             'nr' => $noRawat,
             'nk' => $isJkn ? ($p['no_peserta'] ?: '-') : '-',
@@ -474,6 +485,7 @@ SQL;
             'tgl' => $tglPeriksa,
             'kd' => $kdDokterBpjs,
             'jp' => $jamPraktek,
+            'ref' => $nomorRef,
             'na' => "{$kdPoliBpjs}-{$noReg}",
             'aa' => $noReg,
             'est' => $estimasiMs,
@@ -482,8 +494,21 @@ SQL;
             'sknj' => max(0, $kuota - $noReg),
             'knj' => $kuota,
         ]);
+    }
 
-        return $nobooking;
+    /**
+     * Delete unconfirmed or failed booking record from referensi_mobilejkn_bpjs.
+     */
+    public function deleteReferensiMobileJkn(string $noRawat, string $nobooking = ''): bool
+    {
+        if (empty($noRawat) && empty($nobooking)) return false;
+
+        $sql = "DELETE FROM referensi_mobilejkn_bpjs WHERE (no_rawat = :nr OR nobooking = :nb) AND statuskirim != 'Sudah'";
+        $stmt = $this->pdo->prepare($sql);
+        return $stmt->execute([
+            'nr' => $noRawat,
+            'nb' => $nobooking ?: $noRawat,
+        ]);
     }
 
 
