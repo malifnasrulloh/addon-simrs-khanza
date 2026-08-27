@@ -65,6 +65,7 @@ INNER JOIN pasien p ON r.norm = p.no_rkm_medis
 LEFT JOIN maping_poli_bpjs mp ON r.kodepoli = mp.kd_poli_bpjs
 LEFT JOIN maping_dokter_dpjpvclaim md ON r.kodedokter = md.kd_dokter_bpjs
 WHERE r.statuskirim = 'Belum'
+  AND r.status != 'Batal'
   AND r.tanggalperiksa BETWEEN :date_from AND :date_to
 ORDER BY r.tanggalperiksa
 SQL;
@@ -110,8 +111,8 @@ SQL;
 
     /**
      * Fetch checked-in JKN patients for task chain processing.
-     * Returns patients with their current task state from referensi_mobilejkn_bpjs_taskid.
-     * The task chain logic (3→4→5→farmasi→6→7) is handled in QueueProcessor.
+     * Matches both no_rawat AND norm (no_rkm_medis) to prevent cross-patient collisions
+     * when a no_rawat is recycled after patient deletion/cancellation.
      *
      * LEFT JOIN on dokter/poliklinik ensures patients with missing master records
      * are still fetched (BUG-D: zero patient loss).
@@ -120,15 +121,17 @@ SQL;
     {
         $sql = <<<'SQL'
 SELECT
-    r.nobooking, r.no_rawat,
+    r.nobooking, r.no_rawat, r.norm as no_rkm_medis,
     rp.tgl_registrasi, rp.jam_reg, rp.kd_dokter, rp.kd_poli, rp.stts,
     COALESCE(d.nm_dokter, '') as nm_dokter,
     COALESCE(pol.nm_poli, '') as nm_poli
 FROM referensi_mobilejkn_bpjs r
-INNER JOIN reg_periksa rp ON rp.no_rawat = r.no_rawat
+INNER JOIN reg_periksa rp ON rp.no_rawat = r.no_rawat AND rp.no_rkm_medis = r.norm
 LEFT JOIN dokter d ON rp.kd_dokter = d.kd_dokter
 LEFT JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
 WHERE r.statuskirim = 'Sudah'
+  AND r.status != 'Batal'
+  AND rp.stts != 'Batal'
   AND r.tanggalperiksa BETWEEN :df AND :dt
 ORDER BY r.tanggalperiksa
 SQL;
@@ -147,12 +150,10 @@ SQL;
     /**
      * Fetch ALL patients registered but missing from referensi_mobilejkn_bpjs.
      *
-     * LEFT JOIN on dokter/poliklinik/pasien ensures patients with missing master
-     * records are still fetched (BUG-D: zero patient loss). COALESCE provides
-     * safe defaults for nullable columns.
+     * Uses NOT EXISTS on (no_rawat, norm, status != 'Batal') to ensure new patients
+     * reusing a recycled no_rawat after previous patient cancellation are NOT falsely excluded.
      *
-     * Excludes cancelled patients (taskid=99) to prevent re-processing (BUG-A).
-     * The kd_pj check (BPJ vs non-BPJ) happens per-patient in QueueProcessor.
+     * Excludes cancelled active registrations (rp.stts = 'Batal').
      */
     public function fetchMissingOnsitePatients(string $dateFrom, string $dateTo): array
     {
@@ -168,13 +169,13 @@ LEFT JOIN dokter d ON rp.kd_dokter = d.kd_dokter
 LEFT JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
 LEFT JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
 WHERE rp.tgl_registrasi BETWEEN :df AND :dt
-  AND rp.no_rawat NOT IN (
-      SELECT rmb.no_rawat FROM referensi_mobilejkn_bpjs rmb
-      WHERE rmb.tanggalperiksa BETWEEN :df2 AND :dt2
-  )
-  AND rp.no_rawat NOT IN (
-      SELECT t.no_rawat FROM referensi_mobilejkn_bpjs_taskid t
-      WHERE t.taskid = '99'
+  AND rp.stts != 'Batal'
+  AND NOT EXISTS (
+      SELECT 1 FROM referensi_mobilejkn_bpjs rmb
+      WHERE rmb.no_rawat = rp.no_rawat
+        AND rmb.norm = rp.no_rkm_medis
+        AND rmb.status != 'Batal'
+        AND rmb.tanggalperiksa BETWEEN :df2 AND :dt2
   )
 ORDER BY CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg)
 SQL;
@@ -418,11 +419,16 @@ SQL;
     {
         $noRawat = $p['no_rawat'] ?? '';
         if (empty($noRawat)) return '';
+        $norm = $p['no_rkm_medis'] ?? '';
 
-        // 1. Check existing referensi_mobilejkn_bpjs record
-        $sql = "SELECT nobooking FROM referensi_mobilejkn_bpjs WHERE no_rawat = :nr LIMIT 1";
+        // 1. Check existing active referensi_mobilejkn_bpjs record matching BOTH no_rawat AND norm
+        $sql = "SELECT nobooking FROM referensi_mobilejkn_bpjs WHERE no_rawat = :nr" . (!empty($norm) ? " AND norm = :norm" : "") . " AND status != 'Batal' LIMIT 1";
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['nr' => $noRawat]);
+        $params = ['nr' => $noRawat];
+        if (!empty($norm)) {
+            $params['norm'] = $norm;
+        }
+        $stmt->execute($params);
         $row = $stmt->fetch();
         if ($row && !empty($row['nobooking'])) {
             return $row['nobooking'];
@@ -442,6 +448,50 @@ SQL;
         $maxNum = (int) ($maxRow['maxb'] ?? 1);
 
         return str_replace('-', '', $tglPeriksa) . sprintf('%06d', $maxNum);
+    }
+
+    /**
+     * Purge stale/orphaned task and booking records when a no_rawat is reassigned to a different patient or after cancellation.
+     * Returns true if any stale records were purged.
+     */
+    public function purgeStalePatientRecords(string $noRawat, string $currentNorm): bool
+    {
+        if (empty($noRawat)) return false;
+
+        $sql = "SELECT norm, status FROM referensi_mobilejkn_bpjs WHERE no_rawat = :nr";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['nr' => $noRawat]);
+        $existing = $stmt->fetchAll();
+
+        $needsPurge = false;
+        foreach ($existing as $row) {
+            if ($row['norm'] !== $currentNorm || $row['status'] === 'Batal') {
+                $needsPurge = true;
+                break;
+            }
+        }
+
+        // Also check if taskid table has records while referensi table is empty or mismatched
+        if (!$needsPurge) {
+            $stmtTaskCheck = $this->pdo->prepare("SELECT 1 FROM referensi_mobilejkn_bpjs_taskid WHERE no_rawat = :nr AND taskid = '99' LIMIT 1");
+            $stmtTaskCheck->execute(['nr' => $noRawat]);
+            if ($stmtTaskCheck->fetch()) {
+                $needsPurge = true;
+            }
+        }
+
+        if ($needsPurge) {
+            // Delete mismatched or cancelled referensi record
+            $delRef = $this->pdo->prepare("DELETE FROM referensi_mobilejkn_bpjs WHERE no_rawat = :nr AND (norm != :norm OR status = 'Batal')");
+            $delRef->execute(['nr' => $noRawat, 'norm' => $currentNorm]);
+
+            // Delete obsolete task IDs from previous patient
+            $delTask = $this->pdo->prepare("DELETE FROM referensi_mobilejkn_bpjs_taskid WHERE no_rawat = :nr");
+            $delTask->execute(['nr' => $noRawat]);
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -835,7 +885,7 @@ SQL;
     /**
      * Fetch the full JKN booking record by no_rawat to support dynamic on-demand booking addition.
      */
-    public function fetchBookingByNoRawat(string $noRawat): ?array
+    public function fetchBookingByNoRawat(string $noRawat, string $norm = ''): ?array
     {
         $sql = <<<'SQL'
 SELECT
@@ -851,10 +901,16 @@ INNER JOIN pasien p ON r.norm = p.no_rkm_medis
 LEFT JOIN maping_poli_bpjs mp ON r.kodepoli = mp.kd_poli_bpjs
 LEFT JOIN maping_dokter_dpjpvclaim md ON r.kodedokter = md.kd_dokter_bpjs
 WHERE r.no_rawat = :nr
-LIMIT 1
+  AND r.status != 'Batal'
 SQL;
+        $params = ['nr' => $noRawat];
+        if (!empty($norm)) {
+            $sql .= " AND r.norm = :norm";
+            $params['norm'] = $norm;
+        }
+        $sql .= " LIMIT 1";
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['nr' => $noRawat]);
+        $stmt->execute($params);
         $row = $stmt->fetch();
         return $row ?: null;
     }

@@ -407,6 +407,11 @@ class QueueProcessor
             $p['kd_dokter_bpjs'] = $dokterBpjs;
             $p['kd_poli_bpjs']   = $poliBpjs;
 
+            // Clean up any stale records if no_rawat was recycled after previous patient cancellation/deletion
+            if ($this->db->purgeStalePatientRecords($noRawat, $p['no_rkm_medis'] ?? '')) {
+                $taskStates[$noRawat] = ['1' => '', '2' => '', '3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
+            }
+
             // Resolve kodebooking matching index.php (unified MAX+1 sequence when formatOnsiteKodebooking=true)
             $kodebooking = $this->db->fetchOrGenerateNobooking($p, $this->config->formatOnsiteKodebooking);
 
@@ -493,6 +498,12 @@ class QueueProcessor
         $jamMulai   = $jadwal['jam_mulai'] ?? '08:00:00';
         $jamSelesai = $jadwal['jam_selesai'] ?? '14:00:00';
         $isRealtime = ($this->config->syncMode === 'realtime');
+
+        // Early abort if patient registration is marked as Batal
+        if (($patient['stts'] ?? '') === 'Batal') {
+            $this->log->debug("[{$label}] {$noRawat}: registration status is 'Batal' — skipping task chain");
+            return;
+        }
 
         // Determine prescription info from pre-loaded data (Fix #5)
         $jenisresep = empty($noResep) ? 'Tidak ada' : ($isRacikan ? 'Racikan' : 'Non racikan');
@@ -605,7 +616,7 @@ class QueueProcessor
                             // Dynamically resolve /antrean/add payload
                             $payload = null;
                             if ($isJkn) {
-                                $bookingData = $this->db->fetchBookingByNoRawat($noRawat);
+                                $bookingData = $this->db->fetchBookingByNoRawat($noRawat, $patient['no_rkm_medis'] ?? '');
                                 if ($bookingData) {
                                     $payload = PayloadBuilder::jknBooking($bookingData);
                                 } else {
@@ -1318,6 +1329,11 @@ class QueueProcessor
             $p['kuota']          = $jadwal['kuota'];
             $p['kd_dokter_bpjs'] = $dokterBpjs;
             $p['kd_poli_bpjs']   = $poliBpjs;
+
+            // Clean up any stale records if no_rawat was recycled after previous patient cancellation/deletion
+            if ($this->db->purgeStalePatientRecords($noRawat, $p['no_rkm_medis'] ?? '')) {
+                $taskStates[$noRawat] = ['1' => '', '2' => '', '3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
+            }
 
             // Resolve kodebooking matching index.php (unified MAX+1 sequence when formatOnsiteKodebooking=true)
             $kodebooking = $this->db->fetchOrGenerateNobooking($p, $this->config->formatOnsiteKodebooking);
