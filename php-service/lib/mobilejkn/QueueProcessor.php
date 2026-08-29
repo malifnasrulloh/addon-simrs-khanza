@@ -534,16 +534,19 @@ class QueueProcessor
         // ── Resolve Task 3 timestamp first as anchor for preceding tasks (Task 1 & 2) ──
         $waktu3Str = $state['waktu_3'] ?? '';
         if (empty($waktu3Str)) {
-            $real3 = $realEvents['3'] ?? '';
-            if (!empty($real3)) {
-                $waktu3Str = $real3;
-            } elseif (!$isRealtime) {
+            if (!$isRealtime) {
+                // Pure Robot Mode: always compute Task 3 via RobotInference
                 $waktu3Str = RobotInference::inferTask3($patient['tgl_registrasi'], $patient['jam_reg'] ?? '08:00:00', $jamMulai, $this->config->robotRanges);
             } else {
-                // Realtime Mode: fallback anchor to max(reg_periksa.jam_reg, jadwal.jam_mulai)
-                $regDateTime   = $patient['tgl_registrasi'] . ' ' . ($patient['jam_reg'] ?? '08:00:00');
-                $startDateTime = $patient['tgl_registrasi'] . ' ' . $jamMulai;
-                $waktu3Str     = ($regDateTime > $startDateTime) ? $regDateTime : $startDateTime;
+                $real3 = $realEvents['3'] ?? '';
+                if (!empty($real3)) {
+                    $waktu3Str = $real3;
+                } else {
+                    // Realtime Mode: fallback anchor to max(reg_periksa.jam_reg, jadwal.jam_mulai)
+                    $regDateTime   = $patient['tgl_registrasi'] . ' ' . ($patient['jam_reg'] ?? '08:00:00');
+                    $startDateTime = $patient['tgl_registrasi'] . ' ' . $jamMulai;
+                    $waktu3Str     = ($regDateTime > $startDateTime) ? $regDateTime : $startDateTime;
+                }
             }
         }
 
@@ -600,13 +603,19 @@ class QueueProcessor
                             $t3bTs = strtotime($waktu3Str) + 180; // 3 minutes after 1st Task 3
                             if ($t3bTs <= time()) {
                                 $waktu3bStr = date('Y-m-d H:i:s', $t3bTs);
-                                $r3b = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3bStr, $label, $jenisresep, true);
-                                if ($r3b['ok']) {
-                                    $state['waktu_3'] = $waktu3bStr;
-                                }
+                                $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3bStr, $label, $jenisresep, true);
                             }
                         }
-                    } elseif ($r['reason'] === 'booking_not_found') {
+                    } elseif (($r['reason'] ?? '') === 'preceding_tasks_missing') {
+                        $missingId = $r['missing_taskid'] ?? null;
+                        if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '3', $jenisresep, $missingId)) {
+                            $retryR3 = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3Str, $label, $jenisresep);
+                            if ($retryR3['ok']) {
+                                $state['3'] = 'Sudah';
+                                $state['waktu_3'] = $waktu3Str;
+                            }
+                        }
+                    } elseif (($r['reason'] ?? '') === 'booking_not_found') {
                         if ($patient['tgl_registrasi'] < date('Y-m-d')) {
                             $this->log->warning("[{$label}] {$noRawat} TaskID 3 failed: booking_not_found, past date ({$patient['tgl_registrasi']}). Skipping — will retry next cycle.");
                             $state['3'] = 'Belum';
@@ -674,9 +683,12 @@ class QueueProcessor
                 $prevWaktu = $openTime;
             }
 
-            $waktu4Str = $realEvents['4'] ?? '';
-            if (empty($waktu4Str) && !$isRealtime) {
+            if (!$isRealtime) {
+                // Pure Robot Mode
                 $waktu4Str = RobotInference::infer('4', $prevWaktu, false, $this->config->robotRanges);
+            } else {
+                // Realtime Mode: strictly from real SIMRS tables
+                $waktu4Str = $realEvents['4'] ?? '';
             }
 
             if (!empty($waktu4Str)) {
@@ -714,16 +726,14 @@ class QueueProcessor
         if ($state['99'] === '' && $state['4'] === 'Sudah' && $state['5'] === '') {
             $prevWaktu = $state['waktu_4'] ?? '';
 
-            $waktu5Str = $realEvents['5'] ?? '';
-            if (empty($waktu5Str)) {
-                if (!$isRealtime) {
-                    $waktu5Str = RobotInference::infer('5', $prevWaktu, false, $this->config->robotRanges);
-                } elseif (($patient['stts'] ?? '') === 'Sudah') {
-                    if ($patient['tgl_registrasi'] === date('Y-m-d')) {
-                        $waktu5Str = date('Y-m-d H:i:s');
-                    } else {
-                        $waktu5Str = RobotInference::infer('5', $prevWaktu, false, $this->config->robotRanges);
-                    }
+            if (!$isRealtime) {
+                // Pure Robot Mode
+                $waktu5Str = RobotInference::infer('5', $prevWaktu, false, $this->config->robotRanges);
+            } else {
+                // Realtime Mode: strictly from real SIMRS tables
+                $waktu5Str = $realEvents['5'] ?? '';
+                if (empty($waktu5Str) && ($patient['stts'] ?? '') === 'Sudah' && $patient['tgl_registrasi'] === date('Y-m-d')) {
+                    $waktu5Str = date('Y-m-d H:i:s');
                 }
             }
 
@@ -764,10 +774,13 @@ class QueueProcessor
                 $this->log->info("[{$label}] {$noRawat} TaskID 6,7: skip — no resep (MOBILEJKN_SKIP_FARMASI_NO_RESEP=true)");
             } else {
                 $prevWaktu = $state['waktu_5'] ?? '';
-                $waktu6Str = $realEvents['6'] ?? '';
 
-                if (empty($waktu6Str) && !$isRealtime) {
+                if (!$isRealtime) {
+                    // Pure Robot Mode
                     $waktu6Str = RobotInference::infer('6', $prevWaktu, $isRacikan, $this->config->robotRanges);
+                } else {
+                    // Realtime Mode: strictly from real SIMRS tables
+                    $waktu6Str = $realEvents['6'] ?? '';
                 }
 
                 if (!empty($waktu6Str)) {
@@ -806,10 +819,13 @@ class QueueProcessor
         // ── Task 7: selesai farmasi ───────────────────────────────────────
         if ($state['99'] === '' && $state['6'] === 'Sudah' && $state['7'] === '') {
             $prevWaktu = $state['waktu_6'] ?? '';
-            $waktu7Str = $realEvents['7'] ?? '';
 
-            if (empty($waktu7Str) && !$isRealtime) {
+            if (!$isRealtime) {
+                // Pure Robot Mode
                 $waktu7Str = RobotInference::infer('7', $prevWaktu, $isRacikan, $this->config->robotRanges);
+            } else {
+                // Realtime Mode: strictly from real SIMRS tables
+                $waktu7Str = $realEvents['7'] ?? '';
             }
 
             if (!empty($waktu7Str)) {

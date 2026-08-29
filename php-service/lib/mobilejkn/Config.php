@@ -142,12 +142,16 @@ class MobileJknConfig
 
     private function get(string $key, string $default = ''): string
     {
+        $envVal = getenv($key);
+        if ($envVal !== false && $envVal !== '') {
+            return $envVal;
+        }
         return $this->env[$key] ?? $default;
     }
 
     private function require(string $key): string
     {
-        $val = $this->env[$key] ?? '';
+        $val = $this->get($key, '');
         if ($val === '' && !in_array($key, ['DB_PASS'], true)) {
             throw new \RuntimeException("Required environment variable '{$key}' is missing or empty in .env");
         }
@@ -159,8 +163,8 @@ class MobileJknConfig
      */
     private function getWithFallback(string $primary, string $fallback): string
     {
-        $val = $this->env[$primary] ?? '';
-        return $val !== '' ? $val : ($this->env[$fallback] ?? '');
+        $val = $this->get($primary, '');
+        return $val !== '' ? $val : $this->get($fallback, '');
     }
 
     /**
