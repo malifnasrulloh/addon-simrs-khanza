@@ -319,7 +319,7 @@ class QueueProcessor
             $realEvents = [
                 '3' => $mutasiBerkasMap[$noRawat] ?? '',
                 '4' => $pemeriksaanRalanMap[$noRawat] ?? ($mutasiDiterimaMap[$noRawat] ?? ''),
-                '5' => $mutasiKembaliMap[$noRawat] ?? (($p['stts'] ?? '') === 'Sudah' ? date('Y-m-d H:i:s') : ''),
+                '5' => $mutasiKembaliMap[$noRawat] ?? '',
                 '6' => $resepRalanMap[$noRawat] ?? '',
                 '7' => $resepPenyerahanMap[$noRawat] ?? '',
             ];
@@ -443,7 +443,7 @@ class QueueProcessor
             $realEvents = [
                 '3' => $mutasiBerkasMap[$noRawat] ?? '',
                 '4' => $pemeriksaanRalanMap[$noRawat] ?? ($mutasiDiterimaMap[$noRawat] ?? ''),
-                '5' => $mutasiKembaliMap[$noRawat] ?? (($p['stts'] ?? '') === 'Sudah' ? date('Y-m-d H:i:s') : ''),
+                '5' => $mutasiKembaliMap[$noRawat] ?? '',
                 '6' => $resepRalanMap[$noRawat] ?? '',
                 '7' => $resepPenyerahanMap[$noRawat] ?? '',
             ];
@@ -680,6 +680,11 @@ class QueueProcessor
             }
 
             if (!empty($waktu4Str)) {
+                $targetDate = $patient['tgl_registrasi'];
+                if (date('Y-m-d', strtotime($waktu4Str)) !== $targetDate) {
+                    $timePart  = date('H:i:s', strtotime($waktu4Str));
+                    $waktu4Str = "{$targetDate} {$timePart}";
+                }
                 $t3Ts = strtotime($prevWaktu);
                 if ($t3Ts !== false && strtotime($waktu4Str) <= $t3Ts) {
                     $waktu4Str = date('Y-m-d H:i:s', $t3Ts + 180);
@@ -710,11 +715,24 @@ class QueueProcessor
             $prevWaktu = $state['waktu_4'] ?? '';
 
             $waktu5Str = $realEvents['5'] ?? '';
-            if (empty($waktu5Str) && !$isRealtime) {
-                $waktu5Str = RobotInference::infer('5', $prevWaktu, false, $this->config->robotRanges);
+            if (empty($waktu5Str)) {
+                if (!$isRealtime) {
+                    $waktu5Str = RobotInference::infer('5', $prevWaktu, false, $this->config->robotRanges);
+                } elseif (($patient['stts'] ?? '') === 'Sudah') {
+                    if ($patient['tgl_registrasi'] === date('Y-m-d')) {
+                        $waktu5Str = date('Y-m-d H:i:s');
+                    } else {
+                        $waktu5Str = RobotInference::infer('5', $prevWaktu, false, $this->config->robotRanges);
+                    }
+                }
             }
 
             if (!empty($waktu5Str)) {
+                $targetDate = $patient['tgl_registrasi'];
+                if (date('Y-m-d', strtotime($waktu5Str)) !== $targetDate) {
+                    $timePart  = date('H:i:s', strtotime($waktu5Str));
+                    $waktu5Str = "{$targetDate} {$timePart}";
+                }
                 $t4Ts = strtotime($prevWaktu);
                 if ($t4Ts !== false && strtotime($waktu5Str) <= $t4Ts) {
                     $waktu5Str = date('Y-m-d H:i:s', $t4Ts + 180);
@@ -753,6 +771,11 @@ class QueueProcessor
                 }
 
                 if (!empty($waktu6Str)) {
+                    $targetDate = $patient['tgl_registrasi'];
+                    if (date('Y-m-d', strtotime($waktu6Str)) !== $targetDate) {
+                        $timePart  = date('H:i:s', strtotime($waktu6Str));
+                        $waktu6Str = "{$targetDate} {$timePart}";
+                    }
                     $this->sendFarmasi($kodebooking, $noRawat, $noResep);
                     $t5Ts = strtotime($prevWaktu);
                     if ($t5Ts !== false && strtotime($waktu6Str) <= $t5Ts) {
@@ -790,6 +813,11 @@ class QueueProcessor
             }
 
             if (!empty($waktu7Str)) {
+                $targetDate = $patient['tgl_registrasi'];
+                if (date('Y-m-d', strtotime($waktu7Str)) !== $targetDate) {
+                    $timePart  = date('H:i:s', strtotime($waktu7Str));
+                    $waktu7Str = "{$targetDate} {$timePart}";
+                }
                 $t6Ts = strtotime($prevWaktu);
                 if ($t6Ts !== false && strtotime($waktu7Str) <= $t6Ts) {
                     $waktu7Str = date('Y-m-d H:i:s', $t6Ts + 180);
@@ -819,8 +847,10 @@ class QueueProcessor
         // Fix #6: Use 'stts' column from the query result instead of per-patient DB call
         if ($state['99'] === '') {
             if (($patient['stts'] ?? '') === 'Batal') {
-                $nowStr = date('Y-m-d H:i:s');
-                $this->sendTaskId($kodebooking, $noRawat, '99', $nowStr, $label, $jenisresep);
+                $targetDate = $patient['tgl_registrasi'];
+                $jamReg = substr($patient['jam_reg'] ?? '12:00:00', 0, 8);
+                $cancelStr = "{$targetDate} {$jamReg}";
+                $this->sendTaskId($kodebooking, $noRawat, '99', $cancelStr, $label, $jenisresep);
             }
         }
     }
@@ -1367,7 +1397,7 @@ class QueueProcessor
             $realEvents = [
                 '3' => $mutasiBerkasMap[$noRawat] ?? '',
                 '4' => $pemeriksaanRalanMap[$noRawat] ?? ($mutasiDiterimaMap[$noRawat] ?? ''),
-                '5' => $mutasiKembaliMap[$noRawat] ?? (($p['stts'] ?? '') === 'Sudah' ? date('Y-m-d H:i:s') : ''),
+                '5' => $mutasiKembaliMap[$noRawat] ?? '',
                 '6' => $resepRalanMap[$noRawat] ?? '',
                 '7' => $resepPenyerahanMap[$noRawat] ?? '',
             ];
