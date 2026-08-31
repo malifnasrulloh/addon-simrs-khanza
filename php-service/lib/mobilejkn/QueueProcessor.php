@@ -37,6 +37,9 @@ class QueueProcessor
     /** @var array<string, array<string, true>> Track tasks sent this cycle: no_rawat => [taskId => true] (Fix #8) */
     private array $sentThisCycle = [];
 
+    /** @var array<string, array<int, array>> Cached BPJS queue list per date from GET /antrean/pendaftaran/tanggal/{tanggal} */
+    private array $bpjsDateCache = [];
+
     public function __construct(MobileJknDatabase $db, BpjsAntreanClient $api, MobileJknConfig $config, Logger $log)
     {
         $this->db     = $db;
@@ -51,11 +54,12 @@ class QueueProcessor
      */
     public function run(): array
     {
-        $this->successCount = 0;
-        $this->failCount    = 0;
-        $this->skipCount    = 0;
-        $this->farmasiSent  = [];
+        $this->successCount  = 0;
+        $this->failCount     = 0;
+        $this->skipCount     = 0;
+        $this->farmasiSent   = [];
         $this->sentThisCycle = [];
+        $this->bpjsDateCache = [];
 
         $today    = $this->config->todayDate();
         $lookback = $this->config->lookbackDate();
@@ -110,13 +114,11 @@ class QueueProcessor
         $existingBpjsBookings = [];
         $uniqueDates = array_unique(array_column($bookings, 'tanggalperiksa'));
         foreach ($uniqueDates as $tgl) {
-            $pendaftaranRes = $this->api->getAntreanPendaftaranTanggal($tgl);
-            if ($pendaftaranRes['success'] && is_array($pendaftaranRes['data'])) {
-                foreach ($pendaftaranRes['data'] as $item) {
-                    $kb = (string) ($item['kodebooking'] ?? '');
-                    if (!empty($kb)) {
-                        $existingBpjsBookings[$kb] = true;
-                    }
+            $list = $this->getBpjsBookingsForDate($tgl);
+            foreach ($list as $item) {
+                $kb = (string) ($item['kodebooking'] ?? '');
+                if (!empty($kb)) {
+                    $existingBpjsBookings[$kb] = true;
                 }
             }
         }
@@ -124,11 +126,34 @@ class QueueProcessor
         foreach ($bookings as $b) {
             $nb = $b['nobooking'];
 
-            // Check via GET /antrean/pendaftaran/tanggal list first
+            // Check via GET /antrean/pendaftaran/tanggal list first (by exact kodebooking)
             if (isset($existingBpjsBookings[$nb])) {
                 try {
                     $this->db->markBookingAsSent($nb);
                     $this->log->info("[BLOCK 1] {$nb}: auto-synced statuskirim=Sudah (found in BPJS /antrean/pendaftaran/tanggal list)");
+                    $this->successCount++;
+                    continue;
+                } catch (\PDOException $e) {
+                    $this->log->error("[BLOCK 1] DB update failed for {$nb}: " . $e->getMessage());
+                    $this->failCount++;
+                    continue;
+                }
+            }
+
+            // Secondary check: match by patient identity (norm + kodepoli) in BPJS date list
+            $matchedBpjs = $this->findMatchingBpjsBooking([
+                'tgl_registrasi' => $b['tanggalperiksa'],
+                'no_rkm_medis'   => $b['no_rkm_medis'],
+                'kd_poli_bpjs'   => $b['kodepoli'],
+                'kd_dokter_bpjs' => $b['kodedokter'],
+                'no_reg'         => $b['angkaantrean'],
+                'no_ktp'         => $b['nik'],
+                'no_peserta'     => $b['nomorkartu'],
+            ], $b['nomorreferensi'] ?? '');
+            if ($matchedBpjs && !empty($matchedBpjs['kodebooking'])) {
+                try {
+                    $this->db->markBookingAsSent($nb);
+                    $this->log->info("[BLOCK 1] {$nb}: auto-synced statuskirim=Sudah (matched BPJS booking {$matchedBpjs['kodebooking']} for norm {$b['no_rkm_medis']})");
                     $this->successCount++;
                     continue;
                 } catch (\PDOException $e) {
@@ -235,17 +260,24 @@ class QueueProcessor
 
             // Step 1: /antrean/batal
             $result = $this->api->batalAntrean($nb, $c['keterangan'] ?? 'Dibatalkan');
+            $code   = (string) ($result['code'] ?? '');
+            $msg    = (string) ($result['message'] ?? '');
 
-            if ($result['success']) {
-                $this->db->markCancellationAsSent($c['nomorreferensi']);
+            // 200 = Success, 208 = Already cancelled, 201 with 'tidak dapat membatalkan' = Already cancelled on BPJS
+            $isBatalSuccess = $result['success'] || $code === '208' || ($code === '201' && str_contains(strtolower($msg), 'tidak dapat membatalkan'));
+
+            if ($isBatalSuccess) {
+                $this->db->markCancellationAsSent($c['nomorreferensi'] ?? '', $nb);
+                $this->log->info("[BLOCK 2] ✓ Cancelled booking {$nb} on BPJS (code={$code})");
+                $this->successCount++;
 
                 // Step 2: Send taskid=99
-                $waktuStr = $c['tanggalbatal'] ?? '';
-                if (!empty($waktuStr) && !empty($noRawat)) {
+                $waktuStr = $c['tanggalbatal'] ?? date('Y-m-d H:i:s');
+                if (!empty($noRawat)) {
                     $this->sendTaskId($nb, $noRawat, '99', $waktuStr, 'BLOCK 2');
                 }
             } else {
-                $this->log->warning("[BLOCK 2] ✗ Cancel failed {$nb}: {$result['message']}");
+                $this->log->warning("[BLOCK 2] ✗ Cancel failed {$nb}: {$msg}");
                 $this->failCount++;
             }
         }
@@ -294,6 +326,17 @@ class QueueProcessor
             $kodebooking = $p['nobooking'];
             $this->log->info("[BLOCK 3] ── Patient " . ($idx + 1) . "/{$total}: {$noRawat} ──");
 
+            // Realign with BPJS date list if local nobooking is desynchronized or missing
+            $existingBpjs = $this->findMatchingBpjsBooking($p, $p['nomorreferensi'] ?? '');
+            if ($existingBpjs && !empty($existingBpjs['kodebooking'])) {
+                $bpjsKb = (string) $existingBpjs['kodebooking'];
+                if ($bpjsKb !== $kodebooking) {
+                    $this->log->info("[BLOCK 3] {$noRawat}: realigned local booking code from '{$kodebooking}' to BPJS booking '{$bpjsKb}'");
+                    $this->db->saveToReferensiMobileJkn($p, $bpjsKb, $p['nomorreferensi'] ?? '');
+                    $kodebooking = $bpjsKb;
+                }
+            }
+
             // Load task state from pre-fetched dictionary
             $state = $taskStates[$noRawat] ?? ['1' => '', '2' => '', '3' => '', '4' => '', '5' => '', '6' => '', '7' => '', '99' => ''];
 
@@ -325,7 +368,7 @@ class QueueProcessor
             ];
 
             // Process task chain: 1 → 2 → 3 → 4 → 5 → [farmasi] → 6 → 7
-            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 3', true, $noResep, $isRacikan, $realEvents);
+            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 3', true, $noResep, $isRacikan, $realEvents, $existingBpjs['status'] ?? ($p['status'] ?? ''));
         }
     }
 
@@ -388,8 +431,10 @@ class QueueProcessor
             $jamReg = $p['jam_reg'] ?? '08:00:00';
             $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli'], $jamReg);
             if (!$jadwal) {
-                // Log which patient is being skipped and WHY (BUG-D: clear reason for skip)
-                $this->log->warning("[BLOCK 4] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
+                // Suppress expected skip for emergency room (IGD/IGDK)
+                if (($p['kd_poli'] ?? '') !== 'IGDK') {
+                    $this->log->warning("[BLOCK 4] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
+                }
                 continue;
             }
 
@@ -420,23 +465,42 @@ class QueueProcessor
             $noResep   = $noResepMap[$noRawat] ?? '';
             $isRacikan = isset($racikanSet[$noResep]);
 
-            // ── IMMEDIATE /antrean/add ────────────────────────────────────
-            // Matches Java robot: if Task 3 is empty locally, send /antrean/add IMMEDIATELY!
-            if (($state['3'] ?? '') === '') {
-                $nomorRef = $isJkn ? $this->db->fetchNomorReferensi($noRawat) : '';
-                $payload  = PayloadBuilder::onsitePatient($p, $isJkn, $nomorRef, $kodebooking, $this->config->nomorantreanFormat);
-                $this->log->info("[BLOCK 4] {$noRawat} (kodebooking={$kodebooking}): SEND /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
-                $addResult = $this->api->addAntrean($payload);
-                $addCode   = $addResult['code'] ?? '';
-                if ($addResult['success'] || $addCode === '208') {
-                    $this->db->saveToReferensiMobileJkn($p, $kodebooking, $nomorRef);
-                    $this->log->info("[BLOCK 4] {$noRawat}: ✓ /antrean/add accepted (code={$addCode})");
-                    $this->successCount++;
-                } else {
-                    $this->log->warning("[BLOCK 4] {$noRawat}: ✗ /antrean/add failed ({$addCode}) — {$addResult['message']}");
-                    $this->db->deleteReferensiMobileJkn($noRawat, $kodebooking);
-                    $this->failCount++;
-                    continue; // Skip task chain because booking was not accepted on BPJS
+            $nomorRef = $isJkn ? $this->db->fetchNomorReferensi($noRawat) : '';
+
+            // ── Step 1: Pre-lookup in BPJS date list (Always check for ANY missing on-site patient) ──
+            $existingBpjs = $this->findMatchingBpjsBooking($p, $nomorRef);
+            if ($existingBpjs && !empty($existingBpjs['kodebooking'])) {
+                $bpjsKodebooking = (string) $existingBpjs['kodebooking'];
+                $this->log->info("[BLOCK 4] {$noRawat}: recovered existing BPJS booking {$bpjsKodebooking} for norm {$p['no_rkm_medis']} (skipped /antrean/add)");
+                $this->db->saveToReferensiMobileJkn($p, $bpjsKodebooking, $nomorRef);
+                $kodebooking = $bpjsKodebooking;
+                $this->successCount++;
+            } else {
+                // If not found in BPJS date list and Task 3 has not been sent locally, send /antrean/add
+                if (($state['3'] ?? '') === '') {
+                    $payload  = PayloadBuilder::onsitePatient($p, $isJkn, $nomorRef, $kodebooking, $this->config->nomorantreanFormat);
+                    $this->log->info("[BLOCK 4] {$noRawat} (kodebooking={$kodebooking}): SEND /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
+                    $addResult = $this->api->addAntrean($payload);
+                    $addCode   = $addResult['code'] ?? '';
+                    if ($addResult['success'] || $addCode === '208') {
+                        $this->db->saveToReferensiMobileJkn($p, $kodebooking, $nomorRef);
+                        $this->log->info("[BLOCK 4] {$noRawat}: ✓ /antrean/add accepted (code={$addCode})");
+                        $this->successCount++;
+                    } else {
+                        // Layer 2: Regex extraction from error message (e.g. "sudah digunakan pada kode booking X")
+                        $recoveredKb = $this->extractKodebookingFromError($addResult['message'] ?? '');
+                        if (!empty($recoveredKb)) {
+                            $this->log->info("[BLOCK 4] {$noRawat}: recovered existing BPJS booking {$recoveredKb} from rejection message. Saving to DB.");
+                            $this->db->saveToReferensiMobileJkn($p, $recoveredKb, $nomorRef);
+                            $kodebooking = $recoveredKb;
+                            $this->successCount++;
+                        } else {
+                            $this->log->warning("[BLOCK 4] {$noRawat}: ✗ /antrean/add failed ({$addCode}) — {$addResult['message']}");
+                            $this->db->deleteReferensiMobileJkn($noRawat, $kodebooking);
+                            $this->failCount++;
+                            continue; // Skip task chain because booking was not accepted on BPJS
+                        }
+                    }
                 }
             }
 
@@ -449,7 +513,7 @@ class QueueProcessor
             ];
 
             // Directly run the task chain
-            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 4', $isJkn, $noResep, $isRacikan, $realEvents);
+            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 4', $isJkn, $noResep, $isRacikan, $realEvents, $existingBpjs['status'] ?? '');
         }
     }
 
@@ -493,7 +557,8 @@ class QueueProcessor
         bool   $isJkn,
         string $noResep = '',
         bool   $isRacikan = false,
-        array  $realEvents = []
+        array  $realEvents = [],
+        string $bpjsStatus = ''
     ): void {
         $jamMulai   = $jadwal['jam_mulai'] ?? '08:00:00';
         $jamSelesai = $jadwal['jam_selesai'] ?? '14:00:00';
@@ -503,6 +568,13 @@ class QueueProcessor
         if (($patient['stts'] ?? '') === 'Batal') {
             $this->log->debug("[{$label}] {$noRawat}: registration status is 'Batal' — skipping task chain");
             return;
+        }
+
+        // Purge stale local Task 99 if registration is active in SIMRS
+        if (($state['99'] ?? '') !== '' && ($patient['stts'] ?? '') !== 'Batal') {
+            $this->log->info("[{$label}] {$noRawat}: purging stale local Task 99 for active patient (stts='{$patient['stts']}')");
+            $this->db->deleteTaskId($noRawat, '99');
+            $state['99'] = '';
         }
 
         // Determine prescription info from pre-loaded data (Fix #5)
@@ -517,8 +589,13 @@ class QueueProcessor
             }
         }
 
+        // If BPJS explicitly reported status is not 'Selesai dilayani' (e.g. 'Belum dilayani' or 'Sedang dilayani'), it cannot be completed on BPJS
+        if (!empty($bpjsStatus) && $bpjsStatus !== 'Selesai dilayani' && $bpjsStatus !== 'Batal') {
+            $isCompleted = false;
+        }
+
         // Bidirectional auto-healing: only sync/double-check BPJS API if patient is NOT fully completed locally and not cancelled
-        if (!$isCompleted && $state['99'] === '') {
+        if (!$isCompleted && ($state['99'] ?? '') === '') {
             $this->syncTaskStateFromBpjs($kodebooking, $noRawat, $state, $label);
         } else {
             $this->log->debug("[{$label}] {$noRawat}: patient is already completed locally or cancelled — skipping BPJS getlisttask verification");
@@ -622,48 +699,80 @@ class QueueProcessor
                         } else {
                             $this->log->info("[{$label}] {$noRawat} TaskID 3 failed: booking_not_found. Triggering dynamic booking recovery...");
 
-                            // Dynamically resolve /antrean/add payload
-                            $payload = null;
-                            if ($isJkn) {
-                                $bookingData = $this->db->fetchBookingByNoRawat($noRawat, $patient['no_rkm_medis'] ?? '');
-                                if ($bookingData) {
-                                    $payload = PayloadBuilder::jknBooking($bookingData);
-                                } else {
-                                    $nomorRef = $this->db->fetchNomorReferensi($noRawat);
-                                    $payload  = PayloadBuilder::onsitePatient($patient, true, $nomorRef, '', $this->config->nomorantreanFormat);
-                                }
-                            } else {
-                                $payload = PayloadBuilder::onsitePatient($patient, false, '', '', $this->config->nomorantreanFormat);
-                            }
+                            $nomorRef = $isJkn ? $this->db->fetchNomorReferensi($noRawat) : '';
 
-                            if ($payload) {
-                                $this->log->info("[{$label}] {$noRawat}: sending dynamic /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
-                                $addResult = $this->api->addAntrean($payload);
-                                $addCode   = $addResult['code'] ?? '';
-
-                                if ($addResult['success'] || $addCode === '208') {
-                                    $this->log->info("[{$label}] {$noRawat}: dynamic /antrean/add recovery accepted (code={$addCode}). Retrying Task ID 3 immediately.");
-                                    if ($isJkn && !empty($bookingData['nobooking'])) {
-                                        $this->db->markBookingAsSent($bookingData['nobooking']);
-                                    } else {
-                                        $this->db->saveToReferensiMobileJkn($patient, $kodebooking, $nomorRef ?? '');
-                                    }
-                                    // Retry sending Task 3
-                                    $retryR = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3Str, $label, $jenisresep);
-                                    if ($retryR['ok']) {
-                                        $state['3'] = 'Sudah';
-                                        $state['waktu_3'] = $waktu3Str;
-                                    } else {
-                                        $state['3'] = 'Belum';
-                                    }
+                            // Pre-lookup in BPJS date list before sending /antrean/add
+                            $existingBpjs = $this->findMatchingBpjsBooking($patient, $nomorRef);
+                            if ($existingBpjs && !empty($existingBpjs['kodebooking'])) {
+                                $bpjsKb = (string) $existingBpjs['kodebooking'];
+                                $this->log->info("[{$label}] {$noRawat}: recovered existing BPJS booking {$bpjsKb} for norm {$patient['no_rkm_medis']}");
+                                $this->db->saveToReferensiMobileJkn($patient, $bpjsKb, $nomorRef);
+                                $kodebooking = $bpjsKb;
+                                $retryR = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3Str, $label, $jenisresep);
+                                if ($retryR['ok']) {
+                                    $state['3'] = 'Sudah';
+                                    $state['waktu_3'] = $waktu3Str;
                                 } else {
-                                    $this->log->warning("[{$label}] {$noRawat}: dynamic /antrean/add recovery failed ({$addCode}): {$addResult['message']}");
-                                    $this->db->deleteReferensiMobileJkn($noRawat, $kodebooking);
                                     $state['3'] = 'Belum';
                                 }
                             } else {
-                                $this->log->error("[{$label}] {$noRawat}: failed to resolve booking payload for dynamic recovery");
-                                $state['3'] = 'Belum';
+                                // Dynamically resolve /antrean/add payload
+                                $payload = null;
+                                if ($isJkn) {
+                                    $bookingData = $this->db->fetchBookingByNoRawat($noRawat, $patient['no_rkm_medis'] ?? '');
+                                    if ($bookingData) {
+                                        $payload = PayloadBuilder::jknBooking($bookingData);
+                                    } else {
+                                        $payload = PayloadBuilder::onsitePatient($patient, true, $nomorRef, '', $this->config->nomorantreanFormat);
+                                    }
+                                } else {
+                                    $payload = PayloadBuilder::onsitePatient($patient, false, '', '', $this->config->nomorantreanFormat);
+                                }
+
+                                if ($payload) {
+                                    $this->log->info("[{$label}] {$noRawat}: sending dynamic /antrean/add (jenispasien=" . ($isJkn ? 'JKN' : 'NON JKN') . ")");
+                                    $addResult = $this->api->addAntrean($payload);
+                                    $addCode   = $addResult['code'] ?? '';
+
+                                    if ($addResult['success'] || $addCode === '208') {
+                                        $this->log->info("[{$label}] {$noRawat}: dynamic /antrean/add recovery accepted (code={$addCode}). Retrying Task ID 3 immediately.");
+                                        if ($isJkn && !empty($bookingData['nobooking'])) {
+                                            $this->db->markBookingAsSent($bookingData['nobooking']);
+                                        } else {
+                                            $this->db->saveToReferensiMobileJkn($patient, $kodebooking, $nomorRef ?? '');
+                                        }
+                                        // Retry sending Task 3
+                                        $retryR = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3Str, $label, $jenisresep);
+                                        if ($retryR['ok']) {
+                                            $state['3'] = 'Sudah';
+                                            $state['waktu_3'] = $waktu3Str;
+                                        } else {
+                                            $state['3'] = 'Belum';
+                                        }
+                                    } else {
+                                        // Regex error recovery
+                                        $recoveredKb = $this->extractKodebookingFromError($addResult['message'] ?? '');
+                                        if (!empty($recoveredKb)) {
+                                            $this->log->info("[{$label}] {$noRawat}: recovered existing BPJS booking {$recoveredKb} from error message.");
+                                            $this->db->saveToReferensiMobileJkn($patient, $recoveredKb, $nomorRef);
+                                            $kodebooking = $recoveredKb;
+                                            $retryR = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3Str, $label, $jenisresep);
+                                            if ($retryR['ok']) {
+                                                $state['3'] = 'Sudah';
+                                                $state['waktu_3'] = $waktu3Str;
+                                            } else {
+                                                $state['3'] = 'Belum';
+                                            }
+                                        } else {
+                                            $this->log->warning("[{$label}] {$noRawat}: dynamic /antrean/add recovery failed ({$addCode}): {$addResult['message']}");
+                                            $this->db->deleteReferensiMobileJkn($noRawat, $kodebooking);
+                                            $state['3'] = 'Belum';
+                                        }
+                                    }
+                                } else {
+                                    $this->log->error("[{$label}] {$noRawat}: failed to resolve booking payload for dynamic recovery");
+                                    $state['3'] = 'Belum';
+                                }
                             }
                         }
                     } else {
@@ -1052,11 +1161,26 @@ class QueueProcessor
         $msgLower = strtolower($msg);
 
         // Detect if visit is cancelled/aborted (Task 99) on BPJS side
-        if (str_contains($msgLower, 'taskid terakhir 99') || str_contains($msgLower, 'task id terakhir 99') || (str_contains($msgLower, 'terakhir') && str_contains($msgLower, '99'))) {
+        if (str_contains($msgLower, 'taskid terakhir 99') || str_contains($msgLower, 'task id terakhir 99')) {
             $this->log->warning("[{$label}] {$noRawat} TaskID {$taskId}: BPJS reported Task 99 (Cancelled) — saving Task 99 locally to stop future retries.");
             $this->db->insertTaskId($noRawat, '99', date('Y-m-d H:i:s'));
             $this->failCount++;
             return ['ok' => false, 'reason' => 'cancelled_on_bpjs'];
+        }
+
+        // Detect if BPJS reports a later task was already reached (e.g. "TaskId terakhir 7" or "TaskId terakhir 5" or "TaskId=3 sudah ada")
+        if (preg_match('/(?:task\s*id|taskid)\s*(?:terakhir|=)?\s*(\d+)/i', $msg, $mTerakhir)) {
+            $lastCompletedTaskId = (int) $mTerakhir[1];
+            if ($lastCompletedTaskId >= (int) $taskId && $lastCompletedTaskId <= 7) {
+                $this->log->info("[AUTO-HEAL] [{$label}] {$noRawat}: BPJS reported TaskId {$lastCompletedTaskId} already reached. Synchronizing Tasks 1..{$lastCompletedTaskId} to local DB.");
+                $baseTs = strtotime($waktuStr) ?: time();
+                for ($i = 1; $i <= $lastCompletedTaskId; $i++) {
+                    $taskTime = date('Y-m-d H:i:s', $baseTs - (($lastCompletedTaskId - $i) * 180));
+                    $this->db->insertTaskId($noRawat, (string) $i, $taskTime);
+                }
+                $this->successCount++;
+                return ['ok' => true, 'reason' => 'already_completed_on_bpjs'];
+            }
         }
 
         // Detect BPJS time-ordering or booking-not-found rejections
@@ -1131,12 +1255,20 @@ class QueueProcessor
      */
     private function syncTaskStateFromBpjs(string $kodebooking, string $noRawat, array &$state, string $label): void
     {
-        $res = $this->api->getListTask($kodebooking);
-        if (!$res['success'] || !isset($res['data']) || !is_array($res['data'])) {
+        $res  = $this->api->getListTask($kodebooking);
+        $code = (string) ($res['code'] ?? '');
+        $msg  = (string) ($res['message'] ?? '');
+
+        // If BPJS returns 204 No Content or message is "No Content", BPJS has 0 tasks recorded for this booking
+        $tasks = [];
+        if ($res['success'] && isset($res['data']) && is_array($res['data'])) {
+            $tasks = $res['data'];
+        } elseif ($code === '204' || str_contains(strtolower($msg), 'no content')) {
+            $tasks = []; // Valid response: BPJS has 0 tasks
+        } else {
+            // Unhandled network or API error, do not modify local state
             return;
         }
-
-        $tasks = $res['data'];
         $bpjsTasks = [];
         foreach ($tasks as $t) {
             $tId = (string) ($t['taskid'] ?? '');
@@ -1389,24 +1521,42 @@ class QueueProcessor
             $noResep  = $noResepMap[$noRawat] ?? '';
             $isRacikan = isset($racikanSet[$noResep]);
 
-            // SEP patients are always kd_pj='BPJ' (JKN)
-            // ── IMMEDIATE /antrean/add ────────────────────────────────────
-            // Matches Java robot: if Task 3 is empty locally, send /antrean/add IMMEDIATELY!
-            if (($state['3'] ?? '') === '') {
-                $nomorRef = $this->db->fetchNomorReferensi($noRawat);
-                $payload  = PayloadBuilder::onsitePatient($p, true, $nomorRef, $kodebooking, $this->config->nomorantreanFormat);
-                $this->log->info("[BLOCK 5] {$noRawat} (kodebooking={$kodebooking}): SEND /antrean/add (jenispasien=JKN)");
-                $addResult = $this->api->addAntrean($payload);
-                $addCode   = $addResult['code'] ?? '';
-                if ($addResult['success'] || $addCode === '208') {
-                    $this->db->saveToReferensiMobileJkn($p, $kodebooking, $nomorRef);
-                    $this->log->info("[BLOCK 5] {$noRawat}: ✓ /antrean/add accepted (code={$addCode})");
-                    $this->successCount++;
-                } else {
-                    $this->log->warning("[BLOCK 5] {$noRawat}: ✗ /antrean/add failed ({$addCode}) — {$addResult['message']}");
-                    $this->db->deleteReferensiMobileJkn($noRawat, $kodebooking);
-                    $this->failCount++;
-                    continue; // Skip task chain because booking was not accepted on BPJS
+            $nomorRef = $this->db->fetchNomorReferensi($noRawat);
+
+            // ── Step 1: Pre-lookup in BPJS date list (Always check for ANY unsent SEP patient) ──
+            $existingBpjs = $this->findMatchingBpjsBooking($p, $nomorRef);
+            if ($existingBpjs && !empty($existingBpjs['kodebooking'])) {
+                $bpjsKodebooking = (string) $existingBpjs['kodebooking'];
+                $this->log->info("[BLOCK 5] {$noRawat}: recovered existing BPJS booking {$bpjsKodebooking} for norm {$p['no_rkm_medis']} (skipped /antrean/add)");
+                $this->db->saveToReferensiMobileJkn($p, $bpjsKodebooking, $nomorRef);
+                $kodebooking = $bpjsKodebooking;
+                $this->successCount++;
+            } else {
+                // If not found in BPJS date list and Task 3 has not been sent locally, send /antrean/add
+                if (($state['3'] ?? '') === '') {
+                    $payload  = PayloadBuilder::onsitePatient($p, true, $nomorRef, $kodebooking, $this->config->nomorantreanFormat);
+                    $this->log->info("[BLOCK 5] {$noRawat} (kodebooking={$kodebooking}): SEND /antrean/add (jenispasien=JKN)");
+                    $addResult = $this->api->addAntrean($payload);
+                    $addCode   = $addResult['code'] ?? '';
+                    if ($addResult['success'] || $addCode === '208') {
+                        $this->db->saveToReferensiMobileJkn($p, $kodebooking, $nomorRef);
+                        $this->log->info("[BLOCK 5] {$noRawat}: ✓ /antrean/add accepted (code={$addCode})");
+                        $this->successCount++;
+                    } else {
+                        // Layer 2: Regex extraction from error message
+                        $recoveredKb = $this->extractKodebookingFromError($addResult['message'] ?? '');
+                        if (!empty($recoveredKb)) {
+                            $this->log->info("[BLOCK 5] {$noRawat}: recovered existing BPJS booking {$recoveredKb} from rejection message. Saving to DB.");
+                            $this->db->saveToReferensiMobileJkn($p, $recoveredKb, $nomorRef);
+                            $kodebooking = $recoveredKb;
+                            $this->successCount++;
+                        } else {
+                            $this->log->warning("[BLOCK 5] {$noRawat}: ✗ /antrean/add failed ({$addCode}) — {$addResult['message']}");
+                            $this->db->deleteReferensiMobileJkn($noRawat, $kodebooking);
+                            $this->failCount++;
+                            continue; // Skip task chain because booking was not accepted on BPJS
+                        }
+                    }
                 }
             }
 
@@ -1419,7 +1569,155 @@ class QueueProcessor
             ];
 
             // Run the task chain
-            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 5', true, $noResep, $isRacikan, $realEvents);
+            $this->processTaskChain($kodebooking, $noRawat, $p, $state, $jadwal, 'BLOCK 5', true, $noResep, $isRacikan, $realEvents, $existingBpjs['status'] ?? '');
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // BPJS Date Reconciliation & Multi-Key Matching Helpers
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Get and cache BPJS queue registrations for a date via GET /antrean/pendaftaran/tanggal/{tanggal}.
+     * @return array<int, array>
+     */
+    private function getBpjsBookingsForDate(string $tanggal): array
+    {
+        if (!isset($this->bpjsDateCache[$tanggal])) {
+            $res = $this->api->getAntreanPendaftaranTanggal($tanggal);
+            if ($res['success'] && is_array($res['data'])) {
+                $this->bpjsDateCache[$tanggal] = $res['data'];
+            } else {
+                $this->bpjsDateCache[$tanggal] = [];
+            }
+        }
+        return $this->bpjsDateCache[$tanggal];
+    }
+
+    /**
+     * Find matching existing BPJS booking for a patient record on the same date.
+     * Strict matching hierarchy:
+     *  1. Exact Medical Record (norm) + Date (tanggal) + Not Cancelled (status != 'Batal')
+     *  2. Polyclinic (kodepoli == kd_poli_bpjs)
+     *  3. Doctor (kodedokter == kd_dokter_bpjs)
+     *  4. Queue Number (angkaantrean == no_reg) or Reference (nomorreferensi == nomorRef)
+     */
+    private function findMatchingBpjsBooking(array $patient, string $nomorRef = ''): ?array
+    {
+        $tgl = $patient['tgl_registrasi'] ?? '';
+        if (empty($tgl)) return null;
+
+        $list = $this->getBpjsBookingsForDate($tgl);
+        if (empty($list)) return null;
+
+        $simrsNorm = trim((string)($patient['no_rkm_medis'] ?? ''));
+        if ($simrsNorm === '') return null;
+
+        $simrsPoli   = (string)($patient['kd_poli_bpjs'] ?? '');
+        $simrsDokter = (int)($patient['kd_dokter_bpjs'] ?? 0);
+        $simrsNoReg  = (int)($patient['no_reg'] ?? 0);
+        $simrsNik    = trim((string)($patient['no_ktp'] ?? ''));
+        $simrsKartu  = trim((string)($patient['no_peserta'] ?? ''));
+
+        $candidates = [];
+        foreach ($list as $item) {
+            // Skip cancelled entries
+            if (($item['status'] ?? '') === 'Batal') {
+                continue;
+            }
+
+            // Step 1: Exact norm match (no zero stripping per strict hospital requirements)
+            $bpjsNorm = trim((string)($item['norekammedis'] ?? ''));
+            if ($bpjsNorm !== $simrsNorm) {
+                continue;
+            }
+
+            // Check Card / NIK consistency if present
+            $bpjsKartu = trim((string)($item['nokapst'] ?? ''));
+            $bpjsNik   = trim((string)($item['nik'] ?? ''));
+            if ($simrsKartu !== '' && $bpjsKartu !== '' && $simrsKartu !== $bpjsKartu) {
+                continue;
+            }
+            if ($simrsNik !== '' && $bpjsNik !== '' && $simrsNik !== $bpjsNik) {
+                continue;
+            }
+
+            $candidates[] = $item;
+        }
+
+        if (empty($candidates)) {
+            return null;
+        }
+
+        // If only 1 match found for this norm on this date, return it
+        if (count($candidates) === 1) {
+            return $candidates[0];
+        }
+
+        // Disambiguation Layer 2: Match Poliklinik
+        $poliMatches = [];
+        foreach ($candidates as $c) {
+            if ($simrsPoli !== '' && ($c['kodepoli'] ?? '') === $simrsPoli) {
+                $poliMatches[] = $c;
+            }
+        }
+        if (count($poliMatches) === 1) {
+            return $poliMatches[0];
+        }
+        if (count($poliMatches) > 1) {
+            $candidates = $poliMatches;
+        }
+
+        // Disambiguation Layer 3: Match Doctor
+        $dokterMatches = [];
+        foreach ($candidates as $c) {
+            if ($simrsDokter > 0 && (int)($c['kodedokter'] ?? 0) === $simrsDokter) {
+                $dokterMatches[] = $c;
+            }
+        }
+        if (count($dokterMatches) === 1) {
+            return $dokterMatches[0];
+        }
+        if (count($dokterMatches) > 1) {
+            $candidates = $dokterMatches;
+        }
+
+        // Disambiguation Layer 4: Match Queue Number (no_reg) or Reference (SEP/Rujukan)
+        foreach ($candidates as $c) {
+            $bpjsNoAntrean = 0;
+            if (isset($c['angkaantrean']) && is_numeric($c['angkaantrean'])) {
+                $bpjsNoAntrean = (int) $c['angkaantrean'];
+            } elseif (!empty($c['noantrean'])) {
+                if (preg_match('/(\d+)$/', (string)$c['noantrean'], $m)) {
+                    $bpjsNoAntrean = (int) $m[1];
+                } else {
+                    $bpjsNoAntrean = (int) $c['noantrean'];
+                }
+            }
+
+            if ($simrsNoReg > 0 && $bpjsNoAntrean === $simrsNoReg) {
+                return $c;
+            }
+            if ($nomorRef !== '' && !empty($c['nomorreferensi']) && $c['nomorreferensi'] === $nomorRef) {
+                return $c;
+            }
+        }
+
+        return $candidates[0] ?? null;
+    }
+
+    /**
+     * Extract existing kodebooking from BPJS rejection messages.
+     * Examples:
+     *   "Nomor Rujukan ... sudah digunakan pada kode booking 20260828000100"
+     *   "Data antrean sudah ada dengan kode booking 20260828000100"
+     */
+    private function extractKodebookingFromError(string $message): ?string
+    {
+        if (preg_match('/(?:kode\s*booking|kodebooking)\s*[:=\s]?\s*([A-Za-z0-9\/\-_]+)/i', $message, $m)) {
+            $kb = trim($m[1], " \t\n\r\0\x0B.,;:'\"()");
+            return !empty($kb) ? $kb : null;
+        }
+        return null;
     }
 }

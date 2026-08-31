@@ -9,7 +9,11 @@ declare(strict_types=1);
 class MobileJknDatabase
 {
     private PDO $pdo;
-    private Logger $log;
+    private MobileJknConfig $config;
+    private Logger          $log;
+
+    /** @var array<string, int> In-memory tracking of last generated sequence number per date to prevent collisions */
+    private array $lastGeneratedSeq = [];
 
     // Indonesian day-of-week map (ISO-8601: 1=Monday, 7=Sunday)
     private const HARI_MAP = [1=>'SENIN',2=>'SELASA',3=>'RABU',4=>'KAMIS',5=>'JUMAT',6=>'SABTU',7=>'AKHAD'];
@@ -87,21 +91,70 @@ SQL;
 
     public function fetchPendingCancellations(string $dateFrom, string $dateTo): array
     {
-        $sql = <<<'SQL'
-SELECT * FROM referensi_mobilejkn_bpjs_batal
-WHERE statuskirim = 'Belum'
-  AND date_format(tanggalbatal,'%Y-%m-%d') BETWEEN :df AND :dt
+        // 1. Fetch from explicit referensi_mobilejkn_bpjs_batal table (Java robot source)
+        $sql1 = <<<'SQL'
+SELECT 
+    b.nobooking, 
+    COALESCE(r.no_rawat, '') as no_rawat_batal, 
+    b.nomorreferensi, 
+    b.keterangan, 
+    b.tanggalbatal 
+FROM referensi_mobilejkn_bpjs_batal b
+LEFT JOIN referensi_mobilejkn_bpjs r ON r.nobooking = b.nobooking
+WHERE b.statuskirim = 'Belum'
+  AND date_format(b.tanggalbatal,'%Y-%m-%d') BETWEEN :df AND :dt
 SQL;
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
-        return $stmt->fetchAll();
+        $stmt1 = $this->pdo->prepare($sql1);
+        $stmt1->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $rows1 = $stmt1->fetchAll();
+
+        // 2. Fetch from referensi_mobilejkn_bpjs where SIMRS registration is cancelled (stts = 'Batal' or status = 'Batal')
+        // but no Task 99 has been recorded locally yet
+        $sql2 = <<<'SQL'
+SELECT 
+    r.nobooking, 
+    r.no_rawat as no_rawat_batal, 
+    r.nomorreferensi, 
+    'Batal periksa di SIMRS' as keterangan, 
+    CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as tanggalbatal
+FROM referensi_mobilejkn_bpjs r
+INNER JOIN reg_periksa rp ON rp.no_rawat = r.no_rawat AND rp.no_rkm_medis = r.norm
+WHERE r.statuskirim = 'Sudah'
+  AND (rp.stts = 'Batal' OR r.status = 'Batal')
+  AND r.tanggalperiksa BETWEEN :df AND :dt
+  AND r.no_rawat NOT IN (SELECT no_rawat FROM referensi_mobilejkn_bpjs_taskid WHERE taskid = '99')
+SQL;
+        $stmt2 = $this->pdo->prepare($sql2);
+        $stmt2->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $rows2 = $stmt2->fetchAll();
+
+        // Merge by nobooking to prevent duplicates
+        $merged = [];
+        foreach ($rows1 as $r) {
+            $merged[$r['nobooking']] = $r;
+        }
+        foreach ($rows2 as $r) {
+            if (!isset($merged[$r['nobooking']])) {
+                $merged[$r['nobooking']] = $r;
+            }
+        }
+
+        return array_values($merged);
     }
 
-    public function markCancellationAsSent(string $nomorreferensi): bool
+    public function markCancellationAsSent(string $nomorreferensi, string $nobooking = ''): bool
     {
-        $sql = "UPDATE referensi_mobilejkn_bpjs_batal SET statuskirim = 'Sudah' WHERE nomorreferensi = :ref";
-        $stmt = $this->pdo->prepare($sql);
-        return $stmt->execute(['ref' => $nomorreferensi]);
+        if (!empty($nomorreferensi)) {
+            $sql = "UPDATE referensi_mobilejkn_bpjs_batal SET statuskirim = 'Sudah' WHERE nomorreferensi = :ref";
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute(['ref' => $nomorreferensi]);
+        }
+        if (!empty($nobooking)) {
+            $sql2 = "UPDATE referensi_mobilejkn_bpjs SET status = 'Batal' WHERE nobooking = :nb";
+            $stmt2 = $this->pdo->prepare($sql2);
+            $stmt2->execute(['nb' => $nobooking]);
+        }
+        return true;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -439,13 +492,17 @@ SQL;
             return $noRawat;
         }
 
-        // 3. Compute MAX(nobooking)+1 matching index.php
+        // 3. Compute MAX(nobooking)+1 matching index.php (with in-memory monotonic guarantee)
         $tglPeriksa = $p['tgl_registrasi'] ?? date('Y-m-d');
         $sqlMax = "SELECT IFNULL(MAX(CONVERT(RIGHT(nobooking, 6), SIGNED)), 0) + 1 AS maxb FROM referensi_mobilejkn_bpjs WHERE tanggalperiksa = :tgl";
         $stmtMax = $this->pdo->prepare($sqlMax);
         $stmtMax->execute(['tgl' => $tglPeriksa]);
         $maxRow = $stmtMax->fetch();
-        $maxNum = (int) ($maxRow['maxb'] ?? 1);
+        $dbMax  = (int) ($maxRow['maxb'] ?? 1);
+
+        $lastSeq = $this->lastGeneratedSeq[$tglPeriksa] ?? 0;
+        $maxNum  = max($dbMax, $lastSeq + 1);
+        $this->lastGeneratedSeq[$tglPeriksa] = $maxNum;
 
         return str_replace('-', '', $tglPeriksa) . sprintf('%06d', $maxNum);
     }
