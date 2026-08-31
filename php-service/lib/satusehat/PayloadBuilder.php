@@ -3322,6 +3322,303 @@ class SatuSehatPayloadBuilder
         return $res;
     }
 
+    // ─── NUTRITION ORDER ───────────────────────────────────────────────────────
+
+    /**
+     * Build FHIR NutritionOrder resource payload.
+     *
+     * Rules applied:
+     * 1. identifier[0].value: trimmed alphanumeric no_rawat + time part of tanggal_adime (e.g. 20241203000004103034)
+     * 2. oralDiet.type: SNOMED CT via smart regex on detail_beri_diet/intervensi with universal fallback (439811000124104)
+     * 3. oralDiet.schedule: repeat dropped if incomplete/not available
+     * 4. oralDiet.nutrient: regex extracted (Calorie, Protein, Fat, Carbohydrate) and omitted if absent
+     * 5. oralDiet.texture: omitted if normal or absent
+     */
+    public static function nutritionOrder(
+        string $orgId,
+        array $p,
+        string $idPasien,
+        string $idPraktisi,
+        string $idNutritionOrder = ''
+    ): array {
+        $createdTime = self::sanitizeDateTime($p['tanggal_adime'] ?? null, null, $p);
+
+        // 1. Identifier: trimmed reg_periksa.no_rawat (no symbol) + time(catatan_adime_gizi.tanggal)
+        $cleanNoRawat = preg_replace('/[^0-9A-Za-z]/', '', (string) ($p['no_rawat'] ?? ''));
+        $timePart = '';
+        if (!empty($p['tanggal_adime'])) {
+            $ts = strtotime($p['tanggal_adime']);
+            if ($ts !== false) {
+                $timePart = date('His', $ts);
+            }
+        }
+        $identifierVal = $cleanNoRawat . ($timePart !== '' ? $timePart : '000000');
+
+        // 2. Resolve oralDiet.type (SNOMED CT International standard codes)
+        $dietName = trim((string) ($p['nama_diet'] ?? ''));
+        $intervensi = trim((string) ($p['intervensi'] ?? ''));
+        $instruksi = trim((string) ($p['instruksi'] ?? ''));
+        $diagnosis = trim((string) ($p['diagnosis'] ?? ''));
+        $combinedText = strtoupper($dietName . ' ' . $intervensi . ' ' . $diagnosis);
+
+        // Fallback default: General diet (SNOMED CT 41449007)
+        $dietCode = '41449007';
+        $dietDisplay = 'General diet';
+
+        if (preg_match('/\b(DM|DIABETES|DIABETIK)\b/i', $combinedText)) {
+            $dietCode = '160670007';
+            $dietDisplay = 'Diabetic diet';
+        } elseif (preg_match('/\b(TKTP|TINGGI KALORI|TINGGI PROTEIN)\b/i', $combinedText)) {
+            $dietCode = '68097001';
+            $dietDisplay = 'Increased calorie diet';
+        } elseif (preg_match('/\b(RG|RENDAH GARAM|LOW SODIUM)\b/i', $combinedText)) {
+            $dietCode = '386619000';
+            $dietDisplay = 'Low sodium diet';
+        } elseif (preg_match('/\b(RENDAH PURIN|R\.PURIN|RP|PURIN)\b/i', $combinedText)) {
+            $dietCode = '22745007';
+            $dietDisplay = 'Purine restricted diet';
+        } elseif (preg_match('/\b(RENDAH PROTEIN|R\.PROTEIN)\b/i', $combinedText)) {
+            $dietCode = '160673009';
+            $dietDisplay = 'Low protein diet';
+        } elseif (preg_match('/\b(CAIR|LIQUID|SONDE)\b/i', $combinedText)) {
+            $dietCode = '10888001';
+            $dietDisplay = 'Liquid diet';
+        } elseif (preg_match('/\b(HEPAR|HATI)\b/i', $combinedText)) {
+            $dietCode = '438588004';
+            $dietDisplay = 'Dietary education for hepatic disorder';
+        } elseif (preg_match('/\b(GINJAL|RENAL)\b/i', $combinedText)) {
+            $dietCode = '33489005';
+            $dietDisplay = 'Renal disease diet';
+        } elseif (preg_match('/\b(RENDAH LEMAK|LOW FAT)\b/i', $combinedText)) {
+            $dietCode = '16208003';
+            $dietDisplay = 'Low fat diet';
+        } elseif (preg_match('/\b(LUNAK|SOFT)\b/i', $combinedText)) {
+            $dietCode = '78150000';
+            $dietDisplay = 'Soft diet';
+        }
+
+        $oralDiet = [
+            'type' => [
+                [
+                    'coding' => [
+                        [
+                            'system'  => 'http://snomed.info/sct',
+                            'code'    => $dietCode,
+                            'display' => $dietDisplay,
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        // 3. oralDiet.schedule (drop if not available or incomplete)
+        if (preg_match('/(\d+)\s*(jam|h|hour)/i', $combinedText, $mSched)) {
+            $periodHours = (int) $mSched[1];
+            if ($periodHours > 0) {
+                $oralDiet['schedule'] = [
+                    [
+                        'repeat' => [
+                            'frequency'  => 1,
+                            'period'     => $periodHours,
+                            'periodUnit' => 'h',
+                        ],
+                    ],
+                ];
+            }
+        } elseif (preg_match('/\b(3X|3 X|TIGA KALI|PAGI|SIANG|SORE|MALAM)\b/i', $combinedText)) {
+            $oralDiet['schedule'] = [
+                [
+                    'repeat' => [
+                        'frequency'  => 3,
+                        'period'     => 1,
+                        'periodUnit' => 'd',
+                    ],
+                ],
+            ];
+        }
+
+        // 4. oralDiet.nutrient (Regex extract Calorie, Protein, Fat, Carbohydrate; omit if absent)
+        $nutrients = [];
+
+        // Calorie / Energy (SNOMED 258790008)
+        if (preg_match('/(?:ENERGI|KALORI|CALORIE|ENERGY|KKAL)\s*[:=]?\s*([0-9]+(?:[\.,][0-9]+)?)/i', $intervensi, $mCal)) {
+            $val = (float) str_replace(',', '.', $mCal[1]);
+            if ($val > 0) {
+                $nutrients[] = [
+                    'modifier' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://snomed.info/sct',
+                                'code'    => '258790008',
+                                'display' => 'calorie',
+                            ],
+                        ],
+                    ],
+                    'amount' => [
+                        'value'  => $val,
+                        'unit'   => 'cal',
+                        'system' => 'http://unitsofmeasure.org',
+                        'code'   => 'cal',
+                    ],
+                ];
+            }
+        }
+
+        // Protein (SNOMED 88878007)
+        if (preg_match('/(?:PROTEIN)\s*[:=]?\s*([0-9]+(?:[\.,][0-9]+)?)/i', $intervensi, $mProt)) {
+            $val = (float) str_replace(',', '.', $mProt[1]);
+            if ($val > 0) {
+                $nutrients[] = [
+                    'modifier' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://snomed.info/sct',
+                                'code'    => '88878007',
+                                'display' => 'Protein',
+                            ],
+                        ],
+                    ],
+                    'amount' => [
+                        'value'  => $val,
+                        'unit'   => 'g',
+                        'system' => 'http://unitsofmeasure.org',
+                        'code'   => 'g',
+                    ],
+                ];
+            }
+        }
+
+        // Fat / Lemak (SNOMED 256674009)
+        if (preg_match('/(?:LEMAK|FAT)\s*[:=]?\s*([0-9]+(?:[\.,][0-9]+)?)/i', $intervensi, $mFat)) {
+            $val = (float) str_replace(',', '.', $mFat[1]);
+            if ($val > 0) {
+                $nutrients[] = [
+                    'modifier' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://snomed.info/sct',
+                                'code'    => '256674009',
+                                'display' => 'Fat',
+                            ],
+                        ],
+                    ],
+                    'amount' => [
+                        'value'  => $val,
+                        'unit'   => 'g',
+                        'system' => 'http://unitsofmeasure.org',
+                        'code'   => 'g',
+                    ],
+                ];
+            }
+        }
+
+        // Carbohydrate / Karbohidrat (SNOMED 2331003)
+        if (preg_match('/(?:KARBOHIDRAT|CARBOHYDRATE|KH)\s*[:=]?\s*([0-9]+(?:[\.,][0-9]+)?)/i', $intervensi, $mCarb)) {
+            $val = (float) str_replace(',', '.', $mCarb[1]);
+            if ($val > 0) {
+                $nutrients[] = [
+                    'modifier' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://snomed.info/sct',
+                                'code'    => '2331003',
+                                'display' => 'Carbohydrate',
+                            ],
+                        ],
+                    ],
+                    'amount' => [
+                        'value'  => $val,
+                        'unit'   => 'g',
+                        'system' => 'http://unitsofmeasure.org',
+                        'code'   => 'g',
+                    ],
+                ];
+            }
+        }
+
+        if (!empty($nutrients)) {
+            $oralDiet['nutrient'] = $nutrients;
+        }
+
+        // 5. oralDiet.texture (omitted if not available)
+        if (preg_match('/\b(CAIR|LIQUID|SONDE)\b/i', $combinedText)) {
+            $oralDiet['texture'] = [
+                [
+                    'modifier' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://snomed.info/sct',
+                                'code'    => '228055009',
+                                'display' => 'Liquidized food',
+                            ],
+                        ],
+                    ],
+                ],
+            ];
+        } elseif (preg_match('/\b(LUNAK|BUBUR|SOFT)\b/i', $combinedText)) {
+            $oralDiet['texture'] = [
+                [
+                    'modifier' => [
+                        'coding' => [
+                            [
+                                'system'  => 'http://snomed.info/sct',
+                                'code'    => '228053002',
+                                'display' => 'Cut-up food',
+                            ],
+                        ],
+                    ],
+                ],
+            ];
+        }
+
+        // 6. oralDiet.instruction
+        $instructionParts = [];
+        if ($intervensi !== '' && $intervensi !== '-') {
+            $instructionParts[] = $intervensi;
+        }
+        if ($instruksi !== '' && $instruksi !== '-') {
+            $instructionParts[] = $instruksi;
+        }
+        if ($dietName !== '') {
+            $instructionParts[] = 'Diet: ' . $dietName;
+        }
+        if (empty($instructionParts)) {
+            $instructionParts[] = 'Diet Standar Rumah Sakit';
+        }
+        $oralDiet['instruction'] = implode(' | ', $instructionParts);
+
+        $payload = [
+            'resourceType' => 'NutritionOrder',
+            'identifier'   => [
+                [
+                    'system' => 'http://sys-ids.kemkes.go.id/nutrition-order/' . $orgId,
+                    'value'  => $identifierVal,
+                ],
+            ],
+            'status'     => 'active',
+            'intent'     => 'order',
+            'patient'    => [
+                'reference' => 'Patient/' . $idPasien,
+                'display'   => $p['nm_pasien'] ?? '',
+            ],
+            'encounter'  => [
+                'reference' => 'Encounter/' . $p['id_encounter'],
+            ],
+            'dateTime'   => $createdTime,
+            'orderer'    => [
+                'reference' => 'Practitioner/' . $idPraktisi,
+                'display'   => $p['nama_petugas'] ?? '',
+            ],
+            'oralDiet'   => $oralDiet,
+        ];
+
+        if ($idNutritionOrder !== '') {
+            $payload['id'] = $idNutritionOrder;
+        }
+
+        return $payload;
+    }
+
     /**
      * Timezone-correct, semantic date formatting.
      *

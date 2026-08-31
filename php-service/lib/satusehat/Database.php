@@ -509,6 +509,8 @@ class SatuSehatDatabase
         'fetchPendingMedicationDispenseUpdate' => ['phase' => 'visit', 'mode' => 'union',    'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
         'fetchPendingMedicationStatementActive' => ['phase' => 'visit', 'mode' => 'union',    'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
         'fetchPendingMedicationStatementUpdate' => ['phase' => 'visit', 'mode' => 'union',    'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingNutritionOrderActive' => ['phase' => 'visit', 'mode' => 'plain',    'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
+        'fetchPendingNutritionOrderUpdate' => ['phase' => 'visit', 'mode' => 'plain',    'cols' => 'rp.tgl_registrasi, rp.no_rawat', 'keys' => ['tgl_registrasi', 'no_rawat']],
         // Self-managed keyset cursor (mode 'custom': applyTail is not used).
         'fetchPendingObservationsAll' => ['mode' => 'custom', 'cols' => '', 'keys' => ['tgl_observasi', 'no_rawat', 'jam_observasi', 'status']],
     ];
@@ -2184,8 +2186,8 @@ class SatuSehatDatabase
 
     public function saveCarePlan(string $noRawat, string $tglPerawatan, string $jamRawat, string $status, string $idCarePlan): bool
     {
-        $sql = "INSERT INTO satu_sehat_careplan (no_rawat, tgl_perawatan, jam_rawat, status, id_careplan) 
-                VALUES (:nr, :tgl, :jam, :st, :id) 
+        $sql = "INSERT INTO satu_sehat_careplan (no_rawat, tgl_perawatan, jam_rawat, status, id_careplan)
+                VALUES (:nr, :tgl, :jam, :st, :id)
                 ON DUPLICATE KEY UPDATE id_careplan = :id2";
         $stmt = $this->mysql->prepare($sql);
         return $stmt->execute([
@@ -2195,6 +2197,99 @@ class SatuSehatDatabase
             'st'   => $status,
             'id'   => $idCarePlan,
             'id2'  => $idCarePlan
+        ]);
+    }
+
+    // ─── NUTRITION ORDER ────────────────────────────────────────────────────────
+
+    /**
+     * Fetch pending NutritionOrder records from catatan_adime_gizi that have not been sent yet.
+     */
+    public function fetchPendingNutritionOrderActive(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
+    {
+        $sql = "
+            SELECT
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp, sse.id_encounter,
+                ca.tanggal as tanggal_adime, ca.intervensi, ca.instruksi, ca.diagnosis,
+                COALESCE(pg_gizi.nama, pg_dok.nama, '') as nama_petugas,
+                COALESCE(pg_gizi.no_ktp, '') as ktppraktisi,
+                COALESCE(pg_dok.no_ktp, '') as ktpdokter_dpjp,
+                ssn.id_nutritionorder,
+                d.nama_diet, d.kd_diet
+            FROM catatan_adime_gizi ca
+            INNER JOIN reg_periksa rp ON ca.no_rawat = rp.no_rawat
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            LEFT JOIN pegawai pg_gizi ON ca.nip = pg_gizi.nik
+            LEFT JOIN pegawai pg_dok ON rp.kd_dokter = pg_dok.nik
+            LEFT JOIN satu_sehat_nutritionorder ssn ON ssn.no_rawat = ca.no_rawat AND ssn.tanggal = ca.tanggal
+            LEFT JOIN detail_beri_diet dbd ON dbd.no_rawat = ca.no_rawat AND dbd.tanggal = DATE(ca.tanggal)
+            LEFT JOIN diet d ON dbd.kd_diet = d.kd_diet
+            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+              AND ssn.id_nutritionorder IS NULL
+            GROUP BY ca.no_rawat, ca.tanggal
+            ORDER BY rp.tgl_registrasi ASC, rp.no_rawat ASC
+        ";
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Fetch NutritionOrder records that already have an ID and need updating.
+     */
+    public function fetchPendingNutritionOrderUpdate(string $dateFrom, string $dateTo, ?int $limit = null, int|array|null $offsetOrAfter = 0): array
+    {
+        $sql = "
+            SELECT
+                rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
+                p.nm_pasien, p.no_ktp, sse.id_encounter,
+                ca.tanggal as tanggal_adime, ca.intervensi, ca.instruksi, ca.diagnosis,
+                COALESCE(pg_gizi.nama, pg_dok.nama, '') as nama_petugas,
+                COALESCE(pg_gizi.no_ktp, '') as ktppraktisi,
+                COALESCE(pg_dok.no_ktp, '') as ktpdokter_dpjp,
+                ssn.id_nutritionorder,
+                d.nama_diet, d.kd_diet
+            FROM catatan_adime_gizi ca
+            INNER JOIN reg_periksa rp ON ca.no_rawat = rp.no_rawat
+            INNER JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+            INNER JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+            LEFT JOIN pegawai pg_gizi ON ca.nip = pg_gizi.nik
+            LEFT JOIN pegawai pg_dok ON rp.kd_dokter = pg_dok.nik
+            INNER JOIN satu_sehat_nutritionorder ssn ON ssn.no_rawat = ca.no_rawat AND ssn.tanggal = ca.tanggal
+            LEFT JOIN detail_beri_diet dbd ON dbd.no_rawat = ca.no_rawat AND dbd.tanggal = DATE(ca.tanggal)
+            LEFT JOIN diet d ON dbd.kd_diet = d.kd_diet
+            WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+              AND ssn.id_nutritionorder IS NOT NULL
+            GROUP BY ca.no_rawat, ca.tanggal
+            ORDER BY rp.tgl_registrasi ASC, rp.no_rawat ASC
+        ";
+        $params = ['df' => $dateFrom, 'dt' => $dateTo];
+        $this->applyTail(__FUNCTION__, $sql, $params, $offsetOrAfter, $limit);
+        $stmt = $this->mysql->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Save SATUSEHAT NutritionOrder ID and status.
+     */
+    public function saveNutritionOrder(string $noRawat, string $tanggal, string $idNutritionOrder, string $status = 'active'): bool
+    {
+        $sql = "INSERT INTO satu_sehat_nutritionorder (no_rawat, tanggal, id_nutritionorder, status)
+                VALUES (:nr, :tgl, :id, :st)
+                ON DUPLICATE KEY UPDATE id_nutritionorder = :id2, status = :st2";
+        $stmt = $this->mysql->prepare($sql);
+        return $stmt->execute([
+            'nr'   => $noRawat,
+            'tgl'  => $tanggal,
+            'id'   => $idNutritionOrder,
+            'st'   => $status,
+            'id2'  => $idNutritionOrder,
+            'st2'  => $status,
         ]);
     }
 
