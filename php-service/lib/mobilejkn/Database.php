@@ -175,7 +175,7 @@ SQL;
         $sql = <<<'SQL'
 SELECT
     r.nobooking, r.no_rawat, r.norm as no_rkm_medis,
-    rp.tgl_registrasi, rp.jam_reg, rp.kd_dokter, rp.kd_poli, rp.stts,
+    rp.no_reg, rp.tgl_registrasi, rp.jam_reg, rp.kd_dokter, rp.kd_poli, rp.stts,
     COALESCE(d.nm_dokter, '') as nm_dokter,
     COALESCE(pol.nm_poli, '') as nm_poli
 FROM referensi_mobilejkn_bpjs r

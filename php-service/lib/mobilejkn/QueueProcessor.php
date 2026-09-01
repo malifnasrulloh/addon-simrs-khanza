@@ -1618,7 +1618,13 @@ class QueueProcessor
         $simrsNoReg  = (int)($patient['no_reg'] ?? 0);
         $simrsNik    = trim((string)($patient['no_ktp'] ?? ''));
         $simrsKartu  = trim((string)($patient['no_peserta'] ?? ''));
+        $noRawat     = trim((string)($patient['no_rawat'] ?? ''));
+        $noBooking   = trim((string)($patient['nobooking'] ?? ''));
 
+        // ═══════════════════════════════════════════════════════════════════════
+        // Priority 1: Mandatory Patient Identity Pre-Filter (Norm + NIK + Kartu)
+        // A booking on BPJS must NEVER match a different patient's medical record.
+        // ═══════════════════════════════════════════════════════════════════════
         $candidates = [];
         foreach ($list as $item) {
             // Skip cancelled entries
@@ -1626,7 +1632,7 @@ class QueueProcessor
                 continue;
             }
 
-            // Step 1: Exact norm match (no zero stripping per strict hospital requirements)
+            // Step 1: Exact norm match (mandatory invariant across all matching)
             $bpjsNorm = trim((string)($item['norekammedis'] ?? ''));
             if ($bpjsNorm !== $simrsNorm) {
                 continue;
@@ -1654,7 +1660,24 @@ class QueueProcessor
             return $candidates[0];
         }
 
-        // Disambiguation Layer 2: Match Poliklinik
+        // ═══════════════════════════════════════════════════════════════════════
+        // Priority 2: Direct Exact Match on Kodebooking / No. Rawat (for THIS patient)
+        // ═══════════════════════════════════════════════════════════════════════
+        foreach ($candidates as $c) {
+            $bpjsKb = trim((string)($c['kodebooking'] ?? ''));
+            // Exact match for bridging booking (created with full no_rawat with slashes)
+            if (!empty($noRawat) && $bpjsKb === $noRawat) {
+                return $c;
+            }
+            // Exact match for mobile JKN / onsite booking
+            if (!empty($noBooking) && $bpjsKb === $noBooking) {
+                return $c;
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // Priority 3: Filter by Poliklinik
+        // ═══════════════════════════════════════════════════════════════════════
         $poliMatches = [];
         foreach ($candidates as $c) {
             if ($simrsPoli !== '' && ($c['kodepoli'] ?? '') === $simrsPoli) {
@@ -1668,7 +1691,9 @@ class QueueProcessor
             $candidates = $poliMatches;
         }
 
-        // Disambiguation Layer 3: Match Doctor
+        // ═══════════════════════════════════════════════════════════════════════
+        // Priority 4: Filter by Doctor
+        // ═══════════════════════════════════════════════════════════════════════
         $dokterMatches = [];
         foreach ($candidates as $c) {
             if ($simrsDokter > 0 && (int)($c['kodedokter'] ?? 0) === $simrsDokter) {
@@ -1682,26 +1707,62 @@ class QueueProcessor
             $candidates = $dokterMatches;
         }
 
-        // Disambiguation Layer 4: Match Queue Number (no_reg) or Reference (SEP/Rujukan)
-        foreach ($candidates as $c) {
-            $bpjsNoAntrean = 0;
-            if (isset($c['angkaantrean']) && is_numeric($c['angkaantrean'])) {
-                $bpjsNoAntrean = (int) $c['angkaantrean'];
-            } elseif (!empty($c['noantrean'])) {
-                if (preg_match('/(\d+)$/', (string)$c['noantrean'], $m)) {
-                    $bpjsNoAntrean = (int) $m[1];
-                } else {
-                    $bpjsNoAntrean = (int) $c['noantrean'];
+        // ═══════════════════════════════════════════════════════════════════════
+        // Priority 5: Disambiguate by Queue Number (no_reg / angkaantrean)
+        // ═══════════════════════════════════════════════════════════════════════
+        if ($simrsNoReg > 0) {
+            $regMatches = [];
+            foreach ($candidates as $c) {
+                $bpjsNoAntrean = 0;
+                if (isset($c['angkaantrean']) && is_numeric($c['angkaantrean'])) {
+                    $bpjsNoAntrean = (int) $c['angkaantrean'];
+                } elseif (!empty($c['noantrean'])) {
+                    if (preg_match('/(\d+)$/', (string)$c['noantrean'], $m)) {
+                        $bpjsNoAntrean = (int) $m[1];
+                    } else {
+                        $bpjsNoAntrean = (int) $c['noantrean'];
+                    }
+                }
+
+                if ($bpjsNoAntrean === $simrsNoReg) {
+                    $regMatches[] = $c;
                 }
             }
 
-            if ($simrsNoReg > 0 && $bpjsNoAntrean === $simrsNoReg) {
-                return $c;
+            if (count($regMatches) === 1) {
+                return $regMatches[0];
             }
-            if ($nomorRef !== '' && !empty($c['nomorreferensi']) && $c['nomorreferensi'] === $nomorRef) {
-                return $c;
+            if (count($regMatches) > 1) {
+                $candidates = $regMatches;
             }
         }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // Priority 6: Filter by Nomor Referensi (SEP / Surat Rujukan)
+        // ═══════════════════════════════════════════════════════════════════════
+        if ($nomorRef !== '') {
+            $refMatches = [];
+            foreach ($candidates as $c) {
+                if (!empty($c['nomorreferensi']) && $c['nomorreferensi'] === $nomorRef) {
+                    $refMatches[] = $c;
+                }
+            }
+            if (count($refMatches) === 1) {
+                return $refMatches[0];
+            }
+            if (count($refMatches) > 1) {
+                $candidates = $refMatches;
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // Priority 7: Tie-Breaker by Recency (Latest createdtime)
+        // ═══════════════════════════════════════════════════════════════════════
+        usort($candidates, function ($a, $b) {
+            $tA = (int) ($a['createdtime'] ?? 0);
+            $tB = (int) ($b['createdtime'] ?? 0);
+            return $tB <=> $tA; // DESC
+        });
 
         return $candidates[0] ?? null;
     }

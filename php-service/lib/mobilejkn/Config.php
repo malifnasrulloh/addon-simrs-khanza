@@ -85,7 +85,7 @@ class MobileJknConfig
         }
 
         // ── Runtime tuning ──────────────────────────────────────────────
-        $rawMode = strtolower($this->get('MOBILEJKN_SYNC_MODE', 'realtime'));
+        $rawMode = strtolower($this->get('MOBILEJKN_SYNC_MODE', 'robot'));
         $this->syncMode           = in_array($rawMode, ['realtime', 'robot'], true) ? $rawMode : 'robot';
         $this->batchSize          = max(1, (int) $this->get('MOBILEJKN_BATCH_SIZE', '4'));
         $this->lookbackDays       = max(1, (int) $this->get('MOBILEJKN_LOOKBACK_DAYS', '6'));

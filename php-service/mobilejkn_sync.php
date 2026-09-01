@@ -146,6 +146,7 @@ $log->info("  SIMRS Khanza - Mobile JKN Queue Sync Service");
 $log->info("  Version: " . SERVICE_VERSION . " | PHP " . PHP_VERSION);
 $log->info("  Timestamp: " . date('Y-m-d H:i:s T'));
 $log->info("  Mode: " . ($isDryRun ? 'DRY-RUN (no API calls)' : 'PRODUCTION'));
+$log->info("  Sync Mode: " . strtoupper($config->syncMode));
 $log->info("  Batch Size: " . $config->batchSize);
 $log->info("  Lookback Days: " . $config->lookbackDays);
 $log->info("  Non-JKN: " . ($config->includeNonJkn ? 'Enabled' : 'Disabled'));
