@@ -273,9 +273,8 @@ class QueueProcessor
 
                 // Step 2: Send taskid=99
                 $waktuStr = $c['tanggalbatal'] ?? date('Y-m-d H:i:s');
-                if (!empty($noRawat)) {
-                    $this->sendTaskId($nb, $noRawat, '99', $waktuStr, 'BLOCK 2');
-                }
+                $targetRawat = !empty($noRawat) ? $noRawat : $nb;
+                $this->sendTaskId($nb, $targetRawat, '99', $waktuStr, 'BLOCK 2');
             } else {
                 $this->log->warning("[BLOCK 2] ✗ Cancel failed {$nb}: {$msg}");
                 $this->failCount++;
@@ -426,23 +425,22 @@ class QueueProcessor
                 $this->log->warning("[BLOCK 4] {$noRawat}: missing master data (nm_dokter='{$p['nm_dokter']}', nm_poli='{$p['nm_poli']}', no_ktp='{$p['no_ktp']}', no_peserta='{$p['no_peserta']}') — patient fetched but needs manual review");
             }
 
+            // Java: per-patient mapping lookup (lines 718–724)
+            // Checked BEFORE lookupJadwal so clinics without BPJS mapping (e.g. U0021 Vaksin, IGDK)
+            // or unmapped doctors are cleanly skipped at DEBUG level without false "no jadwal found" warnings.
+            $dokterBpjs = $dokterDict[$p['kd_dokter']] ?? '';
+            $poliBpjs   = $poliDict[$p['kd_poli']] ?? '';
+            if (empty($dokterBpjs) || empty($poliBpjs)) {
+                $this->log->debug("[BLOCK 4] {$noRawat}: unmapped polyclinic ({$p['kd_poli']}) or doctor ({$p['kd_dokter']}) in BPJS — skipping");
+                continue;
+            }
+
             // Resolve jadwal from pre-loaded dictionary (Fix #7)
             $hari   = $this->db->hariForDate($p['tgl_registrasi']);
             $jamReg = $p['jam_reg'] ?? '08:00:00';
             $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli'], $jamReg);
             if (!$jadwal) {
-                // Suppress expected skip for emergency room (IGD/IGDK)
-                if (($p['kd_poli'] ?? '') !== 'IGDK') {
-                    $this->log->warning("[BLOCK 4] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
-                }
-                continue;
-            }
-
-            // Java: per-patient mapping lookup (lines 718–724)
-            $dokterBpjs = $dokterDict[$p['kd_dokter']] ?? '';
-            $poliBpjs   = $poliDict[$p['kd_poli']] ?? '';
-            if (empty($dokterBpjs) || empty($poliBpjs)) {
-                $this->log->debug("[BLOCK 4] {$noRawat}: no BPJS mapping — skipping");
+                $this->log->warning("[BLOCK 4] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
                 continue;
             }
 
@@ -1484,6 +1482,15 @@ class QueueProcessor
                 $this->log->warning("[BLOCK 5] {$noRawat}: missing master data (nm_dokter='{$p['nm_dokter']}', nm_poli='{$p['nm_poli']}', no_ktp='{$p['no_ktp']}', no_peserta='{$p['no_peserta']}') — patient fetched but needs manual review");
             }
 
+            // BPJS mapping lookup from pre-loaded dictionaries
+            // Checked BEFORE lookupJadwal to cleanly skip unmapped polyclinics/doctors
+            $dokterBpjs = $dokterDict[$p['kd_dokter']] ?? '';
+            $poliBpjs   = $poliDict[$p['kd_poli']] ?? '';
+            if (empty($dokterBpjs) || empty($poliBpjs)) {
+                $this->log->debug("[BLOCK 5] {$noRawat}: unmapped polyclinic ({$p['kd_poli']}) or doctor ({$p['kd_dokter']}) in BPJS — skipping");
+                continue;
+            }
+
             // Resolve jadwal from pre-loaded dictionary (Fix #7)
             $hari   = $this->db->hariForDate($p['tgl_registrasi']);
             $jamReg = $p['jam_reg'] ?? '08:00:00';
@@ -1491,14 +1498,6 @@ class QueueProcessor
             if (!$jadwal) {
                 // Log which patient is being skipped and WHY (BUG-D: clear reason for skip)
                 $this->log->warning("[BLOCK 5] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
-                continue;
-            }
-
-            // BPJS mapping lookup from pre-loaded dictionaries
-            $dokterBpjs = $dokterDict[$p['kd_dokter']] ?? '';
-            $poliBpjs   = $poliDict[$p['kd_poli']] ?? '';
-            if (empty($dokterBpjs) || empty($poliBpjs)) {
-                $this->log->debug("[BLOCK 5] {$noRawat}: no BPJS mapping — skipping");
                 continue;
             }
 

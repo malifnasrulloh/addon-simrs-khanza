@@ -109,24 +109,64 @@ SQL;
         $rows1 = $stmt1->fetchAll();
 
         // 2. Fetch from referensi_mobilejkn_bpjs where SIMRS registration is cancelled (stts = 'Batal' or status = 'Batal')
-        // but no Task 99 has been recorded locally yet
+        // OR where patient registration was physically deleted from reg_periksa
         $sql2 = <<<'SQL'
 SELECT 
     r.nobooking, 
-    r.no_rawat as no_rawat_batal, 
+    COALESCE(r.no_rawat, '') as no_rawat_batal, 
     r.nomorreferensi, 
-    'Batal periksa di SIMRS' as keterangan, 
-    CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg) as tanggalbatal
+    CASE 
+        WHEN rp.no_rawat IS NULL THEN 'Pendaftaran dihapus di SIMRS'
+        ELSE 'Batal periksa di SIMRS'
+    END as keterangan, 
+    COALESCE(CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg), CONCAT(r.tanggalperiksa, ' 12:00:00')) as tanggalbatal
 FROM referensi_mobilejkn_bpjs r
-INNER JOIN reg_periksa rp ON rp.no_rawat = r.no_rawat AND rp.no_rkm_medis = r.norm
+LEFT JOIN reg_periksa rp ON rp.no_rawat = r.no_rawat AND rp.no_rkm_medis = r.norm
 WHERE r.statuskirim = 'Sudah'
-  AND (rp.stts = 'Batal' OR r.status = 'Batal')
+  AND r.status != 'Batal'
+  AND (
+      rp.no_rawat IS NULL
+      OR rp.stts = 'Batal'
+      OR r.status = 'Batal'
+  )
   AND r.tanggalperiksa BETWEEN :df AND :dt
-  AND r.no_rawat NOT IN (SELECT no_rawat FROM referensi_mobilejkn_bpjs_taskid WHERE taskid = '99')
+  AND (r.no_rawat = '' OR r.no_rawat NOT IN (SELECT no_rawat FROM referensi_mobilejkn_bpjs_taskid WHERE taskid = '99'))
 SQL;
         $stmt2 = $this->pdo->prepare($sql2);
         $stmt2->execute(['df' => $dateFrom, 'dt' => $dateTo]);
         $rows2 = $stmt2->fetchAll();
+
+        // 3. Intra-day duplicate Mobile JKN bookings:
+        // Patient booked via Mobile JKN, but arrived and was served under a different walk-in/bridging registration
+        // on the same date for the same polyclinic.
+        $sql3 = <<<'SQL'
+SELECT 
+    r.nobooking, 
+    COALESCE(r.no_rawat, '') as no_rawat_batal, 
+    r.nomorreferensi, 
+    CONCAT('Duplikasi antrean Mobile JKN (pasien dilayani via no_rawat ', rp2.no_rawat, ')') as keterangan, 
+    CONCAT(rp2.tgl_registrasi, ' ', rp2.jam_reg) as tanggalbatal
+FROM referensi_mobilejkn_bpjs r
+INNER JOIN maping_poli_bpjs mp ON mp.kd_poli_bpjs = r.kodepoli
+INNER JOIN reg_periksa rp2 ON rp2.no_rkm_medis = r.norm 
+    AND rp2.tgl_registrasi = r.tanggalperiksa 
+    AND rp2.kd_poli = mp.kd_poli_rs
+    AND (r.no_rawat IS NULL OR r.no_rawat = '' OR rp2.no_rawat != r.no_rawat)
+WHERE r.statuskirim = 'Sudah'
+  AND r.status != 'Batal'
+  AND r.tanggalperiksa BETWEEN :df AND :dt
+  AND (rp2.stts = 'Sudah' OR EXISTS (
+      SELECT 1 FROM referensi_mobilejkn_bpjs_taskid t2 
+      WHERE t2.no_rawat = rp2.no_rawat AND t2.taskid IN ('3','4','5','6','7')
+  ))
+  AND NOT EXISTS (
+      SELECT 1 FROM referensi_mobilejkn_bpjs_taskid t 
+      WHERE t.no_rawat = r.no_rawat AND t.taskid IN ('3','4','5','6','7','99')
+  )
+SQL;
+        $stmt3 = $this->pdo->prepare($sql3);
+        $stmt3->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        $rows3 = $stmt3->fetchAll();
 
         // Merge by nobooking to prevent duplicates
         $merged = [];
@@ -134,6 +174,11 @@ SQL;
             $merged[$r['nobooking']] = $r;
         }
         foreach ($rows2 as $r) {
+            if (!isset($merged[$r['nobooking']])) {
+                $merged[$r['nobooking']] = $r;
+            }
+        }
+        foreach ($rows3 as $r) {
             if (!isset($merged[$r['nobooking']])) {
                 $merged[$r['nobooking']] = $r;
             }
