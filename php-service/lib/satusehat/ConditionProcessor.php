@@ -203,12 +203,35 @@ class SatuSehatConditionProcessor
                 ]
             ];
 
-            $this->log->info("[PHASE 2] {$noRawat}: PATCH /Condition/{$idCondition} (" . count($ops) . " ops)");
-            $result = $this->api->patch("/Condition/{$idCondition}", $ops);
+            $nik = $p['no_ktp'];
+            $idPasien = $this->db->getIhsPatient($nik);
+            if (!$idPasien) {
+                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Patient. Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+
+            $idDokter = null;
+            $namaDokter = null;
+            if (!empty($p['ktp_dokter'])) {
+                $idDokter = $this->db->getIhsPractitioner($p['ktp_dokter']);
+                $namaDokter = $p['nama_dokter'] ?? '';
+            }
+
+            $payload = SatuSehatPayloadBuilder::condition(
+                $p,
+                $idPasien,
+                $idCondition,
+                $idDokter,
+                $namaDokter
+            );
+
+            $this->log->info("[PHASE 2] {$noRawat}: PUT /Condition/{$idCondition} (" . count($ops) . " ops) with PATCH fallback");
+            $result = $this->api->putWithPatchFallback("/Condition/{$idCondition}", $payload, $ops);
 
             if ($result['success']) {
                 $this->db->updateConditionLocalState($noRawat, $kdPenyakit, 'updated', $statusRawat);
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Condition {$idCondition} via PATCH");
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated Condition {$idCondition}");
                 $this->successCount++;
             } else {
                 $errorMessage = \SatuSehatClient::extractErrorMsg($result);

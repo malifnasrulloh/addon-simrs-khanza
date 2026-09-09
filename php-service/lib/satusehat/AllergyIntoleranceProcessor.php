@@ -230,12 +230,48 @@ $isRule = \SatuSehatClient::classifyError($result) === 'failed_rule';
                 ]
             ];
 
-            $this->log->info("[PHASE 2] {$noRawat}: PATCH /AllergyIntolerance/{$idAllergy} (" . count($ops) . " ops)");
-            $result = $this->api->patch("/AllergyIntolerance/{$idAllergy}", $ops);
+            $nikPasien = $a['no_ktp'];
+            $nikPraktisi = $a['ktppraktisi'];
+
+            $idPasien = $this->db->getIhsPatient($nikPasien);
+            if (!$idPasien) {
+                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Patient. Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+
+            $idPraktisi = $this->db->getIhsPractitioner($nikPraktisi);
+            if (!$idPraktisi && !empty($a['ktpdokter_dpjp'])) {
+                $idPraktisi = $this->db->getIhsPractitioner($a['ktpdokter_dpjp']);
+            }
+            if (!$idPraktisi) {
+                $this->log->warning("[PHASE 2] {$noRawat}: Missing IHS ID for Practitioner. Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+
+            $allergyData = $this->dictionary->lookup($alergi);
+            if ($allergyData['coding_code'] === 'unknown') {
+                $this->log->warning("[PHASE 2] {$noRawat}: Allergy keyword '{$alergi}' is unmapped. Skipped.");
+                $this->skipCount++;
+                continue;
+            }
+
+            $payload = SatuSehatPayloadBuilder::allergyIntolerance(
+                $a,
+                $allergyData,
+                $idPasien,
+                $idPraktisi,
+                $this->config->orgId,
+                $idAllergy
+            );
+
+            $this->log->info("[PHASE 2] {$noRawat}: PUT /AllergyIntolerance/{$idAllergy} (" . count($ops) . " ops) with PATCH fallback");
+            $result = $this->api->putWithPatchFallback("/AllergyIntolerance/{$idAllergy}", $payload, $ops);
 
             if ($result['success']) {
                 $this->db->updateAllergyLocalState($noRawat, $tglPerawatan, $jamRawat, $alergi, 'updated');
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated AllergyIntolerance {$idAllergy} via PATCH");
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated AllergyIntolerance {$idAllergy}");
                 $this->successCount++;
             } else {
                 $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . \SatuSehatClient::extractErrorMsg($result));

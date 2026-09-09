@@ -324,14 +324,33 @@ class SatuSehatEpisodeOfCareProcessor
                 ];
             }
 
-            // ── Execute PATCH ───────────────────────────────────────────────
-            $this->log->info("[PHASE 2] {$noRawat}: PATCH /EpisodeOfCare/{$eocId} (finished, " . count($ops) . " ops)");
-            $result = $this->api->patch("/EpisodeOfCare/{$eocId}", $ops);
+            // ── Execute PUT with PATCH Fallback ─────────────────────────────
+            $diagnoses = [];
+            if (!empty($p['id_condition'])) {
+                $diagnoses[] = [
+                    'id_condition' => $p['id_condition'],
+                    'nm_penyakit'  => $p['nm_penyakit'] ?? ''
+                ];
+            }
+
+            $payload = SatuSehatPayloadBuilder::episodeOfCare(
+                $this->config->orgId,
+                $p,
+                $idPasien,
+                $idDokter,
+                'finished',
+                $type,
+                $eocId,
+                $diagnoses
+            );
+
+            $this->log->info("[PHASE 2] {$noRawat}: PUT /EpisodeOfCare/{$eocId} (finished, " . count($ops) . " ops) with PATCH fallback");
+            $result = $this->api->putWithPatchFallback("/EpisodeOfCare/{$eocId}", $payload, $ops);
 
             if ($result['success']) {
                 $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $eocId);
                 $this->db->updateEocLocalState($noRawat, 'finished');
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to finished via PATCH");
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to finished");
                 $this->successCount++;
             } else {
                 $errorMessage = \SatuSehatClient::extractErrorMsg($result);

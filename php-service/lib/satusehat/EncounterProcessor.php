@@ -207,28 +207,26 @@ class SatuSehatEncounterProcessor
                 // the finished transition only (open period while active).
             ];
 
-            $this->log->info("[PHASE 2] {$noRawat}: PATCH /Encounter/{$idEncounter} (in-progress)");
-            $result = $this->api->patch("/Encounter/{$idEncounter}", $ops);
+            $payload = SatuSehatPayloadBuilder::encounter(
+                $this->config->orgId,
+                $p,
+                $idPasien,
+                $idDokter,
+                'in-progress',
+                [],
+                $idEncounter,
+                $p['id_episode_of_care'] ?? null
+            );
+
+            $this->log->info("[PHASE 2] {$noRawat}: PUT /Encounter/{$idEncounter} (in-progress) with PATCH fallback");
+            $result = $this->api->putWithPatchFallback("/Encounter/{$idEncounter}", $payload, $ops);
 
             if ($result['success']) {
                 $this->db->updateLocalState($noRawat, 'in-progress');
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to in-progress via PATCH");
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to in-progress");
                 $this->successCount++;
             } else {
                 $errorMessage = \SatuSehatClient::extractErrorMsg($result);
-                if (stripos($errorMessage, 'merge_failed') !== false) {
-                    // Server-side merge conflict (concurrent updates / partial
-                    // period state): retry once with jitter before giving up.
-                    usleep(mt_rand(250000, 800000));
-                    $result = $this->api->patch("/Encounter/{$idEncounter}", $ops);
-                    if ($result['success']) {
-                        $this->db->updateLocalState($noRawat, 'in-progress');
-                        $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to in-progress via PATCH (retry)");
-                        $this->successCount++;
-                        continue;
-                    }
-                    $errorMessage = \SatuSehatClient::extractErrorMsg($result);
-                }
                 $this->log->warning("[PHASE 2] {$noRawat}: ✗ Failed -> " . $errorMessage);
                 $this->failCount++;
             }
@@ -398,27 +396,26 @@ class SatuSehatEncounterProcessor
                 }
             }
 
-            $this->log->info("[PHASE 3] {$noRawat}: PATCH /Encounter/{$idEncounter} (finished, " . count($ops) . " ops)");
-            $result = $this->api->patch("/Encounter/{$idEncounter}", $ops);
+            $payload = SatuSehatPayloadBuilder::encounter(
+                $this->config->orgId,
+                $p,
+                $idPasien,
+                $idDokter,
+                'finished',
+                $diagnoses,
+                $idEncounter,
+                $p['id_episode_of_care'] ?? null
+            );
+
+            $this->log->info("[PHASE 3] {$noRawat}: PUT /Encounter/{$idEncounter} (finished, " . count($ops) . " ops) with PATCH fallback");
+            $result = $this->api->putWithPatchFallback("/Encounter/{$idEncounter}", $payload, $ops);
 
             if ($result['success']) {
                 $this->db->updateLocalState($noRawat, 'finished');
-                $this->log->info("[PHASE 3] {$noRawat}: ✓ Updated to finished via PATCH");
+                $this->log->info("[PHASE 3] {$noRawat}: ✓ Updated to finished");
                 $this->successCount++;
             } else {
                 $errorMessage = \SatuSehatClient::extractErrorMsg($result);
-                if (stripos($errorMessage, 'merge_failed') !== false) {
-                    // Server-side merge conflict: retry once with jitter.
-                    usleep(mt_rand(250000, 800000));
-                    $result = $this->api->patch("/Encounter/{$idEncounter}", $ops);
-                    if ($result['success']) {
-                        $this->db->updateLocalState($noRawat, 'finished');
-                        $this->log->info("[PHASE 3] {$noRawat}: ✓ Updated to finished via PATCH (retry)");
-                        $this->successCount++;
-                        continue;
-                    }
-                    $errorMessage = \SatuSehatClient::extractErrorMsg($result);
-                }
                 $this->log->warning("[PHASE 3] {$noRawat}: ✗ Failed -> " . $errorMessage);
                 $this->failCount++;
             }
