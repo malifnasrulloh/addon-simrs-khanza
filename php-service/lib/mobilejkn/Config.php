@@ -90,7 +90,7 @@ class MobileJknConfig
         $this->batchSize          = max(1, (int) $this->get('MOBILEJKN_BATCH_SIZE', '4'));
         $this->lookbackDays       = max(1, (int) $this->get('MOBILEJKN_LOOKBACK_DAYS', '6'));
         $this->includeNonJkn            = filter_var($this->get('MOBILEJKN_INCLUDE_NON_JKN', 'true'), FILTER_VALIDATE_BOOLEAN);
-        $this->skipFarmasiNoResep       = filter_var($this->get('MOBILEJKN_SKIP_FARMASI_NO_RESEP', 'false'), FILTER_VALIDATE_BOOLEAN);
+        $this->skipFarmasiNoResep       = filter_var($this->get('MOBILEJKN_SKIP_FARMASI_NO_RESEP', 'true'), FILTER_VALIDATE_BOOLEAN);
         $this->deferTaskChain           = filter_var($this->get('MOBILEJKN_DEFER_ROBOT_INFER', 'false'), FILTER_VALIDATE_BOOLEAN);
         $this->formatOnsiteKodebooking  = filter_var($this->get('MOBILEJKN_FORMAT_ONSITE_KODEBOOKING', 'true'), FILTER_VALIDATE_BOOLEAN);
         $this->repeatTask3              = filter_var($this->get('MOBILEJKN_REPEAT_TASK_3', 'true'), FILTER_VALIDATE_BOOLEAN);

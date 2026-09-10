@@ -578,8 +578,22 @@ class QueueProcessor
         // Determine prescription info from pre-loaded data (Fix #5)
         $jenisresep = empty($noResep) ? 'Tidak ada' : ($isRacikan ? 'Racikan' : 'Non racikan');
 
+        // Auto-clean: purge stale local Task 6/7 records if patient has no prescription (Fix: 6,148 TaskId=6 belum ada errors)
+        if (empty($noResep) && $this->config->skipFarmasiNoResep) {
+            if (($state['6'] ?? '') !== '' || ($state['7'] ?? '') !== '') {
+                $this->db->deleteTaskId($noRawat, '6');
+                $this->db->deleteTaskId($noRawat, '7');
+                $state['6'] = '';
+                $state['7'] = '';
+                $state['waktu_6'] = '';
+                $state['waktu_7'] = '';
+                $this->log->info("[{$label}] {$noRawat}: purged stale local Task 6/7 records (no prescription, skipFarmasiNoResep=true)");
+            }
+        }
+
         // Smart-Bypass Caching: check if patient's active milestones are already fully completed locally
-        $isCompleted = ($state['1'] === 'Sudah' && $state['2'] === 'Sudah' && $state['3'] === 'Sudah' && $state['4'] === 'Sudah' && $state['5'] === 'Sudah');
+        $t2Done = ($state['2'] === 'Sudah' || $state['2'] === 'Bypass');
+        $isCompleted = ($state['1'] === 'Sudah' && $t2Done && $state['3'] === 'Sudah' && $state['4'] === 'Sudah' && $state['5'] === 'Sudah');
         if ($isCompleted) {
             $hasPrescription = !empty($noResep);
             if ($hasPrescription || !$this->config->skipFarmasiNoResep) {
@@ -615,6 +629,8 @@ class QueueProcessor
         }
 
         // ── Resolve Task 3 timestamp first as anchor for preceding tasks (Task 1 & 2) ──
+        // Chain Rule: 3-1-2-3-4-5-if prescription exists-6-7
+        // Gating: Do not send Tasks 1 & 2 until Task 3 (check-in / arrival) is known/available
         $waktu3Str = $state['waktu_3'] ?? '';
         if (empty($waktu3Str)) {
             if (!$isRealtime) {
@@ -625,16 +641,15 @@ class QueueProcessor
                 if (!empty($real3)) {
                     $waktu3Str = $real3;
                 } else {
-                    // Realtime Mode: fallback anchor to max(reg_periksa.jam_reg, jadwal.jam_mulai)
-                    $regDateTime   = $patient['tgl_registrasi'] . ' ' . ($patient['jam_reg'] ?? '08:00:00');
-                    $startDateTime = $patient['tgl_registrasi'] . ' ' . $jamMulai;
-                    $waktu3Str     = ($regDateTime > $startDateTime) ? $regDateTime : $startDateTime;
+                    // Realtime Mode: patient has not checked in yet — pause chain before sending Tasks 1 & 2
+                    $this->log->debug("[{$label}] {$noRawat} TaskID 3: patient has not checked in (waiting for digital/physical check-in or SEP) — pausing task chain");
+                    return;
                 }
             }
         }
 
         // ── Task 1: pendaftaran antrean ───────────────────────────────────
-        if ($state['99'] === '' && $state['1'] === '') {
+        if (($state['99'] ?? '') === '' && $state['1'] === '') {
             $waktu1Str = RobotInference::inferPrecedingTask('1', $waktu3Str, $this->config->robotRanges);
             if (!empty($waktu1Str) && strtotime($waktu1Str) <= time()) {
                 $r1 = $this->sendTaskId($kodebooking, $noRawat, '1', $waktu1Str, $label, $jenisresep);
@@ -650,7 +665,7 @@ class QueueProcessor
         }
 
         // ── Task 2: pendaftaran dilayani ──────────────────────────────────
-        if ($state['99'] === '' && $state['2'] === '') {
+        if (($state['99'] ?? '') === '' && $state['2'] === '') {
             if ($state['1'] !== 'Sudah') {
                 $this->log->debug("[{$label}] {$noRawat} TaskID 2: Task 1 is not completed — pausing task chain");
                 return;
@@ -668,6 +683,9 @@ class QueueProcessor
                     $state['2'] = 'Sudah';
                     $state['waktu_2'] = $waktu2Str;
                     $bpjsTasks['2'] = true;
+                } elseif (($r2['reason'] ?? '') === 'task2_not_valid') {
+                    $this->log->info("[{$label}] {$noRawat} TaskID 2: not applicable for this booking (Mobile JKN direct check-in) — bypassing to Task 3");
+                    $state['2'] = 'Bypass';
                 } else {
                     $this->log->warning("[{$label}] {$noRawat} TaskID 2 failed ({$r2['reason']}) — halting task chain for this patient");
                     return;
@@ -676,15 +694,15 @@ class QueueProcessor
         }
 
         // ── Task 3: mulai tunggu poli ─────────────────────────────────────
-        if ($state['99'] === '' && $state['3'] === '') {
-            if ($state['2'] !== 'Sudah') {
+        if (($state['99'] ?? '') === '' && $state['3'] === '') {
+            if ($state['2'] !== 'Sudah' && $state['2'] !== 'Bypass') {
                 $this->log->debug("[{$label}] {$noRawat} TaskID 3: Task 2 is not completed — pausing task chain");
                 return;
             }
-            // Monotonicity Gate: Ensure T2 < T3
-            $t2Ts = strtotime($state['waktu_2'] ?? '');
-            if ($t2Ts !== false && strtotime($waktu3Str) <= $t2Ts) {
-                $waktu3Str = date('Y-m-d H:i:s', $t2Ts + 180); // 3 minutes after Task 2
+            // Monotonicity Gate: Ensure T2 < T3 (or T1 < T3 if Task 2 is Bypassed)
+            $prevTs = ($state['2'] === 'Bypass') ? strtotime($state['waktu_1'] ?? '') : strtotime($state['waktu_2'] ?? '');
+            if ($prevTs !== false && strtotime($waktu3Str) <= $prevTs) {
+                $waktu3Str = date('Y-m-d H:i:s', $prevTs + 180); // 3 minutes after preceding task
             }
 
             if (!empty($waktu3Str)) {
@@ -708,7 +726,7 @@ class QueueProcessor
                         }
                     } elseif (($r['reason'] ?? '') === 'preceding_tasks_missing') {
                         $missingId = $r['missing_taskid'] ?? null;
-                        if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '3', $jenisresep, $missingId)) {
+                        if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '3', $jenisresep, $missingId, $noResep, $isRacikan)) {
                             $retryR3 = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3Str, $label, $jenisresep);
                             if ($retryR3['ok']) {
                                 $state['3'] = 'Sudah';
@@ -830,9 +848,10 @@ class QueueProcessor
         }
 
         // ── Task 4: mulai pelayanan poli ──────────────────────────────────
-        if ($state['99'] === '' && $state['4'] === '') {
-            // Strict Sequential Prerequisite Gating: Tasks 1, 2, and 3 MUST all be completed
-            if ($state['1'] !== 'Sudah' || $state['2'] !== 'Sudah' || $state['3'] !== 'Sudah') {
+        if (($state['99'] ?? '') === '' && $state['4'] === '') {
+            // Strict Sequential Prerequisite Gating: Tasks 1, 2, and 3 MUST all be completed (Task 2 may be Bypassed for Mobile JKN)
+            $t2Valid = ($state['2'] === 'Sudah' || $state['2'] === 'Bypass');
+            if ($state['1'] !== 'Sudah' || !$t2Valid || $state['3'] !== 'Sudah') {
                 $this->log->warning("[{$label}] {$noRawat} TaskID 4: preceding tasks not complete (T1={$state['1']}, T2={$state['2']}, T3={$state['3']}) — halting task chain");
                 return;
             }
@@ -869,7 +888,7 @@ class QueueProcessor
                         $bpjsTasks['4'] = true;
                     } elseif (($r4['reason'] ?? '') === 'preceding_tasks_missing') {
                         $missingId = $r4['missing_taskid'] ?? null;
-                        if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '4', $jenisresep, $missingId)) {
+                        if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '4', $jenisresep, $missingId, $noResep, $isRacikan)) {
                             $retryR4 = $this->sendTaskId($kodebooking, $noRawat, '4', $waktu4Str, $label, $jenisresep);
                             if ($retryR4['ok']) {
                                 $state['4'] = 'Sudah';
@@ -895,7 +914,7 @@ class QueueProcessor
         }
 
         // ── Task 5: selesai pelayanan poli ────────────────────────────────
-        if ($state['99'] === '' && $state['5'] === '') {
+        if (($state['99'] ?? '') === '' && $state['5'] === '') {
             if ($state['4'] !== 'Sudah') {
                 $this->log->debug("[{$label}] {$noRawat} TaskID 5: Task 4 is not completed — pausing task chain");
                 return;
@@ -932,7 +951,7 @@ class QueueProcessor
                         $bpjsTasks['5'] = true;
                     } elseif (($r5['reason'] ?? '') === 'preceding_tasks_missing') {
                         $missingId = $r5['missing_taskid'] ?? null;
-                        if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '5', $jenisresep, $missingId)) {
+                        if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '5', $jenisresep, $missingId, $noResep, $isRacikan)) {
                             $retryR5 = $this->sendTaskId($kodebooking, $noRawat, '5', $waktu5Str, $label, $jenisresep);
                             if ($retryR5['ok']) {
                                 $state['5'] = 'Sudah';
@@ -957,8 +976,14 @@ class QueueProcessor
             }
         }
 
+        // Terminal Check after Task 5: If no prescription and skipFarmasiNoResep=true, finalize visit now
+        if (($state['5'] ?? '') === 'Sudah' && empty($noResep) && $this->config->skipFarmasiNoResep) {
+            $this->log->info("[{$label}] {$noRawat}: visit completed at TaskID 5 (no prescription, skipFarmasiNoResep=true) — finalizing chain");
+            return;
+        }
+
         // ── Farmasi + Task 6 ──────────────────────────────────────────────
-        if ($state['99'] === '' && $state['6'] === '') {
+        if (($state['99'] ?? '') === '' && $state['6'] === '') {
             if ($state['5'] !== 'Sudah') {
                 $this->log->debug("[{$label}] {$noRawat} TaskID 6: Task 5 is not completed — pausing task chain");
                 return;
@@ -966,6 +991,7 @@ class QueueProcessor
 
             if (empty($noResep) && $this->config->skipFarmasiNoResep) {
                 $this->log->info("[{$label}] {$noRawat} TaskID 6,7: skip — no resep (MOBILEJKN_SKIP_FARMASI_NO_RESEP=true)");
+                return;
             } else {
                 $prevWaktu = $state['waktu_5'] ?? '';
 
@@ -996,7 +1022,7 @@ class QueueProcessor
                             $bpjsTasks['6'] = true;
                         } elseif (($r6['reason'] ?? '') === 'preceding_tasks_missing') {
                             $missingId = $r6['missing_taskid'] ?? null;
-                            if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '6', $jenisresep, $missingId)) {
+                            if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '6', $jenisresep, $missingId, $noResep, $isRacikan)) {
                                 $retryR6 = $this->sendTaskId($kodebooking, $noRawat, '6', $waktu6Str, $label, $jenisresep);
                                 if ($retryR6['ok']) {
                                     $state['6'] = 'Sudah';
@@ -1023,7 +1049,10 @@ class QueueProcessor
         }
 
         // ── Task 7: selesai farmasi ───────────────────────────────────────
-        if ($state['99'] === '' && $state['7'] === '') {
+        if (($state['99'] ?? '') === '' && $state['7'] === '') {
+            if (empty($noResep) && $this->config->skipFarmasiNoResep) {
+                return;
+            }
             if ($state['6'] !== 'Sudah') {
                 $this->log->debug("[{$label}] {$noRawat} TaskID 7: Task 6 is not completed — pausing task chain");
                 return;
@@ -1057,7 +1086,7 @@ class QueueProcessor
                         $bpjsTasks['7'] = true;
                     } elseif (($r7['reason'] ?? '') === 'preceding_tasks_missing') {
                         $missingId = $r7['missing_taskid'] ?? null;
-                        if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '7', $jenisresep, $missingId)) {
+                        if ($this->healPrecedingTasks($kodebooking, $noRawat, $patient, $state, $jadwal, $label, $isJkn, '7', $jenisresep, $missingId, $noResep, $isRacikan)) {
                             $retryR7 = $this->sendTaskId($kodebooking, $noRawat, '7', $waktu7Str, $label, $jenisresep);
                             if ($retryR7['ok']) {
                                 $state['7'] = 'Sudah';
@@ -1084,7 +1113,7 @@ class QueueProcessor
 
         // ── Task 99: cancellation ─────────────────────────────────────────
         // Fix #6: Use 'stts' column from the query result instead of per-patient DB call
-        if ($state['99'] === '') {
+        if (($state['99'] ?? '') === '') {
             if (($patient['stts'] ?? '') === 'Batal') {
                 $targetDate = $patient['tgl_registrasi'];
                 $jamReg = substr($patient['jam_reg'] ?? '12:00:00', 0, 8);
@@ -1108,10 +1137,24 @@ class QueueProcessor
         bool   $isJkn,
         string $targetTaskId,
         string $jenisresep,
-        ?string $missingTaskId = null
+        ?string $missingTaskId = null,
+        string $noResep = '',
+        bool   $isRacikan = false
     ): bool {
         $missingId = $missingTaskId ?? (string)((int)$targetTaskId - 1);
         $this->log->warning("[HEAL] {$noRawat}: BPJS rejected TaskID {$targetTaskId} because preceding TaskID {$missingId} is missing. Initiating auto-healing...");
+
+        // If target or missing task is pharmacy related but patient has no prescription:
+        if (($missingId === '6' || $missingId === '7' || $targetTaskId === '6' || $targetTaskId === '7') && empty($noResep) && $this->config->skipFarmasiNoResep) {
+            $this->log->info("[HEAL] {$noRawat}: TaskID {$missingId} requested but patient has no prescription — purging local Task 6/7 and finalizing at TaskID 5");
+            $this->db->deleteTaskId($noRawat, '6');
+            $this->db->deleteTaskId($noRawat, '7');
+            $state['6'] = '';
+            $state['7'] = '';
+            $state['waktu_6'] = '';
+            $state['waktu_7'] = '';
+            return false;
+        }
 
         $jamMulai  = $jadwal['jam_mulai'] ?? '08:00:00';
         $waktu3Str = $state['waktu_3'] ?? '';
@@ -1133,8 +1176,8 @@ class QueueProcessor
             }
         }
 
-        // 2. Heal Task 2 if needed
-        if ($missingId === '2' || ($state['2'] ?? '') !== 'Sudah') {
+        // 2. Heal Task 2 if needed (unless bypassed)
+        if (($missingId === '2' || ($state['2'] ?? '') !== 'Sudah') && ($state['2'] ?? '') !== 'Bypass') {
             $this->db->deleteTaskId($noRawat, '2');
             $waktu2Str = RobotInference::inferPrecedingTask('2', $waktu3Str, $this->config->robotRanges);
             $t1Ts = strtotime($state['waktu_1'] ?? '');
@@ -1169,9 +1212,29 @@ class QueueProcessor
             }
         }
 
+        // 4. Heal Task 6 if needed (for patients with prescription)
+        if ($missingId === '6' || ($targetTaskId === '7' && ($state['6'] ?? '') !== 'Sudah')) {
+            $this->db->deleteTaskId($noRawat, '6');
+            $this->sendFarmasi($kodebooking, $noRawat, $noResep);
+            $t5Ts = strtotime($state['waktu_5'] ?? '');
+            $waktu6Str = '';
+            if ($t5Ts !== false) {
+                $waktu6Str = date('Y-m-d H:i:s', $t5Ts + 180);
+            }
+            if (!empty($waktu6Str)) {
+                $r6 = $this->sendTaskId($kodebooking, $noRawat, '6', $waktu6Str, $label, $jenisresep);
+                if ($r6['ok']) {
+                    $state['6'] = 'Sudah';
+                    $state['waktu_6'] = $waktu6Str;
+                    $this->log->info("[HEAL] {$noRawat}: ✓ TaskID 6 auto-healed on BPJS.");
+                }
+            }
+        }
+
         if ((int)$targetTaskId >= 4) {
             for ($i = 1; $i < (int)$targetTaskId; $i++) {
-                if (($state[(string)$i] ?? '') !== 'Sudah') {
+                $val = $state[(string)$i] ?? '';
+                if ($val !== 'Sudah' && !($i === 2 && $val === 'Bypass')) {
                     return false;
                 }
             }
@@ -1311,9 +1374,14 @@ class QueueProcessor
             if (preg_match('/(?:sebelumnya\s+)?task\s*id\s*=?\s*(\d+)/i', $msg, $matches)) {
                 $missingTaskId = $matches[1];
             }
+            if ($taskId === '2' && (str_contains($msgLower, 'taskid=2 tidak valid') || str_contains($msgLower, 'task id=2 tidak valid'))) {
+                $this->log->info("[{$label}] {$noRawat} TaskID 2: BPJS reported Task 2 not valid for this booking — classifying as task2_not_valid");
+                $this->failCount++;
+                return ['ok' => false, 'reason' => 'task2_not_valid', 'missing_taskid' => null, 'message' => $msg];
+            }
             $this->log->warning("[{$label}] {$noRawat} TaskID {$taskId}: ✗ {$code} — {$msg} (rolled back, reason=preceding_tasks_missing)");
             $this->failCount++;
-            return ['ok' => false, 'reason' => 'preceding_tasks_missing', 'missing_taskid' => $missingTaskId];
+            return ['ok' => false, 'reason' => 'preceding_tasks_missing', 'missing_taskid' => $missingTaskId, 'message' => $msg];
         }
 
         // 2. Detect if BPJS reports a later task was already reached (e.g. "TaskId terakhir 7" or "TaskId terakhir 5")
@@ -1415,7 +1483,7 @@ class QueueProcessor
 
         // If BPJS returns 204 No Content or message is "No Content", BPJS has 0 tasks recorded for this booking
         $tasks = [];
-        if ($res['success'] && isset($res['data']) && is_array($res['data'])) {
+        if (!empty($res['success']) && isset($res['data']) && is_array($res['data'])) {
             $tasks = $res['data'];
         } elseif ($code === '204' || str_contains(strtolower($msg), 'no content')) {
             $tasks = []; // Valid response: BPJS has 0 tasks
@@ -1443,8 +1511,12 @@ class QueueProcessor
                 $waktuStr = $this->parseBpjsDatetime((string) $t['wakturs']) ?? '';
             }
             if (empty($waktuStr) && !empty($t['waktu'])) {
-                // Fallback to epoch milliseconds
-                $waktuStr = date('Y-m-d H:i:s', (int) round($t['waktu'] / 1000));
+                if (is_numeric($t['waktu'])) {
+                    // Fallback to epoch milliseconds
+                    $waktuStr = date('Y-m-d H:i:s', (int) round($t['waktu'] / 1000));
+                } else {
+                    $waktuStr = $this->parseBpjsDatetime((string) $t['waktu']) ?? '';
+                }
             }
 
             $isCorrupted = (($state[$tId] ?? '') === 'Sudah') && (empty($currentWaktu) || str_starts_with($currentWaktu, '0000'));
@@ -1470,7 +1542,17 @@ class QueueProcessor
         // and never prune local tasks. BPJS permanently blocks inserting older tasks once Task 7 is registered.
         $bpjsHasTerminal = isset($bpjsTasks['7']) || isset($bpjsTasks['99']);
         if (isset($bpjsTasks['7'])) {
-            $baseTs = !empty($bpjsTasks['7']['waktu']) ? (int) round($bpjsTasks['7']['waktu'] / 1000) : time();
+            $rawWaktu7 = $bpjsTasks['7']['wakturs'] ?? ($bpjsTasks['7']['waktu'] ?? '');
+            $baseTs = 0;
+            if (is_numeric($rawWaktu7)) {
+                $baseTs = (int) round($rawWaktu7 / 1000);
+            } elseif (!empty($rawWaktu7)) {
+                $parsed = $this->parseBpjsDatetime((string) $rawWaktu7);
+                $baseTs = $parsed ? strtotime($parsed) : strtotime((string) $rawWaktu7);
+            }
+            if (!$baseTs) {
+                $baseTs = time();
+            }
             for ($i = 1; $i <= 6; $i++) {
                 $tId = (string) $i;
                 if (($state[$tId] ?? '') !== 'Sudah') {
