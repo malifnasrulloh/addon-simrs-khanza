@@ -109,21 +109,26 @@ class SatuSehatEncounterProcessor
             $isRanap = ($p['status_lanjut'] ?? '') === 'Ranap';
             $targetStatus = $isRanap ? 'in-progress' : 'arrived';
 
+            $idEpisodeOfCare = $p['id_episode_of_care'] ?? $this->db->getSavedEpisodeOfCareId($noRawat);
+
             $payload = SatuSehatPayloadBuilder::encounter(
                 $this->config->orgId,
                 $p,
                 $idPasien,
                 $idDokter,
-                $targetStatus
+                $targetStatus,
+                [],
+                '',
+                $idEpisodeOfCare
             );
 
-            $this->log->info("[PHASE 1] {$noRawat}: POST /Encounter ({$targetStatus})");
+            $this->log->info("[PHASE 1] {$noRawat}: POST /Encounter ({$targetStatus})" . ($idEpisodeOfCare ? " (EoC: {$idEpisodeOfCare})" : ""));
             $result = $this->api->post('/Encounter', $payload);
 
             if ($result['success'] && isset($result['data']['id'])) {
                 $idEncounter = $result['data']['id'];
                 $this->db->saveEncounter($noRawat, $idEncounter);
-                $this->db->updateLocalState($noRawat, $targetStatus);
+                $this->db->updateLocalState($noRawat, $targetStatus, $idEpisodeOfCare ? 1 : 0);
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created Encounter {$idEncounter} ({$targetStatus})");
                 $this->successCount++;
             } else {
@@ -136,7 +141,7 @@ class SatuSehatEncounterProcessor
 
                     if ($idEncounter) {
                         $this->db->saveEncounter($noRawat, $idEncounter);
-                        $this->db->updateLocalState($noRawat, $targetStatus);
+                        $this->db->updateLocalState($noRawat, $targetStatus, $idEpisodeOfCare ? 1 : 0);
                         $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered Encounter {$idEncounter} from Satu Sehat API");
                         $this->successCount++;
                     } else {
@@ -187,6 +192,8 @@ class SatuSehatEncounterProcessor
 
             $idEncounter = $p['id_encounter'];
 
+            $idEpisodeOfCare = $p['id_episode_of_care'] ?? $this->db->getSavedEpisodeOfCareId($noRawat);
+
             // Build PATCH operations for in-progress transition — boundaries
             // come from the SHARED resolver so this history matches the
             // phase-1 create and phase-3 finish payloads exactly.
@@ -207,6 +214,16 @@ class SatuSehatEncounterProcessor
                 // the finished transition only (open period while active).
             ];
 
+            if ($idEpisodeOfCare !== null) {
+                $ops[] = [
+                    'op'    => 'replace',
+                    'path'  => '/episodeOfCare',
+                    'value' => [
+                        ['reference' => 'EpisodeOfCare/' . $idEpisodeOfCare]
+                    ]
+                ];
+            }
+
             $payload = SatuSehatPayloadBuilder::encounter(
                 $this->config->orgId,
                 $p,
@@ -215,14 +232,14 @@ class SatuSehatEncounterProcessor
                 'in-progress',
                 [],
                 $idEncounter,
-                $p['id_episode_of_care'] ?? null
+                $idEpisodeOfCare
             );
 
-            $this->log->info("[PHASE 2] {$noRawat}: PUT /Encounter/{$idEncounter} (in-progress) with PATCH fallback");
+            $this->log->info("[PHASE 2] {$noRawat}: PUT /Encounter/{$idEncounter} (in-progress) with PATCH fallback" . ($idEpisodeOfCare ? " (EoC: {$idEpisodeOfCare})" : ""));
             $result = $this->api->putWithPatchFallback("/Encounter/{$idEncounter}", $payload, $ops);
 
             if ($result['success']) {
-                $this->db->updateLocalState($noRawat, 'in-progress');
+                $this->db->updateLocalState($noRawat, 'in-progress', $idEpisodeOfCare ? 1 : 0);
                 $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to in-progress");
                 $this->successCount++;
             } else {
@@ -248,11 +265,22 @@ class SatuSehatEncounterProcessor
 
         foreach ($patients as $p) {
             $noRawat = $p['no_rawat'];
-            $localState = $this->db->getLocalState($noRawat);
+            $idEncounter = $p['id_encounter'];
+
+            $stateData = $this->db->getEncounterLocalState($noRawat);
+            $localState = $stateData['status'];
+            $eocLinked  = $stateData['eoc_linked'];
+
+            $idEpisodeOfCare = $p['id_episode_of_care'] ?? $this->db->getSavedEpisodeOfCareId($noRawat);
 
             if ($localState === 'finished') {
-                $this->skipCount++;
-                continue;
+                // If already finished and EoC is newly available but not yet linked, proceed with retrospective update
+                if ($idEpisodeOfCare && $eocLinked === 0) {
+                    $this->log->info("[PHASE 3] {$noRawat}: Retrospective EoC link update for finished Encounter {$idEncounter} (EoC: {$idEpisodeOfCare})");
+                } else {
+                    $this->skipCount++;
+                    continue;
+                }
             }
 
             $diagnoses = $this->db->fetchDiagnoses($noRawat);
@@ -273,8 +301,6 @@ class SatuSehatEncounterProcessor
                 $this->skipCount++;
                 continue;
             }
-
-            $idEncounter = $p['id_encounter'];
 
             // Build PATCH operations dynamically for finished transition —
             // boundaries from the SHARED resolver (identical to phases 1/2).
@@ -396,6 +422,16 @@ class SatuSehatEncounterProcessor
                 }
             }
 
+            if ($idEpisodeOfCare !== null) {
+                $ops[] = [
+                    'op'    => 'replace',
+                    'path'  => '/episodeOfCare',
+                    'value' => [
+                        ['reference' => 'EpisodeOfCare/' . $idEpisodeOfCare]
+                    ]
+                ];
+            }
+
             $payload = SatuSehatPayloadBuilder::encounter(
                 $this->config->orgId,
                 $p,
@@ -404,14 +440,14 @@ class SatuSehatEncounterProcessor
                 'finished',
                 $diagnoses,
                 $idEncounter,
-                $p['id_episode_of_care'] ?? null
+                $idEpisodeOfCare
             );
 
-            $this->log->info("[PHASE 3] {$noRawat}: PUT /Encounter/{$idEncounter} (finished, " . count($ops) . " ops) with PATCH fallback");
+            $this->log->info("[PHASE 3] {$noRawat}: PUT /Encounter/{$idEncounter} (finished, " . count($ops) . " ops) with PATCH fallback" . ($idEpisodeOfCare ? " (EoC: {$idEpisodeOfCare})" : ""));
             $result = $this->api->putWithPatchFallback("/Encounter/{$idEncounter}", $payload, $ops);
 
             if ($result['success']) {
-                $this->db->updateLocalState($noRawat, 'finished');
+                $this->db->updateLocalState($noRawat, 'finished', $idEpisodeOfCare ? 1 : 0);
                 $this->log->info("[PHASE 3] {$noRawat}: ✓ Updated to finished");
                 $this->successCount++;
             } else {

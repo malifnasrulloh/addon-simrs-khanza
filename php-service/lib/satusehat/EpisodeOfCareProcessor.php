@@ -133,12 +133,15 @@ class SatuSehatEpisodeOfCareProcessor
                 $idEpisode = $result['data']['id'];
                 $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $idEpisode);
                 $this->db->updateEocLocalState($noRawat, 'active');
+                if ($this->db->resetEncounterForEocLink($noRawat)) {
+                    $this->log->info("[PHASE 1] {$noRawat}: Triggered retrospective Encounter re-link for EoC {$idEpisode}");
+                }
                 $this->log->info("[PHASE 1] {$noRawat}: ✓ Created EpisodeOfCare {$idEpisode}");
                 $this->successCount++;
                 $processedNoRawat[$noRawat] = $idEpisode;
             } else {
                 $errorMessage = \SatuSehatClient::extractErrorMsg($result);
-                
+
                 // Duplicate Handling Fallback
                 if (stripos($errorMessage, 'found duplicated') !== false || stripos($errorMessage, 'duplicate') !== false || $result['code'] === 409) {
                     $this->log->warning("[PHASE 1] {$noRawat}: Duplicated EpisodeOfCare detected (Rule 10110/20002). Resolving...");
@@ -147,6 +150,9 @@ class SatuSehatEpisodeOfCareProcessor
                     if ($recoveryResult) {
                         $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $recoveryResult);
                         $this->db->updateEocLocalState($noRawat, 'active');
+                        if ($this->db->resetEncounterForEocLink($noRawat)) {
+                            $this->log->info("[PHASE 1] {$noRawat}: Triggered retrospective Encounter re-link for recovered EoC {$recoveryResult}");
+                        }
                         $this->log->info("[PHASE 1] {$noRawat}: ✓ Recovered EpisodeOfCare {$recoveryResult}");
                         $this->successCount++;
                         $processedNoRawat[$noRawat] = $recoveryResult;
@@ -324,42 +330,22 @@ class SatuSehatEpisodeOfCareProcessor
                 ];
             }
 
-            // ── Execute PUT with PATCH Fallback ─────────────────────────────
-            $diagnoses = [];
-            if (!empty($p['id_condition'])) {
-                $diagnoses[] = [
-                    'id_condition' => $p['id_condition'],
-                    'nm_penyakit'  => $p['nm_penyakit'] ?? ''
-                ];
-            }
-
-            $payload = SatuSehatPayloadBuilder::episodeOfCare(
-                $this->config->orgId,
-                $p,
-                $idPasien,
-                $idDokter,
-                'finished',
-                $type,
-                $eocId,
-                $diagnoses
-            );
-
-            $this->log->info("[PHASE 2] {$noRawat}: PUT /EpisodeOfCare/{$eocId} (finished, " . count($ops) . " ops) with PATCH fallback");
-            $result = $this->api->putWithPatchFallback("/EpisodeOfCare/{$eocId}", $payload, $ops);
+            // ── Execute PATCH ───────────────────────────────────────────────
+            $this->log->info("[PHASE 2] {$noRawat}: PATCH /EpisodeOfCare/{$eocId} (finished, " . count($ops) . " ops)");
+            $result = $this->api->patch("/EpisodeOfCare/{$eocId}", $ops);
 
             if ($result['success']) {
                 $this->db->saveEpisodeOfCare($noRawat, $kdPenyakit, $p['status_lanjut'], $eocId);
                 $this->db->updateEocLocalState($noRawat, 'finished');
-                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to finished");
+                if ($this->db->resetEncounterForEocLink($noRawat)) {
+                    $this->log->info("[PHASE 2] {$noRawat}: Triggered retrospective Encounter re-link for finished EoC {$eocId}");
+                }
+                $this->log->info("[PHASE 2] {$noRawat}: ✓ Updated to finished via PATCH");
                 $this->successCount++;
             } else {
                 $errorMessage = \SatuSehatClient::extractErrorMsg($result);
 
-                if (stripos($errorMessage, 'consent') !== false || stripos($errorMessage, 'privacy') !== false) {
-                    $this->db->updateEocLocalState($noRawat, 'privacy_error');
-                    $this->log->warning("[PHASE 2] {$noRawat}: Skip future retries due to privacy/consent settings.");
-                    $this->skipCount++;
-                } elseif (stripos($errorMessage, 'Rule Number: 10110') !== false || stripos($errorMessage, 'found another EpisodeOfCare') !== false) {
+                if (stripos($errorMessage, 'Rule Number: 10110') !== false || stripos($errorMessage, 'found another EpisodeOfCare') !== false) {
                     $this->db->updateEocLocalState($noRawat, 'failed_rule');
                     $this->log->warning("[PHASE 2] {$noRawat}: Skip future retries due to active EpisodeOfCare rule conflict.");
                     $this->skipCount++;

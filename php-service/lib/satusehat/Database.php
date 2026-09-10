@@ -122,6 +122,21 @@ class SatuSehatDatabase
             // Already exists, ignore
         }
 
+        // Add eoc_linked column to encounter_state if upgrading existing SQLite db
+        try {
+            $this->sqliteExec("ALTER TABLE encounter_state ADD COLUMN eoc_linked INTEGER DEFAULT 0");
+        } catch (\Throwable $e) {
+            // Already exists, ignore
+        }
+
+        // Auto-heal: reset episode_of_care_state from privacy_error back to active
+        // (because closing EoC via PATCH succeeds even when PUT triggered a consent error)
+        try {
+            $this->sqliteExec("UPDATE episode_of_care_state SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE status = 'privacy_error'");
+        } catch (\Throwable $e) {
+            // Ignore if table doesn't exist yet
+        }
+
         // Table for Procedure state tracking
         $this->sqliteExec("CREATE TABLE IF NOT EXISTS procedure_state (
             composite_key VARCHAR(100) PRIMARY KEY,
@@ -939,13 +954,59 @@ class SatuSehatDatabase
         return $row ? $row['status'] : null;
     }
 
-    public function updateLocalState(string $noRawat, string $status): void
+    public function getEncounterLocalState(string $noRawat): array
     {
-        $stmt = $this->sqliteQuery("
-            INSERT INTO encounter_state (no_rawat, status, updated_at) 
-            VALUES (:nr, :st, CURRENT_TIMESTAMP)
-            ON CONFLICT(no_rawat) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
-        ", ['nr' => $noRawat, 'st' => $status]);
+        $stmt = $this->sqliteQuery("SELECT status, eoc_linked FROM encounter_state WHERE no_rawat = :nr", ['nr' => $noRawat]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return ['status' => null, 'eoc_linked' => 0];
+        }
+        return [
+            'status'     => $row['status'],
+            'eoc_linked' => (int) ($row['eoc_linked'] ?? 0),
+        ];
+    }
+
+    public function updateLocalState(string $noRawat, string $status, ?int $eocLinked = null): void
+    {
+        if ($eocLinked !== null) {
+            $this->sqliteQuery("
+                INSERT INTO encounter_state (no_rawat, status, eoc_linked, updated_at)
+                VALUES (:nr, :st, :el, CURRENT_TIMESTAMP)
+                ON CONFLICT(no_rawat) DO UPDATE SET
+                    status = excluded.status,
+                    eoc_linked = excluded.eoc_linked,
+                    updated_at = CURRENT_TIMESTAMP
+            ", ['nr' => $noRawat, 'st' => $status, 'el' => $eocLinked]);
+        } else {
+            $this->sqliteQuery("
+                INSERT INTO encounter_state (no_rawat, status, updated_at)
+                VALUES (:nr, :st, CURRENT_TIMESTAMP)
+                ON CONFLICT(no_rawat) DO UPDATE SET
+                    status = excluded.status,
+                    updated_at = CURRENT_TIMESTAMP
+            ", ['nr' => $noRawat, 'st' => $status]);
+        }
+    }
+
+    /**
+     * Trigger retrospective Encounter link when EpisodeOfCare is created or recovered.
+     * If the encounter for this visit is already marked 'finished' in SQLite but
+     * hasn't linked EpisodeOfCare (eoc_linked == 0), reset its status to 'in-progress'
+     * so Encounter Phase 3 will re-run, embedding the new EpisodeOfCare ID via putWithPatchFallback().
+     */
+    public function resetEncounterForEocLink(string $noRawat): bool
+    {
+        $state = $this->getEncounterLocalState($noRawat);
+        if ($state['status'] === 'finished' && $state['eoc_linked'] === 0) {
+            $this->sqliteQuery("
+                UPDATE encounter_state
+                SET status = 'in-progress', updated_at = CURRENT_TIMESTAMP
+                WHERE no_rawat = :nr
+            ", ['nr' => $noRawat]);
+            return true;
+        }
+        return false;
     }
 
     // ─── MYSQL ENCOUNTER OPERATIONS ────────────────────────────────────────────
