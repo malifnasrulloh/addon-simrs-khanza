@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Util;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 /**
  * EntryOutcomeClassifier — per-entry outcome of a FHIR transaction Bundle
  * response. A bundle can return HTTP 200 while individual entries fail with

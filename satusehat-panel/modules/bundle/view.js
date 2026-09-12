@@ -52,6 +52,19 @@ function renderTable(list, meta) {
         return;
     }
 
+    // Calculate sent/ready from resource_counts (map of ResourceType -> count)
+    function calcCounts(rc) {
+        if (!rc || typeof rc !== 'object') return { sent: 0, ready: 0 };
+        let sent = 0, ready = 0;
+        for (const [_, cnt] of Object.entries(rc)) {
+            if (typeof cnt === 'number' && cnt > 0) {
+                sent += cnt; // All entries in batchCounts are SENT resources
+            }
+        }
+        // For ready count, we'd need a different API, but for now show sent
+        return { sent, ready: 0 };
+    }
+
     currentContainer.innerHTML = `
         <table class="patient-table">
             <thead>
@@ -69,6 +82,7 @@ function renderTable(list, meta) {
             <tbody>
                 ${list.map(p => {
                     const isPaid = (p.status_bayar || '').toLowerCase().includes('sudah');
+                    const counts = calcCounts(p.resource_counts);
                     return `
                         <tr data-no-rawat="${escapeHtml(p.no_rawat)}">
                             <td><input type="checkbox" class="row-check" value="${escapeHtml(p.no_rawat)}"></td>
@@ -81,8 +95,8 @@ function renderTable(list, meta) {
                             <td><span class="badge badge-neutral">${escapeHtml(p.status_lanjut || '-')}</span></td>
                             <td><span class="badge ${isPaid ? 'badge-success' : 'badge-danger'}"><span class="dot"></span>${escapeHtml(p.status_bayar || '-')}</span></td>
                             <td>
-                                <span class="badge ${p.resource_counts?.ready > 0 ? 'badge-warning' : 'badge-neutral'}">
-                                    ${p.resource_counts?.sent || 0} terkirim / ${p.resource_counts?.ready || 0} siap
+                                <span class="badge ${counts.sent > 0 ? 'badge-success' : 'badge-neutral'}">
+                                    ${counts.sent} terkirim
                                 </span>
                             </td>
                             <td style="text-align:right">

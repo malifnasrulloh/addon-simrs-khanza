@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Modules\MedicationRequest;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\BaseModuleController;
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Util\PayloadAdapter;
@@ -62,7 +64,6 @@ class Controller extends BaseModuleController
             $stmt->execute($params);
             $rows = $stmt->fetchAll() ?: [];
 
-            $sqlite = Database::getSqlite();
             $items = [];
 
             foreach ($rows as $r) {

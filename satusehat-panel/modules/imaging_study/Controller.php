@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Modules\ImagingStudy;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\BaseModuleController;
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Core\Config;
@@ -84,6 +86,8 @@ class Controller extends BaseModuleController
                         'kd_jenis_prw'  => $r['kd_jenis_prw'],
                         'tgl_periksa'   => $r['tgl_periksa'],
                         'jam_periksa'   => $r['jam_periksa'],
+                        'jam'           => $r['jam_periksa'],
+                        'noorder'       => $r['noorder'] ?? '',
                     ],
                     'status_info'  => $statusInfo,
                 ]);
@@ -104,6 +108,8 @@ class Controller extends BaseModuleController
         $parts = explode('|', $key);
         $noRawat = $parts[0];
         $kdJenisPrw = $parts[1] ?? '';
+        $tglPeriksa = $parts[2] ?? '';
+        $jam = $parts[3] ?? '';
 
         $db = Database::getMysql();
         $stmt = $db->prepare("
@@ -119,14 +125,19 @@ class Controller extends BaseModuleController
             LEFT JOIN permintaan_radiologi pr ON pr.no_rawat = prad.no_rawat AND pr.tgl_hasil = prad.tgl_periksa AND pr.jam_hasil = prad.jam
             LEFT JOIN satu_sehat_imagingstudy_radiologi ssi ON ssi.noorder = pr.noorder AND ssi.kd_jenis_prw = prad.kd_jenis_prw
             WHERE prad.no_rawat = ?
+              AND (prad.kd_jenis_prw = ? OR ? = '')
+              AND (prad.tgl_periksa = ? OR ? = '')
+              AND (prad.jam = ? OR ? = '')
             LIMIT 1
         ");
-        $stmt->execute([$noRawat]);
+        $stmt->execute([$noRawat, $kdJenisPrw, $kdJenisPrw, $tglPeriksa, $tglPeriksa, $jam, $jam]);
         $row = $stmt->fetch();
         if (!$row) return ['success' => false, 'error' => 'Data radiologi tidak ditemukan'];
 
         $orgId = (string) Config::get('satusehat.org_id', '');
         $acsn = $row['acsn'] ?: ($row['noorder'] . '.' . $row['kd_jenis_prw']);
+        $ihsPasien = PayloadAdapter::resolvePatientIhs($db, $row['nik_pasien'] ?? '');
+
         $payload = [
             'resourceType' => 'ImagingStudy',
             'identifier' => [
@@ -145,7 +156,7 @@ class Controller extends BaseModuleController
                 ]
             ],
             'subject' => [
-                'reference' => 'Patient/' . ($row['nik_pasien'] ? 'IHS-' . $row['nik_pasien'] : 'P-PASIEN-IHS'),
+                'reference' => 'Patient/' . ($ihsPasien ?: 'P-PASIEN-IHS'),
                 'display'   => $row['nm_pasien']
             ],
             'started' => $row['tgl_periksa'] . 'T' . ($row['jam'] ?? '00:00:00') . '+07:00',
@@ -171,6 +182,8 @@ class Controller extends BaseModuleController
             function (array|string $itemKey): array {
                 $noRawat = is_array($itemKey) ? ($itemKey['no_rawat'] ?? '') : (string) $itemKey;
                 $kdJenisPrw = is_array($itemKey) ? ($itemKey['kd_jenis_prw'] ?? '') : '';
+                $tglPeriksa = is_array($itemKey) ? ($itemKey['tgl_periksa'] ?? '') : '';
+                $jam = is_array($itemKey) ? ($itemKey['jam_periksa'] ?? $itemKey['jam'] ?? '') : '';
 
                 $db = Database::getMysql();
                 $stmt = $db->prepare("
@@ -186,11 +199,19 @@ class Controller extends BaseModuleController
                     LEFT JOIN permintaan_radiologi pr ON pr.no_rawat = prad.no_rawat AND pr.tgl_hasil = prad.tgl_periksa AND pr.jam_hasil = prad.jam
                     LEFT JOIN satu_sehat_imagingstudy_radiologi ssi ON ssi.noorder = pr.noorder AND ssi.kd_jenis_prw = prad.kd_jenis_prw
                     WHERE prad.no_rawat = ?
+                      AND (prad.kd_jenis_prw = ? OR ? = '')
+                      AND (prad.tgl_periksa = ? OR ? = '')
+                      AND (prad.jam = ? OR ? = '')
                     LIMIT 1
                 ");
-                $stmt->execute([$noRawat]);
+                $stmt->execute([$noRawat, $kdJenisPrw, $kdJenisPrw, $tglPeriksa, $tglPeriksa, $jam, $jam]);
                 $row = $stmt->fetch();
                 if (!$row) throw new \RuntimeException("Data radiologi {$noRawat} tidak ditemukan");
+
+                $ihsPasien = PayloadAdapter::resolvePatientIhs($db, $row['nik_pasien'] ?? '');
+                if (empty($ihsPasien) || str_contains($ihsPasien, 'PLACEHOLDER')) {
+                    throw new \RuntimeException("IHS Pasien tidak ditemukan untuk NIK " . ($row['nik_pasien'] ?? ''));
+                }
 
                 $orgId = (string) Config::get('satusehat.org_id', '');
                 $acsn = $row['acsn'] ?: ($row['noorder'] . '.' . ($kdJenisPrw ?: $row['kd_jenis_prw']));
@@ -212,7 +233,7 @@ class Controller extends BaseModuleController
                         ]
                     ],
                     'subject' => [
-                        'reference' => 'Patient/' . ($row['nik_pasien'] ? 'IHS-' . $row['nik_pasien'] : 'P-PASIEN-IHS'),
+                        'reference' => 'Patient/' . $ihsPasien,
                         'display'   => $row['nm_pasien']
                     ],
                     'started' => $row['tgl_periksa'] . 'T' . ($row['jam'] ?? '00:00:00') . '+07:00',
@@ -228,17 +249,21 @@ class Controller extends BaseModuleController
                     $payload['id'] = $row['id_imaging'];
                 }
 
-                return ['payload' => $payload, 'meta' => ['no_rawat' => $noRawat, 'kd_jenis_prw' => $kdJenisPrw]];
+                return ['payload' => $payload, 'meta' => ['no_rawat' => $noRawat, 'kd_jenis_prw' => $kdJenisPrw, 'noorder' => $row['noorder'] ?? '']];
             },
             function (array|string $itemKey, string $satusehatId, array $outcome): void {
                 $noRawat = is_array($itemKey) ? ($itemKey['no_rawat'] ?? '') : (string) $itemKey;
                 $kdJenisPrw = is_array($itemKey) ? ($itemKey['kd_jenis_prw'] ?? '') : '';
+                $noorder = is_array($itemKey) ? ($itemKey['noorder'] ?? '') : '';
                 $db = Database::getMysql();
 
-                // Find noorder
-                $stmtOrd = $db->prepare("SELECT noorder FROM permintaan_radiologi WHERE no_rawat = ? LIMIT 1");
-                $stmtOrd->execute([$noRawat]);
-                $noorder = (string)($stmtOrd->fetchColumn() ?: '');
+                if (empty($noorder)) {
+                    $stmtOrd = $db->prepare("SELECT noorder FROM permintaan_radiologi WHERE no_rawat = ? LIMIT 1");
+                    $stmtOrd->execute([$noRawat]);
+                    $noorder = (string)($stmtOrd->fetchColumn() ?: '');
+                }
+
+                if (empty($noorder) || empty($kdJenisPrw)) return;
 
                 $stmt = $db->prepare("
                     INSERT INTO satu_sehat_imagingstudy_radiologi (noorder, kd_jenis_prw, id_imaging)

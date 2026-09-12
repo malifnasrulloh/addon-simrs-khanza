@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Util;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 /**
  * Queue for build-time warnings surfaced from PayloadAdapter (e.g. a
  * radiology Observation skipped because its ImagingStudy id is missing).

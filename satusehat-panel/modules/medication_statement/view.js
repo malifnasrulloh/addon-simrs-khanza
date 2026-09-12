@@ -67,14 +67,16 @@ function renderTable(list) {
             <tbody>
                 ${list.map(r => {
                     const st = r.status_info || {};
-                    const keyStr = `${r.no_rawat}|${r.kode_brng}`;
-                    const canSend = st.status === 'ready' || st.status === 'failed';
+                    const keyStr = `${r.no_rawat}|${r.no_resep || ''}|${r.kode_brng}`;
+                    const canSend = Boolean(st.can_send ?? (st.status !== 'blocked'));
+                    const btnLabel = st.status === 'update_needed' ? 'Update' : 'Kirim';
                     return `
                         <tr data-key="${escapeHtml(keyStr)}">
                             <td><input type="checkbox" class="row-check" value="${escapeHtml(JSON.stringify(r.item_key))}" ${canSend ? '' : 'disabled'}></td>
                             <td>
                                 <strong>${escapeHtml(r.nm_pasien || '-')}</strong>
                                 <span class="blocker-tip mono">No. Rawat: ${escapeHtml(r.no_rawat)} · RM: ${escapeHtml(r.no_rkm_medis || '-')}</span>
+                                ${r.no_resep ? `<span class="blocker-tip mono muted">Resep: ${escapeHtml(r.no_resep)}</span>` : ''}
                             </td>
                             <td>
                                 <strong>${escapeHtml(r.nama_brng || '-')}</strong>
@@ -84,7 +86,7 @@ function renderTable(list) {
                                 <span>${escapeHtml(String(r.jml || 0))} unit</span>
                                 <span class="blocker-tip">${escapeHtml(r.aturan || '-')}</span>
                             </td>
-                            <td class="small">${escapeHtml(r.tgl_perawatan || '-')} <span class="muted">${escapeHtml(r.jam || '')}</span></td>
+                            <td class="small">${escapeHtml(r.tgl_peresepan || r.tgl_perawatan || '-')} <span class="muted">${escapeHtml(r.jam_peresepan || r.jam || '')}</span></td>
                             <td>
                                 <span class="badge ${st.badge || 'badge-neutral'}">
                                     <span class="dot"></span>${escapeHtml(st.label || '-')}
@@ -97,8 +99,8 @@ function renderTable(list) {
                                     <button class="btn btn-ghost btn-sm btn-inspect" type="button" data-key="${escapeHtml(keyStr)}" title="Lihat JSON / Respon">
                                         JSON
                                     </button>
-                                    <button class="btn btn-primary btn-sm btn-send-single" type="button" data-key="${escapeHtml(JSON.stringify(r.item_key))}" data-keystr="${escapeHtml(keyStr)}" ${canSend ? '' : 'disabled'}>
-                                        Kirim
+                                    <button class="btn ${st.status === 'update_needed' ? 'btn-warning' : 'btn-primary'} btn-sm btn-send-single" type="button" data-key="${escapeHtml(JSON.stringify(r.item_key))}" data-keystr="${escapeHtml(keyStr)}" ${canSend ? '' : 'disabled'}>
+                                        ${btnLabel}
                                     </button>
                                 </div>
                             </td>

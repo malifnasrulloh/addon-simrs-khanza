@@ -1,5 +1,7 @@
 <?php
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 /**
  * CredentialLocator — resolves SATUSEHAT API credentials for the panel.
  *

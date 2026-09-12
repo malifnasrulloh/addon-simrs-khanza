@@ -1,5 +1,5 @@
 {
-    "extracted_at": "2026-08-09T00:46:46+00:00",
+    "extracted_at": "2026-08-27T12:58:20+00:00",
     "fixtures": {
         "patient-create": {
             "source": "00. FHIR Resource - Contoh Penggunaan.json",

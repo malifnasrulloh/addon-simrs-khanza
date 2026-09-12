@@ -5,7 +5,7 @@
 'use strict';
 
 import { $, escapeHtml, toast, rememberFocus, restoreFocus, trapFocus, untrapFocus } from '../ui.js';
-import { api } from '../api.js';
+import { api, BASE } from '../api.js';
 import { fetchModules } from './launchpad.js';
 
 let currentModuleId = null;
@@ -36,7 +36,11 @@ export function initModuleWorkspace() {
     // Filter toolbar inputs
     ['mod-filter-since', 'mod-filter-until', 'mod-filter-billing', 'mod-filter-sync'].forEach(id => {
         const el = $(id);
-        if (el) el.addEventListener('change', onFilterChange);
+        if (el) {
+            // Use 'input' for date fields to catch changes immediately, 'change' for selects
+            const eventType = (id === 'mod-filter-since' || id === 'mod-filter-until') ? 'input' : 'change';
+            el.addEventListener(eventType, onFilterChange);
+        }
     });
 
     const search = $('mod-filter-search');
@@ -73,6 +77,96 @@ export function initModuleWorkspace() {
     if (respClose) respClose.addEventListener('click', hideResponseDrawer);
     const respBtnClose = $('resp-drawer-btn-close');
     if (respBtnClose) respBtnClose.addEventListener('click', hideResponseDrawer);
+
+    // Response drawer backdrop click to close
+    const respBackdrop = $('response-backdrop');
+    if (respBackdrop) respBackdrop.addEventListener('click', hideResponseDrawer);
+
+    // Response drawer re-send button
+    const respBtnSend = $('resp-drawer-btn-send');
+    if (respBtnSend) {
+        respBtnSend.addEventListener('click', async () => {
+            if (!currentModuleId || selectedItems.size === 0) return;
+            let itemKey = Array.from(selectedItems)[0];
+            try { itemKey = JSON.parse(itemKey); } catch {}
+            respBtnSend.disabled = true;
+            respBtnSend.textContent = 'Mengirim...';
+            try {
+                const res = await api(`/api/modules/${currentModuleId}/send`, {
+                    method: 'POST',
+                    body: JSON.stringify({ items: [itemKey], since: activeFilters.since, until: activeFilters.until })
+                });
+                if (res.success) {
+                    toast('Berhasil', 'Resource dikirim ulang', 'success');
+                    hideResponseDrawer();
+                    if (currentViewModule && typeof currentViewModule.reload === 'function') {
+                        await currentViewModule.reload(activeFilters);
+                    }
+                } else {
+                    toast('Gagal', res.error || 'Gagal kirim ulang', 'error');
+                }
+            } catch (e) {
+                toast('Error', e.message, 'error');
+            } finally {
+                respBtnSend.disabled = false;
+                respBtnSend.textContent = 'Kirim Ulang';
+            }
+        });
+    }
+
+    // Batch send selected button
+    const batchSendBtn = $('btn-module-send-selected');
+    if (batchSendBtn) {
+        batchSendBtn.addEventListener('click', async () => {
+            if (!currentModuleId || selectedItems.size === 0) return;
+            const items = Array.from(selectedItems).map(x => {
+                try { return JSON.parse(x); } catch { return x; }
+            });
+            batchSendBtn.disabled = true;
+            const origText = batchSendBtn.querySelector('.btn-label')?.textContent || 'Kirim Terpilih';
+            if (batchSendBtn.querySelector('.btn-label')) {
+                batchSendBtn.querySelector('.btn-label').textContent = `Mengirim ${items.length}...`;
+            }
+            try {
+                toast('Mengirim...', `Mengirim ${items.length} item ${currentManifest?.title || currentModuleId}`, 'info');
+                const res = await api(`/api/modules/${currentModuleId}/send`, {
+                    method: 'POST',
+                    body: JSON.stringify({ items, since: activeFilters.since, until: activeFilters.until })
+                });
+                if (res.success) {
+                    toast('Selesai', `${res.success_count || items.length} item berhasil dikirim`, 'success');
+                    selectedItems.clear();
+                    updateBatchSendButton();
+                } else {
+                    toast('Peringatan', `Terkirim: ${res.success_count || 0}, Gagal: ${res.fail_count || 0}`, 'warning');
+                }
+                if (currentViewModule && typeof currentViewModule.reload === 'function') {
+                    await currentViewModule.reload(activeFilters);
+                }
+            } catch (e) {
+                toast('Error', e.message, 'error');
+            } finally {
+                batchSendBtn.disabled = false;
+                if (batchSendBtn.querySelector('.btn-label')) {
+                    batchSendBtn.querySelector('.btn-label').textContent = origText;
+                }
+            }
+        });
+    }
+
+    // Add keyboard navigation for module table rows
+    document.addEventListener('keydown', (e) => {
+        if (e.target.closest('#module-table-wrap') && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+            e.preventDefault();
+            const rows = document.querySelectorAll('#module-table-wrap tbody tr.patient-row:not([hidden])');
+            const active = document.activeElement;
+            let idx = Array.from(rows).findIndex(r => r === active || r.contains(active));
+            if (idx === -1) idx = 0;
+            if (e.key === 'ArrowDown' && idx < rows.length - 1) idx++;
+            else if (e.key === 'ArrowUp' && idx > 0) idx--;
+            rows[idx]?.focus();
+        }
+    });
 }
 
 export async function showModuleView(moduleId, queryParams = {}) {
@@ -93,6 +187,7 @@ export async function showModuleView(moduleId, queryParams = {}) {
     if (auditView) auditView.hidden = true;
     if (settingsView) settingsView.hidden = true;
     if (rail) rail.hidden = true;
+    document.querySelector('.layout')?.classList.remove('has-rail');
 
     // Find manifest
     const modules = await fetchModules();
@@ -134,8 +229,8 @@ export async function showModuleView(moduleId, queryParams = {}) {
 
     try {
         const moduleDir = currentManifest.dir || moduleId;
-        // Native dynamic ES module import (relative to web root /modules/)
-        const viewUrl = `/modules/${moduleDir}/view.js`;
+        // Native dynamic ES module import with base path support for subfolder deployments
+        const viewUrl = `${BASE}/modules/${moduleDir}/view.js`;
         currentViewModule = await import(viewUrl);
 
         if (seq !== workspaceSeq) return;

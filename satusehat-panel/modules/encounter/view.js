@@ -55,46 +55,55 @@ function renderTable(list) {
         <table class="patient-table">
             <thead>
                 <tr>
-                    <th style="width:40px"><input type="checkbox" id="mod-check-all"></th>
+                    <th style="width:40px;text-align:center"><input type="checkbox" id="mod-check-all" class="batch-check"></th>
                     <th>Pasien & No. Rawat</th>
                     <th>Tanggal Registrasi</th>
                     <th>Unit / Poli</th>
                     <th>Dokter</th>
                     <th>Billing</th>
                     <th>Status SATUSEHAT</th>
-                    <th style="width:160px;text-align:right">Aksi</th>
+                    <th style="width:140px;text-align:center">Aksi</th>
                 </tr>
             </thead>
             <tbody>
                 ${list.map(r => {
                     const st = r.status_info || {};
                     const isPaid = (r.status_bayar || '').toLowerCase().includes('sudah');
-                    const canSend = st.status === 'ready' || st.status === 'failed';
+                    const canSend = Boolean(st.can_send ?? (st.status !== 'blocked'));
+                    const btnLabel = st.status === 'update_needed' ? 'Update' : 'Kirim';
                     return `
-                        <tr data-key="${escapeHtml(r.item_key)}">
-                            <td><input type="checkbox" class="row-check" value="${escapeHtml(r.item_key)}" ${canSend ? '' : 'disabled'}></td>
+                        <tr data-key="${escapeHtml(r.item_key)}" class="patient-row">
+                            <td style="text-align:center"><input type="checkbox" class="row-check batch-check" value="${escapeHtml(r.item_key)}" ${canSend ? '' : 'disabled'}></td>
                             <td>
-                                <strong>${escapeHtml(r.nm_pasien || '-')}</strong>
-                                <span class="blocker-tip mono">No. Rawat: ${escapeHtml(r.no_rawat)} · RM: ${escapeHtml(r.no_rkm_medis || '-')}</span>
+                                <div style="display:flex;flex-direction:column;gap:2px">
+                                    <strong class="patient-name">${escapeHtml(r.nm_pasien || '-')}</strong>
+                                    <span class="no-rawat">No. Rawat: ${escapeHtml(r.no_rawat)} · RM: ${escapeHtml(r.no_rkm_medis || '-')}</span>
+                                </div>
                             </td>
-                            <td class="small">${escapeHtml(r.tgl_registrasi || '-')} <span class="muted">${escapeHtml(r.jam_reg || '')}</span></td>
+                            <td class="td-date">
+                                <span class="tgl">${escapeHtml(r.tgl_registrasi || '-')}</span>
+                                <span class="jam">${escapeHtml(r.jam_reg || '')}</span>
+                            </td>
                             <td><span class="badge badge-neutral">${escapeHtml(r.nm_poli || '-')}</span></td>
                             <td><span class="small">${escapeHtml(r.nm_dokter || '-')}</span></td>
-                            <td><span class="badge ${isPaid ? 'badge-success' : 'badge-danger'}"><span class="dot"></span>${escapeHtml(r.status_bayar || '-')}</span></td>
+                            <td><span class="badge ${isPaid ? 'badge-ok' : 'badge-warn'}"><span class="dot"></span>${escapeHtml(r.status_bayar || '-')}</span></td>
                             <td>
-                                <span class="badge ${st.badge || 'badge-neutral'}">
-                                    <span class="dot"></span>${escapeHtml(st.label || '-')}
-                                </span>
-                                ${st.blocker_reason ? `<span class="blocker-tip" style="color:var(--danger)">⚠️ ${escapeHtml(st.blocker_reason)}</span>` : ''}
-                                ${st.satusehat_id ? `<span class="blocker-tip mono muted">ID: ${escapeHtml(st.satusehat_id)}</span>` : ''}
+                                <div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start">
+                                    <span class="badge ${st.badge || 'badge-neutral'}">
+                                        <span class="dot"></span>${escapeHtml(st.label || '-')}
+                                    </span>
+                                    ${st.blocker_reason ? `<span class="blocker-tip" style="color:var(--bad-ink, var(--danger));font-size:var(--text-xs);font-weight:600;margin-top:2px">⚠️ ${escapeHtml(st.blocker_reason)}</span>` : ''}
+                                    ${st.satusehat_id ? `<span class="blocker-tip mono muted" style="font-size:var(--text-xs);margin-top:2px">ID: ${escapeHtml(st.satusehat_id)}</span>` : ''}
+                                    ${r.id_episode_of_care ? `<span class="blocker-tip mono" style="color:var(--primary);font-size:var(--text-xs);margin-top:2px">🔗 EoC: ${escapeHtml(r.id_episode_of_care)}</span>` : ''}
+                                </div>
                             </td>
-                            <td style="text-align:right">
-                                <div style="display:inline-flex;gap:4px">
+                            <td style="text-align:center">
+                                <div style="display:inline-flex;gap:6px;justify-content:center">
                                     <button class="btn btn-ghost btn-sm btn-inspect" type="button" data-key="${escapeHtml(r.item_key)}" title="Lihat JSON / Respon">
                                         JSON
                                     </button>
-                                    <button class="btn btn-primary btn-sm btn-send-single" type="button" data-key="${escapeHtml(r.item_key)}" ${canSend ? '' : 'disabled'}>
-                                        Kirim
+                                    <button class="btn ${st.status === 'update_needed' ? 'btn-warning' : 'btn-primary'} btn-sm btn-send-single" type="button" data-key="${escapeHtml(r.item_key)}" ${canSend ? '' : 'disabled'}>
+                                        ${btnLabel}
                                     </button>
                                 </div>
                             </td>

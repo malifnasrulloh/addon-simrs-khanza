@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Util;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\Database;
 
 /**

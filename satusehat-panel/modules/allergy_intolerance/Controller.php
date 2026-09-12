@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Modules\AllergyIntolerance;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\BaseModuleController;
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Util\PayloadAdapter;
@@ -59,7 +61,6 @@ class Controller extends BaseModuleController
             $stmt->execute($params);
             $rows = $stmt->fetchAll() ?: [];
 
-            $sqlite = Database::getSqlite();
             $items = [];
 
             foreach ($rows as $r) {
@@ -111,6 +112,9 @@ class Controller extends BaseModuleController
     {
         $parts = explode('|', $key);
         $noRawat = $parts[0];
+        $tgl = $parts[1] ?? '';
+        $jam = $parts[2] ?? '';
+        $status = $parts[3] ?? '';
         $db = Database::getMysql();
 
         $stmt = $db->prepare("
@@ -123,8 +127,21 @@ class Controller extends BaseModuleController
         $patient = $stmt->fetch();
         if (!$patient) return ['success' => false, 'error' => 'Pasien tidak ditemukan'];
 
-        $payloads = PayloadAdapter::build('AllergyIntolerance', $noRawat, $patient);
-        return ['success' => true, 'data' => $payloads[0] ?? null];
+        $payloads = PayloadAdapter::build('AllergyIntolerance', $noRawat, $patient, [], true);
+        $found = null;
+        foreach ($payloads as $p) {
+            $keys = $p['_panel_persist_keys']['keys'] ?? [];
+            if (
+                (empty($tgl) || ($keys['tgl_perawatan'] ?? '') === $tgl) &&
+                (empty($jam) || ($keys['jam_rawat'] ?? '') === $jam) &&
+                (empty($status) || ($keys['status'] ?? '') === $status)
+            ) {
+                $found = $p;
+                break;
+            }
+        }
+
+        return ['success' => true, 'data' => $found ?? ($payloads[0] ?? null)];
     }
 
     public static function send(): array
@@ -133,6 +150,9 @@ class Controller extends BaseModuleController
             '/AllergyIntolerance',
             function (array|string $itemKey): array {
                 $noRawat = is_array($itemKey) ? ($itemKey['no_rawat'] ?? '') : (string) $itemKey;
+                $tgl = is_array($itemKey) ? ($itemKey['tgl_perawatan'] ?? '') : '';
+                $jam = is_array($itemKey) ? ($itemKey['jam_rawat'] ?? '') : '';
+                $status = is_array($itemKey) ? ($itemKey['status'] ?? '') : '';
                 $db = Database::getMysql();
 
                 $stmt = $db->prepare("
@@ -145,10 +165,27 @@ class Controller extends BaseModuleController
                 $patient = $stmt->fetch();
                 if (!$patient) throw new \RuntimeException("Pasien {$noRawat} tidak ditemukan");
 
-                $payloads = PayloadAdapter::build('AllergyIntolerance', $noRawat, $patient);
+                $payloads = PayloadAdapter::build('AllergyIntolerance', $noRawat, $patient, [], true);
                 if (empty($payloads)) throw new \RuntimeException("Payload AllergyIntolerance tidak ditemukan");
 
-                return ['payload' => $payloads[0], 'meta' => $payloads[0]['_panel_persist_keys'] ?? []];
+                $matched = null;
+                foreach ($payloads as $p) {
+                    $keys = $p['_panel_persist_keys']['keys'] ?? [];
+                    if (
+                        (empty($tgl) || ($keys['tgl_perawatan'] ?? '') === $tgl) &&
+                        (empty($jam) || ($keys['jam_rawat'] ?? '') === $jam) &&
+                        (empty($status) || ($keys['status'] ?? '') === $status)
+                    ) {
+                        $matched = $p;
+                        break;
+                    }
+                }
+                if (!$matched && !empty($payloads)) {
+                    $matched = $payloads[0];
+                }
+                if (!$matched) throw new \RuntimeException("Payload AllergyIntolerance tidak ditemukan");
+
+                return ['payload' => $matched, 'meta' => $matched['_panel_persist_keys'] ?? []];
             },
             function (array|string $itemKey, string $satusehatId, array $outcome): void {
                 $noRawat = is_array($itemKey) ? ($itemKey['no_rawat'] ?? '') : (string) $itemKey;

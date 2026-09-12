@@ -116,12 +116,12 @@ export function untrapFocus(container) {
 }
 
 /* ── Avatar ───────────────────────────────────────────────── */
-function hashHue(str) {
+export function hashHue(str) {
     let h = 0;
     for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
     return h % 360;
 }
-function initials(name) {
+export function initials(name) {
     const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
     if (!parts.length) return '?';
     const first = parts[0][0];

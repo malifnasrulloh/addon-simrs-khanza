@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Core;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 /**
  * ModuleManager - Runtime auto-discovery and router registration for
  * modular SATUSEHAT panel resource workspaces.

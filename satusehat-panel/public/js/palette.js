@@ -37,8 +37,12 @@ function currentItems() {
 function setDatePreset(days) {
     const until = new Date();
     const since = new Date();
-    since.setDate(until.getDate() - (days - 1));
-    state.dateRange = days ? { since: toISODate(since), until: toISODate(until), preset: String(days) } : { since: '', until: '', preset: '' };
+    if (days > 0) {
+        since.setDate(until.getDate() - (days - 1));
+        state.dateRange = { since: toISODate(since), until: toISODate(until), preset: String(days) };
+    } else {
+        state.dateRange = { since: '', until: '', preset: '' };
+    }
     $('date-since').value = state.dateRange.since;
     $('date-until').value = state.dateRange.until;
     $('range-presets').querySelectorAll('.seg-btn').forEach(btn => {

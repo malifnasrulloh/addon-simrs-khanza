@@ -80,6 +80,8 @@ export function showPatientsView() {
     $('table-wrap').hidden = false;
     $('audit-view').hidden = true;
     $('settings-view').hidden = true;
+    if ($('filter-rail')) $('filter-rail').hidden = false;
+    document.querySelector('.layout')?.classList.add('has-rail');
     $('list-title').textContent = 'Daftar Pasien';
     updateSubtitle();
 }

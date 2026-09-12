@@ -11,6 +11,8 @@
  * root:            SCRIPT_NAME = /index.php          -> ''
  * subdir:          SCRIPT_NAME = /satusehat-panel/index.php -> /satusehat-panel
  */
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 function panel_base_path(): string
 {
     // Manual override — check .env first, then process env. Use only if

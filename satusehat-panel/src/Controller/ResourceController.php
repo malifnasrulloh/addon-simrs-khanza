@@ -2,6 +2,8 @@
 
 namespace SatusehatPanel\Controller;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Util\PayloadAdapter;
 
@@ -30,7 +32,7 @@ class ResourceController
         }
 
         try {
-            $payloads = PayloadAdapter::build($resource, $noRawat, $patient);
+            $payloads = PayloadAdapter::build($resource, $noRawat, $patient, [], true);
         } catch (\Throwable $e) {
             return ['success' => false, 'error' => 'Gagal membangun payload untuk resource ini: ' . $e->getMessage()];
         }

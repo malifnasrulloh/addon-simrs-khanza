@@ -2,6 +2,8 @@
 
 namespace SatusehatPanel\Controller;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Core\Config;
 use SatusehatPanel\Util\RuleNumberResolver;

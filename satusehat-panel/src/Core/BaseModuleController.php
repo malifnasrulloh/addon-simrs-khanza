@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Core;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Util\EntryOutcomeClassifier;
 use SatusehatPanel\Util\Logger;
 use SatusehatPanel\Util\PayloadAdapter;
@@ -53,10 +55,17 @@ abstract class BaseModuleController
         try {
             $db = Database::getSqlite();
             // 1. Try dedicated state table if exists
-            $stmt = $db->prepare("SELECT status FROM {$tableName} WHERE composite_key = ? LIMIT 1");
-            $stmt->execute([$compositeKey]);
-            $st = $stmt->fetchColumn();
-            if ($st) return (string) $st;
+            if ($tableName === 'encounter_state') {
+                $stmt = $db->prepare("SELECT status FROM encounter_state WHERE no_rawat = ? LIMIT 1");
+                $stmt->execute([$patientId ?: $compositeKey]);
+                $st = $stmt->fetchColumn();
+                if ($st) return (string) $st;
+            } elseif (preg_match('/^[a-z0-9_]+_state$/', $tableName)) {
+                $stmt = $db->prepare("SELECT status FROM {$tableName} WHERE composite_key = ? LIMIT 1");
+                $stmt->execute([$compositeKey]);
+                $st = $stmt->fetchColumn();
+                if ($st) return (string) $st;
+            }
         } catch (\Throwable $e) {
             // Table might not exist in panel.db — fallback to send_entries
         }
@@ -87,13 +96,26 @@ abstract class BaseModuleController
      * @param ?string $mappingId Real ID from MySQL mapping table
      * @param ?string $localState Status from SQLite state table
      * @param array  $blockers   List of missing prerequisites e.g. ['encounter', 'ihs_pasien', 'ihs_dokter', 'location', 'billing']
+     * @param array  $options    Optional hints e.g. ['needs_update' => bool, 'update_label' => string, 'update_reason' => string]
      * @return array ['status' => string, 'label' => string, 'badge' => string, 'blocker_reason' => ?string]
      */
-    public static function evaluateStatus(array $row, ?string $mappingId, ?string $localState, array $blockers = []): array
+    public static function evaluateStatus(array $row, ?string $mappingId, ?string $localState, array $blockers = [], array $options = []): array
     {
         $hasId = !empty($mappingId) && $mappingId !== '-';
 
-        // 1. Sent
+        // 1. Sent, but needs update (e.g. Encounter discharged/finished, or newly linked EpisodeOfCare)
+        if ($hasId && !empty($options['needs_update'])) {
+            return [
+                'status'         => 'update_needed',
+                'label'          => $options['update_label'] ?? 'Perlu Update',
+                'badge'          => 'badge-warning',
+                'satusehat_id'   => $mappingId,
+                'blocker_reason' => $options['update_reason'] ?? null,
+                'can_send'       => true,
+            ];
+        }
+
+        // 1b. Sent (settled)
         if ($hasId) {
             return [
                 'status'         => 'sent',
@@ -101,6 +123,7 @@ abstract class BaseModuleController
                 'badge'          => 'badge-success',
                 'satusehat_id'   => $mappingId,
                 'blocker_reason' => null,
+                'can_send'       => !empty($options['allow_reupdate']),
             ];
         }
 
@@ -118,6 +141,7 @@ abstract class BaseModuleController
                 'badge'          => 'badge-danger',
                 'satusehat_id'   => null,
                 'blocker_reason' => $reason,
+                'can_send'       => true,
             ];
         }
 
@@ -141,6 +165,7 @@ abstract class BaseModuleController
                 'badge'          => 'badge-warning',
                 'satusehat_id'   => null,
                 'blocker_reason' => implode(' · ', $reasons),
+                'can_send'       => false,
             ];
         }
 
@@ -151,7 +176,15 @@ abstract class BaseModuleController
             'badge'          => 'badge-neutral',
             'satusehat_id'   => null,
             'blocker_reason' => null,
+            'can_send'       => true,
         ];
+    }
+
+    private static ?\SatuSehatClient $clientOverride = null;
+
+    public static function setClientForTesting(?\SatuSehatClient $client): void
+    {
+        self::$clientOverride = $client;
     }
 
     /**
@@ -159,6 +192,9 @@ abstract class BaseModuleController
      */
     public static function getClient(): \SatuSehatClient
     {
+        if (self::$clientOverride !== null) {
+            return self::$clientOverride;
+        }
         $config = \CredentialLocator::buildSatuSehatConfig();
         $logDir = defined('BASE_DIR') ? BASE_DIR . '/storage' : __DIR__ . '/../../storage';
         $log = new \Logger($logDir, 'panel_module', $config->logLevel, false);
@@ -194,10 +230,11 @@ abstract class BaseModuleController
      * @param string $endpoint e.g. '/Condition', '/Observation', etc.
      * @param callable $payloadFactory fn(array $itemKey): array ['payload' => array, 'meta' => array]
      * @param callable $saveHandler fn(array $itemKey, string $satusehatId, array $outcome): void
+     * @param ?array $inputOverride Optional input override for testing
      */
-    public static function executeSend(string $endpoint, callable $payloadFactory, callable $saveHandler): array
+    public static function executeSend(string $endpoint, callable $payloadFactory, callable $saveHandler, ?array $inputOverride = null): array
     {
-        $input = json_decode((string) file_get_contents('php://input'), true);
+        $input = $inputOverride ?? json_decode((string) file_get_contents('php://input'), true);
         if (!is_array($input)) {
             return ['success' => false, 'error' => 'Invalid JSON body'];
         }
@@ -215,7 +252,7 @@ abstract class BaseModuleController
 
         foreach ($items as $itemKey) {
             $keyStr = is_array($itemKey) ? implode('|', $itemKey) : (string) $itemKey;
-            $noRawat = is_array($itemKey) ? ($itemKey['no_rawat'] ?? '') : '';
+            $noRawat = is_array($itemKey) ? ($itemKey['no_rawat'] ?? '') : (string) $itemKey;
 
             try {
                 // Check if user provided manual JSON override in web editor
@@ -231,16 +268,80 @@ abstract class BaseModuleController
                     $meta = $build['meta'] ?? [];
                 }
 
+                if (empty($noRawat)) {
+                    $noRawat = (string) ($meta['no_rawat'] ?? ($payload['identifier'][0]['value'] ?? ''));
+                }
+
                 // Check for existing ID in payload (PUT) or new (POST)
                 $hasId = !empty($payload['id']);
                 $method = $hasId ? 'PUT' : 'POST';
                 $url = $hasId ? $endpoint . '/' . $payload['id'] : $endpoint;
 
-                $apiRes = ($method === 'PUT') ? $client->put($url, $payload) : $client->post($url, $payload);
+                if ($method === 'PUT') {
+                    if ($endpoint === '/EpisodeOfCare') {
+                        // EpisodeOfCare: PUT triggers "Operation cannot be performed due to consent or privacy rules".
+                        // Direct targeted PATCH bypasses consent engine on SATUSEHAT.
+                        $ops = [
+                            ['op' => 'replace', 'path' => '/status', 'value' => $payload['status'] ?? 'finished'],
+                        ];
+                        if (!empty($payload['period']['end'])) {
+                            $ops[] = ['op' => 'replace', 'path' => '/period/end', 'value' => $payload['period']['end']];
+                        }
+                        if (!empty($payload['diagnosis'])) {
+                            $ops[] = ['op' => 'replace', 'path' => '/diagnosis', 'value' => $payload['diagnosis']];
+                        }
+                        if (!empty($payload['statusHistory'])) {
+                            $ops[] = ['op' => 'replace', 'path' => '/statusHistory', 'value' => $payload['statusHistory']];
+                        }
+                        $apiRes = $client->patch($url, $ops);
+                    } elseif ($endpoint === '/Encounter') {
+                        // Encounter: Dual strategy (PUT with graceful PATCH fallback)
+                        $patchOps = [
+                            ['op' => 'replace', 'path' => '/status', 'value' => $payload['status'] ?? 'finished'],
+                        ];
+                        if (!empty($payload['period']['end'])) {
+                            $patchOps[] = ['op' => 'replace', 'path' => '/period/end', 'value' => $payload['period']['end']];
+                        }
+                        if (!empty($payload['statusHistory'])) {
+                            $patchOps[] = ['op' => 'replace', 'path' => '/statusHistory', 'value' => $payload['statusHistory']];
+                        }
+                        if (!empty($payload['episodeOfCare'])) {
+                            $patchOps[] = ['op' => 'replace', 'path' => '/episodeOfCare', 'value' => $payload['episodeOfCare']];
+                        }
+                        if (!empty($payload['length'])) {
+                            $patchOps[] = ['op' => 'replace', 'path' => '/length', 'value' => $payload['length']];
+                        }
+                        $apiRes = $client->putWithPatchFallback($url, $payload, $patchOps);
+                    } elseif ($endpoint === '/Condition') {
+                        // Condition: Dual strategy (PUT with graceful PATCH fallback)
+                        $patchOps = [];
+                        if (!empty($payload['clinicalStatus'])) {
+                            $patchOps[] = ['op' => 'replace', 'path' => '/clinicalStatus', 'value' => $payload['clinicalStatus']];
+                        }
+                        $apiRes = $client->putWithPatchFallback($url, $payload, $patchOps);
+                    } elseif ($endpoint === '/AllergyIntolerance') {
+                        // AllergyIntolerance: Dual strategy (PUT with graceful PATCH fallback)
+                        $patchOps = [];
+                        if (!empty($payload['clinicalStatus'])) {
+                            $patchOps[] = ['op' => 'replace', 'path' => '/clinicalStatus', 'value' => $payload['clinicalStatus']];
+                        }
+                        if (!empty($payload['verificationStatus'])) {
+                            $patchOps[] = ['op' => 'replace', 'path' => '/verificationStatus', 'value' => $payload['verificationStatus']];
+                        }
+                        $apiRes = $client->putWithPatchFallback($url, $payload, $patchOps);
+                    } else {
+                        // All other resources: standard in-place PUT
+                        $apiRes = $client->put($url, $payload);
+                    }
+                } else {
+                    $apiRes = $client->post($url, $payload);
+                }
+
                 $classified = EntryOutcomeClassifier::classify($apiRes['data'] ?? []);
 
-                $isSuccess = (!empty($apiRes['success']) && $apiRes['code'] >= 200 && $apiRes['code'] < 300)
-                    || ($classified['status'] === EntryOutcomeClassifier::SENT);
+                $isSkipped = !empty($apiRes['permission_skip']) || !empty($apiRes['ownership_skip']) || !empty($apiRes['permission_cap']);
+                $isSuccess = !$isSkipped && ((!empty($apiRes['success']) && $apiRes['code'] >= 200 && $apiRes['code'] < 300)
+                    || ($classified['status'] === EntryOutcomeClassifier::SENT));
 
                 $satusehatId = $classified['satusehat_id']
                     ?? $apiRes['data']['id']
@@ -252,7 +353,11 @@ abstract class BaseModuleController
                     $status = 'sent';
                 } else {
                     $failCount++;
-                    $status = $classified['status'] ?: 'failed';
+                    if ($isSkipped) {
+                        $status = !empty($apiRes['ownership_skip']) ? 'ownership_skip' : 'permission_denied';
+                    } else {
+                        $status = $classified['status'] ?: 'failed';
+                    }
                 }
 
                 // Log to SQLite audit trail
@@ -314,12 +419,14 @@ abstract class BaseModuleController
         try {
             $db = Database::getSqlite();
             $stmt = $db->prepare("
-                INSERT INTO audit_logs (patient_id, resource_type, action, status, request_payload, response_payload, ip_address)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO audit_logs (patient_id, resource_type, action, status, request_payload, response_payload, error_message, user_identifier)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ");
             $clientIp = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
-            $reqJson = json_encode($requestPayload, JSON_UNESCAPED_SLASHES);
-            $respJson = json_encode($responsePayload, JSON_UNESCAPED_SLASHES);
+            $reqRaw = (string) json_encode($requestPayload, JSON_UNESCAPED_SLASHES);
+            $respRaw = (string) json_encode($responsePayload, JSON_UNESCAPED_SLASHES);
+            $reqJson = class_exists('\Logger') ? \Logger::scrubSensitiveData($reqRaw) : $reqRaw;
+            $respJson = class_exists('\Logger') ? \Logger::scrubSensitiveData($respRaw) : $respRaw;
 
             $stmt->execute([
                 $noRawat,
@@ -328,6 +435,7 @@ abstract class BaseModuleController
                 $status,
                 $reqJson,
                 substr((string) $respJson, 0, 65535),
+                $issueText,
                 $clientIp,
             ]);
             $auditId = (int) $db->lastInsertId();

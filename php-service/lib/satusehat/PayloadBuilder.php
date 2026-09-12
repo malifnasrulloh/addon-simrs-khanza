@@ -182,6 +182,9 @@ class SatuSehatPayloadBuilder
         if (str_starts_with($id, 'urn:') || str_contains($id, '/')) {
             return $id;
         }
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $id)) {
+            return 'urn:uuid:' . $id;
+        }
         return $resourceType . '/' . $id;
     }
 
@@ -385,22 +388,31 @@ class SatuSehatPayloadBuilder
         $arrived = ['status' => 'arrived', 'period' => ['start' => $t0]];
         if ($t1 !== null) {
             $arrived['period']['end'] = $t1;
+        } elseif ($targetStatus === 'finished') {
+            // Rule 10122: Finished encounters require both start and end on every statusHistory entry
+            $arrived['period']['end'] = $t0;
         }
         $history[] = $arrived;
 
         if (in_array($targetStatus, ['in-progress', 'finished'], true)) {
             $inProgress = ['status' => 'in-progress', 'period' => ['start' => $t1 ?? $t0]];
-            if ($targetStatus === 'finished' && $t2 !== null) {
-                $inProgress['period']['end'] = $t2;
+            if ($targetStatus === 'finished') {
+                $endWaktu = $t2 ?? ($t1 ?? $t0);
+                if ($endWaktu !== null) {
+                    $inProgress['period']['end'] = $endWaktu;
+                }
             }
             $history[] = $inProgress;
         }
 
-        if ($targetStatus === 'finished' && $t2 !== null) {
-            $history[] = [
-                'status' => 'finished',
-                'period' => ['start' => $t2, 'end' => $t2],
-            ];
+        if ($targetStatus === 'finished') {
+            $endWaktu = $t2 ?? ($t1 ?? $t0);
+            if ($endWaktu !== null) {
+                $history[] = [
+                    'status' => 'finished',
+                    'period' => ['start' => $endWaktu, 'end' => $endWaktu],
+                ];
+            }
         }
 
         return $history;
@@ -510,12 +522,13 @@ class SatuSehatPayloadBuilder
             unset($payload['location']);
         }
 
-        if ($status === 'finished' && $finishedWaktu) {
-            $payload['period']['end'] = $finishedWaktu;
+        $effectiveEnd = $finishedWaktu ?? ($boundaries['t1'] ?? $boundaries['t0']);
+        if ($status === 'finished' && $effectiveEnd) {
+            $payload['period']['end'] = $effectiveEnd;
         }
 
         // Add episodeOfCare link if present
-        if ($idEpisodeOfCare !== null) {
+        if (!empty($idEpisodeOfCare) && $idEpisodeOfCare !== '-') {
             $payload['episodeOfCare'] = [
                 ['reference' => 'EpisodeOfCare/' . $idEpisodeOfCare]
             ];
@@ -526,8 +539,8 @@ class SatuSehatPayloadBuilder
         }
 
         // Add length (duration) for finished encounters
-        if ($status === 'finished' && $finishedWaktu) {
-            $durationSeconds = strtotime($finishedWaktu) - strtotime($startWaktu);
+        if ($status === 'finished' && $effectiveEnd && $startWaktu) {
+            $durationSeconds = strtotime($effectiveEnd) - strtotime($startWaktu);
             if ($durationSeconds > 0) {
                 $unit = $isRalan ? 'min' : 'd';
                 $durationValue = $isRalan ? round($durationSeconds / 60) : round($durationSeconds / 86400, 1);
@@ -649,10 +662,11 @@ class SatuSehatPayloadBuilder
             $diagnosisPayload = [];
             $rank = 1;
             foreach ($diagnoses as $diag) {
+                $condId = !empty($diag['id_condition']) && $diag['id_condition'] !== '-' ? $diag['id_condition'] : '';
                 $diagnosisPayload[] = [
                     'condition' => [
-                        'reference' => 'Condition/' . $diag['id_condition'],
-                        'display'   => $diag['nm_penyakit']
+                        'reference' => 'Condition/' . $condId,
+                        'display'   => $diag['nm_penyakit'] ?? ''
                     ],
                     'use' => [
                         'coding' => [
@@ -1423,10 +1437,6 @@ class SatuSehatPayloadBuilder
             'occurrenceDateTime' => $occurrenceDateTime,
             'recorded' => $occurrenceDateTime,
             'primarySource' => true,
-            'location' => [
-                'reference' => 'Location/' . $imm['id_lokasi_satusehat'],
-                'display' => $imm['nm_poli']
-            ],
             'lotNumber' => $imm['no_batch'],
             'route' => [
                 'coding' => [
@@ -1479,6 +1489,13 @@ class SatuSehatPayloadBuilder
 
         if ($expirationDate) {
             $payload['expirationDate'] = $expirationDate;
+        }
+
+        if (!empty($imm['id_lokasi_satusehat'])) {
+            $payload['location'] = [
+                'reference' => 'Location/' . $imm['id_lokasi_satusehat'],
+                'display'   => $imm['nm_poli'] ?? ''
+            ];
         }
 
         if (!empty($idImmunization)) {

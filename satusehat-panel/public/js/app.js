@@ -20,19 +20,18 @@ import { initModuleWorkspace, showModuleView } from './views/module_workspace.js
 
 /* ── Theme ────────────────────────────────────────────────── */
 function initTheme() {
-    // index.html already set data-theme pre-paint (saved pref or system);
-    // here we only need to enforce the stored preference over it.
     const saved = localStorage.getItem('sh-theme');
-    if (saved === 'dark' || saved === 'light') {
-        document.documentElement.dataset.theme = saved;
+    if (saved === 'light') {
+        document.documentElement.dataset.theme = 'light';
+    } else {
+        document.documentElement.dataset.theme = 'dark';
     }
     syncThemeMeta();
 }
 function syncThemeMeta() {
-    const dark = document.documentElement.dataset.theme === 'dark'
-        || (!document.documentElement.dataset.theme && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const dark = document.documentElement.dataset.theme !== 'light';
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', dark ? '#15181d' : '#ffffff');
+    if (meta) meta.setAttribute('content', dark ? '#0b0f17' : '#ffffff');
 }
 $('theme-toggle').addEventListener('click', () => {
     const html = document.documentElement;

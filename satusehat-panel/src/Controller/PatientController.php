@@ -2,6 +2,8 @@
 
 namespace SatusehatPanel\Controller;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\Database;
 
 class PatientController
@@ -538,80 +540,89 @@ class PatientController
         //    Exclude the '-' sentinel (means "no allergy recorded").
         $hasAllergy = $hasData("SELECT COUNT(*) FROM pemeriksaan_ralan WHERE no_rawat = ? AND alergi IS NOT NULL AND alergi != '' AND alergi != '-'", [$noRawat])
             || $hasData("SELECT COUNT(*) FROM pemeriksaan_ranap WHERE no_rawat = ? AND alergi IS NOT NULL AND alergi != '' AND alergi != '-'", [$noRawat]);
+        $sentAllergy = $hasData("SELECT COUNT(*) FROM satu_sehat_allergy_intolerance WHERE no_rawat = ? AND id_allergy_intolerance NOT IN ('', '-')", [$noRawat]);
         $manifest[] = [
             'type' => 'AllergyIntolerance',
-            'available' => $hasAllergy,
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_allergy_intolerance WHERE no_rawat = ? AND id_allergy_intolerance NOT IN ('', '-')", [$noRawat]),
+            'available' => $hasAllergy || $sentAllergy,
+            'sent' => $sentAllergy,
         ];
 
-        // 5. MedicationRequest / Dispense / Statement — from resep_obat.
-        // sent requires the exact (no_resep, kode_brng) pairs of THIS visit —
-        // a single no_resep match is a false positive (one prescription holds
-        // many drugs). Empty/'-' ids are not-synced sentinels.
-        $hasMeds = $hasData("SELECT COUNT(*) FROM resep_obat WHERE no_rawat = ?", [$noRawat]);
+        // 5. MedicationRequest / Dispense / Statement — from resep_obat & detail_pemberian_obat.
+        $hasPrescription = $hasData("SELECT COUNT(*) FROM resep_obat WHERE no_rawat = ?", [$noRawat]);
+        $sentMedRequest = $allCovered(
+            "SELECT COUNT(*) FROM resep_obat ro INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep WHERE ro.no_rawat = ?",
+            [$noRawat],
+            "SELECT COUNT(*) FROM resep_obat ro
+             INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+             INNER JOIN satu_sehat_medicationrequest ssmr
+                 ON ssmr.no_resep = rd.no_resep AND ssmr.kode_brng = rd.kode_brng
+             WHERE ro.no_rawat = ? AND ssmr.id_medicationrequest NOT IN ('', '-')",
+            [$noRawat]
+        );
         $manifest[] = [
             'type' => 'MedicationRequest',
-            'available' => $hasMeds,
-            'sent' => $allCovered(
-                "SELECT COUNT(*) FROM resep_obat ro INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep WHERE ro.no_rawat = ?",
-                [$noRawat],
-                "SELECT COUNT(*) FROM resep_obat ro
-                 INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
-                 INNER JOIN satu_sehat_medicationrequest ssmr
-                     ON ssmr.no_resep = rd.no_resep AND ssmr.kode_brng = rd.kode_brng
-                 WHERE ro.no_rawat = ? AND ssmr.id_medicationrequest NOT IN ('', '-')",
-                [$noRawat]
-            ),
+            'available' => $hasPrescription || $sentMedRequest,
+            'sent' => $sentMedRequest,
         ];
+
+        // MedicationDispense is sourced from detail_pemberian_obat
+        $hasDispense = $hasData("SELECT COUNT(*) FROM detail_pemberian_obat WHERE no_rawat = ? AND status IN ('Ralan', 'Ranap')", [$noRawat]);
+        $sentDispense = $allCovered(
+            "SELECT COUNT(*) FROM detail_pemberian_obat dpo WHERE dpo.no_rawat = ? AND dpo.status IN ('Ralan', 'Ranap')",
+            [$noRawat],
+            "SELECT COUNT(*) FROM detail_pemberian_obat dpo
+             INNER JOIN satu_sehat_medicationdispense ssmd
+                 ON ssmd.no_rawat = dpo.no_rawat AND ssmd.tgl_perawatan = dpo.tgl_perawatan
+                 AND ssmd.jam = dpo.jam AND ssmd.kode_brng = dpo.kode_brng
+                 AND ssmd.no_batch = dpo.no_batch AND ssmd.no_faktur = dpo.no_faktur
+             WHERE dpo.no_rawat = ? AND ssmd.id_medicationdispanse NOT IN ('', '-')",
+            [$noRawat]
+        );
         $manifest[] = [
             'type' => 'MedicationDispense',
-            'available' => $hasMeds,
-            // Strict like MedicationRequest: every administered drug line
-            // (detail_pemberian_obat, keyed exactly as the CLI syncs it) must
-            // have a real mapping id. Any single row synced previously marked
-            // the whole type 'sent' — false positive.
-            'sent' => $allCovered(
-                "SELECT COUNT(*) FROM detail_pemberian_obat dpo WHERE dpo.no_rawat = ?",
-                [$noRawat],
-                "SELECT COUNT(*) FROM detail_pemberian_obat dpo
-                 INNER JOIN satu_sehat_medicationdispense ssmd
-                     ON ssmd.no_rawat = dpo.no_rawat AND ssmd.tgl_perawatan = dpo.tgl_perawatan
-                     AND ssmd.jam = dpo.jam AND ssmd.kode_brng = dpo.kode_brng
-                     AND ssmd.no_batch = dpo.no_batch AND ssmd.no_faktur = dpo.no_faktur
-                 WHERE dpo.no_rawat = ? AND ssmd.id_medicationdispanse NOT IN ('', '-')",
-                [$noRawat]
-            ),
+            'available' => $hasDispense || $sentDispense,
+            'sent' => $sentDispense,
         ];
+
+        $sentMedStatement = $allCovered(
+            "SELECT COUNT(*) FROM resep_obat ro INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep WHERE ro.no_rawat = ?",
+            [$noRawat],
+            "SELECT COUNT(*) FROM resep_obat ro
+             INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+             INNER JOIN satu_sehat_medicationstatement ssms
+                 ON ssms.no_resep = rd.no_resep AND ssms.kode_brng = rd.kode_brng
+             WHERE ro.no_rawat = ? AND ssms.id_medicationstatement NOT IN ('', '-')",
+            [$noRawat]
+        );
         $manifest[] = [
             'type' => 'MedicationStatement',
-            'available' => $hasMeds,
-            'sent' => $allCovered(
-                "SELECT COUNT(*) FROM resep_obat ro INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep WHERE ro.no_rawat = ?",
-                [$noRawat],
-                "SELECT COUNT(*) FROM resep_obat ro
-                 INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
-                 INNER JOIN satu_sehat_medicationstatement ssms
-                     ON ssms.no_resep = rd.no_resep AND ssms.kode_brng = rd.kode_brng
-                 WHERE ro.no_rawat = ? AND ssms.id_medicationstatement NOT IN ('', '-')",
-                [$noRawat]
-            ),
+            'available' => $hasPrescription || $sentMedStatement,
+            'sent' => $sentMedStatement,
         ];
 
-        // 6. CarePlan — from pemeriksaan_ralan/ranap.rtl (CLI source; nota_jalan
-        //    has no rtl column on this hospital)
+        // 6. CarePlan — from pemeriksaan_ralan/ranap.rtl
+        $hasCarePlan = $hasData("SELECT COUNT(*) FROM pemeriksaan_ralan WHERE no_rawat = ? AND rtl IS NOT NULL AND rtl != '' AND rtl != '-'", [$noRawat])
+            || $hasData("SELECT COUNT(*) FROM pemeriksaan_ranap WHERE no_rawat = ? AND rtl IS NOT NULL AND rtl != '' AND rtl != '-'", [$noRawat]);
+        $sentCarePlan = $hasData("SELECT COUNT(*) FROM satu_sehat_careplan WHERE no_rawat = ? AND id_careplan NOT IN ('', '-')", [$noRawat]);
         $manifest[] = [
             'type' => 'CarePlan',
-            'available' => $hasData("SELECT COUNT(*) FROM pemeriksaan_ralan WHERE no_rawat = ? AND rtl IS NOT NULL AND rtl != ''", [$noRawat])
-                || $hasData("SELECT COUNT(*) FROM pemeriksaan_ranap WHERE no_rawat = ? AND rtl IS NOT NULL AND rtl != ''", [$noRawat]),
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_careplan WHERE no_rawat = ? AND id_careplan NOT IN ('', '-')", [$noRawat]),
+            'available' => $hasCarePlan || $sentCarePlan,
+            'sent' => $sentCarePlan,
         ];
 
-        // 7. ClinicalImpression — from pemeriksaan_ralan/ranap with penilaian (matching CLI)
+        // 7. ClinicalImpression — from pemeriksaan_ralan/ranap with penilaian
+        $hasClinical = $hasData("
+            SELECT 1 FROM pemeriksaan_ralan pem
+            WHERE pem.no_rawat = ? AND pem.penilaian IS NOT NULL AND pem.penilaian <> '' AND pem.penilaian <> '-'
+            UNION ALL
+            SELECT 1 FROM pemeriksaan_ranap pem
+            WHERE pem.no_rawat = ? AND pem.penilaian IS NOT NULL AND pem.penilaian <> '' AND pem.penilaian <> '-'
+        ", [$noRawat, $noRawat]);
+        $sentClinical = $hasData("SELECT COUNT(*) FROM satu_sehat_clinicalimpression WHERE no_rawat = ? AND id_clinicalimpression NOT IN ('', '-')", [$noRawat]);
         $manifest[] = [
             'type' => 'ClinicalImpression',
-            'available' => $hasData("SELECT COUNT(*) FROM pemeriksaan_ralan WHERE no_rawat = ? AND penilaian <> ''", [$noRawat])
-                || $hasData("SELECT COUNT(*) FROM pemeriksaan_ranap WHERE no_rawat = ? AND penilaian <> ''", [$noRawat]),
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_clinicalimpression WHERE no_rawat = ? AND id_clinicalimpression NOT IN ('', '-')", [$noRawat]),
+            'available' => $hasClinical || $sentClinical,
+            'sent' => $sentClinical,
         ];
 
         // 8. Lab pipeline — ServiceRequest, Specimen, Observation, DiagnosticReport.
@@ -670,127 +681,255 @@ class PatientController
             }
         };
 
+        $hasLabMapped = $hasData("
+            SELECT 1 FROM (
+                SELECT 1 FROM permintaan_lab pl
+                INNER JOIN permintaan_detail_permintaan_lab dl ON dl.noorder = pl.noorder
+                INNER JOIN template_laboratorium tl ON tl.id_template = dl.id_template
+                INNER JOIN satu_sehat_mapping_lab sml ON sml.id_template = tl.id_template
+                WHERE pl.no_rawat = ? AND sml.code IS NOT NULL
+                UNION ALL
+                SELECT 1 FROM permintaan_labmb pl
+                INNER JOIN permintaan_detail_permintaan_labmb dl ON dl.noorder = pl.noorder
+                INNER JOIN template_laboratorium tl ON tl.id_template = dl.id_template
+                INNER JOIN satu_sehat_mapping_lab sml ON sml.id_template = tl.id_template
+                WHERE pl.no_rawat = ? AND sml.code IS NOT NULL
+                UNION ALL
+                SELECT 1 FROM permintaan_radiologi pr
+                INNER JOIN permintaan_pemeriksaan_radiologi ppr ON ppr.noorder = pr.noorder
+                INNER JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = ppr.kd_jenis_prw
+                WHERE pr.no_rawat = ? AND smr.code IS NOT NULL
+            ) t LIMIT 1
+        ", [$noRawat, $noRawat, $noRawat]);
+
+        $sentSR = $allLabCovered([
+            'pk' => 'satu_sehat_servicerequest_lab',
+            'mb' => 'satu_sehat_servicerequest_lab_mb',
+            'rad' => 'satu_sehat_servicerequest_radiologi',
+        ], 'id_servicerequest');
         $manifest[] = [
             'type' => 'ServiceRequest',
-            'available' => $hasLabPk || $hasLabMb || $hasRad,
-            'sent' => $allLabCovered([
-                'pk' => 'satu_sehat_servicerequest_lab',
-                'mb' => 'satu_sehat_servicerequest_lab_mb',
-                'rad' => 'satu_sehat_servicerequest_radiologi',
-            ], 'id_servicerequest'),
+            'available' => $hasLabMapped || $sentSR,
+            'sent' => $sentSR,
         ];
+
+        $sentSP = $allLabCovered([
+            'pk' => 'satu_sehat_specimen_lab',
+            'mb' => 'satu_sehat_specimen_lab_mb',
+            'rad' => 'satu_sehat_specimen_radiologi',
+        ], 'id_specimen');
         $manifest[] = [
             'type' => 'Specimen',
-            'available' => $hasLabPk || $hasLabMb || $hasRad,
-            'sent' => $allLabCovered([
-                'pk' => 'satu_sehat_specimen_lab',
-                'mb' => 'satu_sehat_specimen_lab_mb',
-                'rad' => 'satu_sehat_specimen_radiologi',
-            ], 'id_specimen'),
+            'available' => $hasLabMapped || $sentSP,
+            'sent' => $sentSP,
         ];
+
+        $sentOB = $allLabCovered([
+            'pk' => 'satu_sehat_observation_lab',
+            'mb' => 'satu_sehat_observation_lab_mb',
+            'rad' => 'satu_sehat_observation_radiologi',
+        ], 'id_observation');
         $manifest[] = [
             'type' => 'Observation',
-            'available' => $hasLabPk || $hasLabMb || $hasRad,
-            'sent' => $allLabCovered([
-                'pk' => 'satu_sehat_observation_lab',
-                'mb' => 'satu_sehat_observation_lab_mb',
-                'rad' => 'satu_sehat_observation_radiologi',
-            ], 'id_observation'),
+            'available' => $hasLabMapped || $sentOB,
+            'sent' => $sentOB,
         ];
+
+        $sentDR = $allLabCovered([
+            'pk' => 'satu_sehat_diagnosticreport_lab',
+            'mb' => 'satu_sehat_diagnosticreport_lab_mb',
+            'rad' => 'satu_sehat_diagnosticreport_radiologi',
+        ], 'id_diagnosticreport');
         $manifest[] = [
             'type' => 'DiagnosticReport',
-            'available' => $hasLabPk || $hasLabMb || $hasRad,
-            'sent' => $allLabCovered([
-                'pk' => 'satu_sehat_diagnosticreport_lab',
-                'mb' => 'satu_sehat_diagnosticreport_lab_mb',
-                'rad' => 'satu_sehat_diagnosticreport_radiologi',
-            ], 'id_diagnosticreport'),
+            'available' => $hasLabMapped || $sentDR,
+            'sent' => $sentDR,
         ];
 
-        // 9. Medication — keyed by kode_brng (KFA lookup). sent iff a drug on
-        //    this visit's prescriptions has a real id.
+        // 9. Medication — keyed by kode_brng (KFA lookup).
+        $hasMedicationRows = $hasData("
+            SELECT 1 FROM resep_obat ro
+            INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+            INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = rd.kode_brng
+            WHERE ro.no_rawat = ?
+            UNION ALL
+            SELECT 1 FROM detail_pemberian_obat dpo
+            INNER JOIN satu_sehat_mapping_obat ssmo ON ssmo.kode_brng = dpo.kode_brng
+            WHERE dpo.no_rawat = ?
+        ", [$noRawat, $noRawat]);
+        $sentMedication = $hasData("
+            SELECT 1 FROM resep_obat ro
+            INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
+            INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = rd.kode_brng
+            WHERE ro.no_rawat = ? AND ssm.id_medication NOT IN ('', '-')", [$noRawat]);
         $manifest[] = [
             'type' => 'Medication',
-            'available' => $hasMeds,
-            'sent' => $hasData("
-                SELECT 1 FROM resep_obat ro
-                INNER JOIN resep_dokter rd ON rd.no_resep = ro.no_resep
-                INNER JOIN satu_sehat_medication ssm ON ssm.kode_brng = rd.kode_brng
-                WHERE ro.no_rawat = ? AND ssm.id_medication NOT IN ('', '-')", [$noRawat]),
+            'available' => $hasMedicationRows || $sentMedication,
+            'sent' => $sentMedication,
         ];
 
-        // 10. Immunization — from detail_pemberian_obat + mapping_vaksin (CLI source)
+        // 10. Immunization — from detail_pemberian_obat + mapping_vaksin
+        $hasImmunization = $hasData("
+            SELECT COUNT(*) FROM detail_pemberian_obat dpo
+            JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng
+            WHERE dpo.no_rawat = ? AND dpo.no_batch <> ''", [$noRawat]);
+        $sentImmunization = $hasData("SELECT COUNT(*) FROM satu_sehat_immunization WHERE no_rawat = ? AND id_immunization NOT IN ('', '-')", [$noRawat]);
         $manifest[] = [
             'type' => 'Immunization',
-            'available' => $hasData("
-                SELECT COUNT(*) FROM detail_pemberian_obat dpo
-                JOIN satu_sehat_mapping_vaksin smv ON smv.kode_brng = dpo.kode_brng
-                WHERE dpo.no_rawat = ? AND dpo.no_batch <> ''", [$noRawat]),
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_immunization WHERE no_rawat = ? AND id_immunization NOT IN ('', '-')", [$noRawat]),
+            'available' => $hasImmunization || $sentImmunization,
+            'sent' => $sentImmunization,
         ];
 
         // 11. Composition — available after discharge (nota exists)
+        $hasComposition = $hasData("SELECT 1 FROM nota_jalan WHERE no_rawat = ?", [$noRawat])
+            || $hasData("SELECT 1 FROM nota_inap WHERE no_rawat = ?", [$noRawat]);
+        $sentComposition = $hasData("SELECT COUNT(*) FROM satu_sehat_composition WHERE no_rawat = ? AND id_composition NOT IN ('', '-')", [$noRawat]);
         $manifest[] = [
             'type' => 'Composition',
-            'available' => $hasData("SELECT COUNT(*) FROM nota_jalan WHERE no_rawat = ?", [$noRawat])
-                || $hasData("SELECT COUNT(*) FROM nota_inap WHERE no_rawat = ?", [$noRawat]),
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_composition WHERE no_rawat = ? AND id_composition NOT IN ('', '-')", [$noRawat]),
+            'available' => $hasComposition || $sentComposition,
+            'sent' => $sentComposition,
         ];
 
         // 12. QuestionnaireResponse — from telaah_farmasi joined via resep_obat
+        $hasQR = $hasData("
+            SELECT 1 FROM resep_obat ro
+            INNER JOIN telaah_farmasi tf ON tf.no_resep = ro.no_resep
+            WHERE ro.no_rawat = ?", [$noRawat]);
+        $sentQR = $hasData("
+            SELECT 1 FROM resep_obat ro
+            INNER JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = ro.no_resep
+            WHERE ro.no_rawat = ? AND ssqr.id_questionresponse NOT IN ('', '-')", [$noRawat]);
         $manifest[] = [
             'type' => 'QuestionnaireResponse',
-            'available' => $hasData("
-                SELECT 1 FROM resep_obat ro
-                INNER JOIN telaah_farmasi tf ON tf.no_resep = ro.no_resep
-                WHERE ro.no_rawat = ?", [$noRawat]),
-            'sent' => $hasData("
-                SELECT 1 FROM resep_obat ro
-                INNER JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = ro.no_resep
-                WHERE ro.no_rawat = ? AND ssqr.id_questionresponse NOT IN ('', '-')", [$noRawat]),
+            'available' => $hasQR || $sentQR,
+            'sent' => $sentQR,
         ];
 
-        // 13. Patient — REMOVED (the old entry was a metadata stub, not a FHIR
-        // resource, and silently dropped at send). Patients are registered
-        // via the CLI / SATUSEHAT portal; the panel only looks up IHS ids.
-
-        // 14. EpisodeOfCare — requires diagnosis + Encounter + Condition.
-        // sent = a row exists with a real id (the CLI stores raw status
-        // 'Ralan'/'Ranap' here; its own gating is "any row in the table").
+        // 13. EpisodeOfCare — requires recognized government health program diagnosis (TB, HIV, ANC, Stunting, etc.)
+        $hasEocData = $hasData("
+            SELECT COUNT(*) FROM diagnosa_pasien dp
+            WHERE dp.no_rawat = ?
+              AND (dp.kd_penyakit LIKE 'A15%' OR dp.kd_penyakit LIKE 'A16%' OR dp.kd_penyakit LIKE 'A17%'
+                OR dp.kd_penyakit LIKE 'A18%' OR dp.kd_penyakit LIKE 'A19%' OR dp.kd_penyakit LIKE 'B20%'
+                OR dp.kd_penyakit LIKE 'B21%' OR dp.kd_penyakit LIKE 'B22%' OR dp.kd_penyakit LIKE 'B23%'
+                OR dp.kd_penyakit LIKE 'B24%' OR dp.kd_penyakit LIKE 'O%' OR dp.kd_penyakit LIKE 'E40%'
+                OR dp.kd_penyakit LIKE 'E41%' OR dp.kd_penyakit LIKE 'E42%' OR dp.kd_penyakit LIKE 'E43%'
+                OR dp.kd_penyakit LIKE 'E44%' OR dp.kd_penyakit LIKE 'E45%' OR dp.kd_penyakit LIKE 'E46%')
+        ", [$noRawat]);
+        $sentEoc = $hasData("SELECT COUNT(*) FROM satu_sehat_episode_of_care WHERE no_rawat = ? AND id_episode_of_care NOT IN ('', '-')", [$noRawat]);
         $manifest[] = [
             'type' => 'EpisodeOfCare',
-            'available' => $hasData("SELECT COUNT(*) FROM diagnosa_pasien dp WHERE dp.no_rawat = ?", [$noRawat])
-                && $hasData("SELECT COUNT(*) FROM satu_sehat_encounter WHERE no_rawat = ?", [$noRawat])
-                && $hasData("SELECT COUNT(*) FROM satu_sehat_condition WHERE no_rawat = ?", [$noRawat]),
-            'sent' => $hasData("SELECT COUNT(*) FROM satu_sehat_episode_of_care WHERE no_rawat = ? AND id_episode_of_care NOT IN ('', '-')", [$noRawat]),
+            'available' => $hasEocData || $sentEoc,
+            'sent' => $sentEoc,
         ];
 
-        // 15. ObservationTTV — from pemeriksaan_ralan/ranap (any of 10 vital signs)
+        // 14. ObservationTTV — only available if at least one vital sign value is entered
+        $hasTtvData = $hasData("
+            SELECT 1 FROM (
+                SELECT 1 FROM pemeriksaan_ralan WHERE no_rawat = ? AND (
+                    (suhu_tubuh IS NOT NULL AND suhu_tubuh <> '' AND suhu_tubuh <> '-') OR
+                    (tensi IS NOT NULL AND tensi <> '' AND tensi <> '-') OR
+                    (nadi IS NOT NULL AND nadi <> '' AND nadi <> '-') OR
+                    (respirasi IS NOT NULL AND respirasi <> '' AND respirasi <> '-') OR
+                    (tinggi IS NOT NULL AND tinggi <> '' AND tinggi <> '-') OR
+                    (berat IS NOT NULL AND berat <> '' AND berat <> '-') OR
+                    (spo2 IS NOT NULL AND spo2 <> '' AND spo2 <> '-') OR
+                    (gcs IS NOT NULL AND gcs <> '' AND gcs <> '-')
+                )
+                UNION ALL
+                SELECT 1 FROM pemeriksaan_ranap WHERE no_rawat = ? AND (
+                    (suhu_tubuh IS NOT NULL AND suhu_tubuh <> '' AND suhu_tubuh <> '-') OR
+                    (tensi IS NOT NULL AND tensi <> '' AND tensi <> '-') OR
+                    (nadi IS NOT NULL AND nadi <> '' AND nadi <> '-') OR
+                    (respirasi IS NOT NULL AND respirasi <> '' AND respirasi <> '-') OR
+                    (tinggi IS NOT NULL AND tinggi <> '' AND tinggi <> '-') OR
+                    (berat IS NOT NULL AND berat <> '' AND berat <> '-') OR
+                    (spo2 IS NOT NULL AND spo2 <> '' AND spo2 <> '-') OR
+                    (gcs IS NOT NULL AND gcs <> '' AND gcs <> '-')
+                )
+            ) t LIMIT 1
+        ", [$noRawat, $noRawat]);
+
+        $sentTtv = $hasData("
+            SELECT 1 FROM (
+                SELECT id_observation FROM satu_sehat_observationttvsuhu WHERE no_rawat = ?
+                UNION ALL SELECT id_observation FROM satu_sehat_observationttvrespirasi WHERE no_rawat = ?
+                UNION ALL SELECT id_observation FROM satu_sehat_observationttvnadi WHERE no_rawat = ?
+                UNION ALL SELECT id_observation FROM satu_sehat_observationttvspo2 WHERE no_rawat = ?
+                UNION ALL SELECT id_observation FROM satu_sehat_observationttvtb WHERE no_rawat = ?
+                UNION ALL SELECT id_observation FROM satu_sehat_observationttvbb WHERE no_rawat = ?
+                UNION ALL SELECT id_observation FROM satu_sehat_observationttvlp WHERE no_rawat = ?
+                UNION ALL SELECT id_observation FROM satu_sehat_observationttvtensi WHERE no_rawat = ?
+                UNION ALL SELECT id_observation FROM satu_sehat_observationttvgcs WHERE no_rawat = ?
+                UNION ALL SELECT id_observation FROM satu_sehat_observationttvkesadaran WHERE no_rawat = ?
+            ) t WHERE id_observation NOT IN ('', '-') LIMIT 1", [$noRawat, $noRawat, $noRawat, $noRawat, $noRawat, $noRawat, $noRawat, $noRawat, $noRawat, $noRawat]);
+
         $manifest[] = [
             'type' => 'ObservationTTV',
-            'available' => $hasData("SELECT COUNT(*) FROM pemeriksaan_ralan WHERE no_rawat = ?", [$noRawat])
-                || $hasData("SELECT COUNT(*) FROM pemeriksaan_ranap WHERE no_rawat = ?", [$noRawat]),
-            'sent' => $hasData("
-                SELECT 1 FROM (
-                    SELECT id_observation FROM satu_sehat_observationttvsuhu WHERE no_rawat = ?
-                    UNION ALL SELECT id_observation FROM satu_sehat_observationttvrespirasi WHERE no_rawat = ?
-                    UNION ALL SELECT id_observation FROM satu_sehat_observationttvnadi WHERE no_rawat = ?
-                    UNION ALL SELECT id_observation FROM satu_sehat_observationttvspo2 WHERE no_rawat = ?
-                    UNION ALL SELECT id_observation FROM satu_sehat_observationttvtb WHERE no_rawat = ?
-                    UNION ALL SELECT id_observation FROM satu_sehat_observationttvbb WHERE no_rawat = ?
-                    UNION ALL SELECT id_observation FROM satu_sehat_observationttvlp WHERE no_rawat = ?
-                    UNION ALL SELECT id_observation FROM satu_sehat_observationttvtensi WHERE no_rawat = ?
-                    UNION ALL SELECT id_observation FROM satu_sehat_observationttvgcs WHERE no_rawat = ?
-                    UNION ALL SELECT id_observation FROM satu_sehat_observationttvkesadaran WHERE no_rawat = ?
-                ) t WHERE id_observation NOT IN ('', '-')", [$noRawat, $noRawat, $noRawat, $noRawat, $noRawat, $noRawat, $noRawat, $noRawat, $noRawat, $noRawat]),
+            'available' => $hasTtvData || $sentTtv,
+            'sent' => $sentTtv,
         ];
 
-        // Sort: available first, then by type name
-        usort($manifest, function ($a, $b) {
+        // Attach dependency declarations
+        $prereqs = [
+            'Condition'             => ['Encounter'],
+            'Procedure'             => ['Encounter'],
+            'AllergyIntolerance'    => ['Encounter'],
+            'Observation'           => ['Encounter'],
+            'ObservationTTV'        => ['Encounter'],
+            'MedicationRequest'     => ['Encounter'],
+            'MedicationDispense'    => ['Encounter', 'MedicationRequest'],
+            'MedicationStatement'   => ['Encounter'],
+            'ServiceRequest'        => ['Encounter'],
+            'Specimen'              => ['Encounter', 'ServiceRequest'],
+            'DiagnosticReport'      => ['Encounter', 'ServiceRequest'],
+            'Immunization'          => ['Encounter'],
+            'CarePlan'              => ['Encounter'],
+            'ClinicalImpression'    => ['Encounter'],
+            'QuestionnaireResponse' => ['Encounter'],
+            'ImagingStudy'          => ['Encounter', 'ServiceRequest'],
+            'Composition'           => ['Encounter'],
+            'EpisodeOfCare'         => ['Encounter'],
+        ];
+
+        foreach ($manifest as &$item) {
+            $item['depends_on'] = $prereqs[$item['type']] ?? [];
+        }
+        unset($item);
+
+        // Sort: available first, then by canonical FHIR dependency hierarchy
+        $dependencyOrder = [
+            'EpisodeOfCare',
+            'Encounter',
+            'Medication',
+            'ServiceRequest',
+            'Specimen',
+            'Condition',
+            'Observation',
+            'ObservationTTV',
+            'Procedure',
+            'AllergyIntolerance',
+            'MedicationRequest',
+            'Immunization',
+            'MedicationDispense',
+            'MedicationStatement',
+            'DiagnosticReport',
+            'QuestionnaireResponse',
+            'ClinicalImpression',
+            'CarePlan',
+            'ImagingStudy',
+            'Composition',
+        ];
+
+        usort($manifest, function ($a, $b) use ($dependencyOrder) {
             if ($a['available'] !== $b['available']) {
                 return $a['available'] ? -1 : 1;
             }
-            return strcmp($a['type'], $b['type']);
+            $posA = array_search($a['type'], $dependencyOrder, true);
+            $posB = array_search($b['type'], $dependencyOrder, true);
+            $idxA = $posA !== false ? $posA : 999;
+            $idxB = $posB !== false ? $posB : 999;
+            return $idxA <=> $idxB;
         });
 
         return $manifest;

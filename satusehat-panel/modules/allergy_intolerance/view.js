@@ -67,8 +67,9 @@ function renderTable(list) {
             <tbody>
                 ${list.map(r => {
                     const st = r.status_info || {};
-                    const keyStr = `${r.no_rawat}|${r.tgl_perawatan}|${r.jam_rawat}`;
-                    const canSend = st.status === 'ready' || st.status === 'failed';
+                    const keyStr = `${r.no_rawat}|${r.tgl_perawatan}|${r.jam_rawat}|${r.status_rawat || 'Ralan'}`;
+                    const canSend = Boolean(st.can_send ?? (st.status !== 'blocked'));
+                    const btnLabel = st.status === 'update_needed' ? 'Update' : 'Kirim';
                     return `
                         <tr data-key="${escapeHtml(keyStr)}">
                             <td><input type="checkbox" class="row-check" value="${escapeHtml(JSON.stringify(r.item_key))}" ${canSend ? '' : 'disabled'}></td>
@@ -94,8 +95,8 @@ function renderTable(list) {
                                     <button class="btn btn-ghost btn-sm btn-inspect" type="button" data-key="${escapeHtml(keyStr)}" title="Lihat JSON / Respon">
                                         JSON
                                     </button>
-                                    <button class="btn btn-primary btn-sm btn-send-single" type="button" data-key="${escapeHtml(JSON.stringify(r.item_key))}" data-keystr="${escapeHtml(keyStr)}" ${canSend ? '' : 'disabled'}>
-                                        Kirim
+                                    <button class="btn ${st.status === 'update_needed' ? 'btn-warning' : 'btn-primary'} btn-sm btn-send-single" type="button" data-key="${escapeHtml(JSON.stringify(r.item_key))}" data-keystr="${escapeHtml(keyStr)}" ${canSend ? '' : 'disabled'}>
+                                        ${btnLabel}
                                     </button>
                                 </div>
                             </td>

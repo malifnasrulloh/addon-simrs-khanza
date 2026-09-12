@@ -353,6 +353,126 @@ class SatuSehatClient
     }
 
     /**
+     * Dual-strategy update flow: PUT (full resource) with graceful PATCH fallback.
+     *
+     * Used by status-transition resources (Encounter, Condition, AllergyIntolerance, EpisodeOfCare)
+     * where in-place full replacement is preferred, but targeted JSON Patch operations serve as
+     * an authorized fallback if PUT fails with validation or conflict errors (HTTP 400, 409, 422).
+     *
+     * Invariants:
+     * - HTTP 403 (Permission / Foreign Resource): Never fall back to PATCH (caches denial to prevent resource locks).
+     * - HTTP 429 (Rate Limit): Never fall back to PATCH (backs off immediately).
+     * - HTTP 5xx (Server Error): Never fall back to PATCH (retried on next run).
+     * - HTTP 400, 409, 422: Falls back to PATCH operations.
+     * - If PATCH encounters server-side merge_failed / 409: retries once with jitter before giving up.
+     *
+     * @param string $endpoint        Resource endpoint, e.g. "/Encounter/{id}"
+     * @param array  $putPayload      Full FHIR resource payload
+     * @param array  $patchOperations JSON Patch operations for fallback
+     */
+    public function putWithPatchFallback(string $endpoint, array $putPayload, array $patchOperations): array
+    {
+        // ── Denial cap: stop hammering after N denials this run ───────
+        if (self::$denialCount >= self::PERMISSION_DENIAL_CAP) {
+            $this->log->warning("[UPDATE] {$endpoint}: Skipped — permission-denial cap (" . self::PERMISSION_DENIAL_CAP . ") reached this run.");
+            return [
+                'success'        => true,
+                'code'           => 200,
+                'message'        => 'Permission-denial cap reached this run',
+                'data'           => [],
+                'permission_cap' => true,
+            ];
+        }
+
+        // ── Permission cache — skip if previously denied ──────────────
+        if ($this->isPermissionDenied($endpoint)) {
+            $this->log->info("[UPDATE] {$endpoint}: Skipped (cached permission denied)");
+            return [
+                'success'         => true,
+                'code'            => 200,
+                'message'         => 'Permission denied (cached)',
+                'data'            => [],
+                'permission_skip' => true,
+            ];
+        }
+
+        // ── Ownership pre-check ───────────────────────────────────────
+        $ownership = $this->checkEditOwnership($endpoint);
+        if ($ownership !== null) {
+            $this->log->warning("[UPDATE] {$endpoint}: {$ownership['message']}");
+            return [
+                'success'        => true,
+                'code'           => 200,
+                'message'        => $ownership['message'],
+                'data'           => [],
+                'ownership_skip' => true,
+                'owner_org'      => $ownership['owner_org'],
+            ];
+        }
+
+        // ── Attempt 1: PUT (full resource replacement) ────────────────
+        $putResult = $this->request('PUT', $endpoint, $putPayload);
+        if ($putResult['success']) {
+            $this->log->info("[UPDATE] {$endpoint}: PUT succeeded");
+            return $putResult;
+        }
+
+        $putErrorMsg = self::extractErrorMsg($putResult);
+        $putCode     = (int) ($putResult['code'] ?? 0);
+
+        // Permission denied on PUT → cache permanently (never retry, never fall back to PATCH)
+        if (self::isPermissionMessage($putErrorMsg)) {
+            $this->log->warning("[UPDATE] {$endpoint}: PUT permission denied — caching as permanent");
+            $this->markPermissionDenied($endpoint);
+            return [
+                'success'         => true,
+                'code'            => 200,
+                'message'         => 'Permission denied (cached): "You don\'t have permission to edit resource".',
+                'data'            => [],
+                'permission_skip' => true,
+            ];
+        }
+
+        // Check if error qualifies for fallback (HTTP 400, 409, 422)
+        $isQualifyingFallback = in_array($putCode, [400, 409, 422], true);
+
+        if (!$isQualifyingFallback || empty($patchOperations)) {
+            $this->log->warning("[UPDATE] {$endpoint}: PUT failed (HTTP {$putCode}: {$putErrorMsg}) — no PATCH fallback (non-qualifying code or empty ops)");
+            return $putResult;
+        }
+
+        // ── Attempt 2: Fallback to PATCH ──────────────────────────────
+        $opCount = count($patchOperations);
+        $this->log->warning("[UPDATE] {$endpoint}: PUT failed (HTTP {$putCode}: {$putErrorMsg}) → Falling back to PATCH ({$opCount} ops)");
+        $patchResult = $this->request('PATCH', $endpoint, $patchOperations, 'application/json-patch+json');
+
+        if ($patchResult['success']) {
+            $this->log->info("[UPDATE] {$endpoint}: ✓ Updated via PATCH fallback");
+            return $patchResult;
+        }
+
+        $patchErrorMsg = self::extractErrorMsg($patchResult);
+        $patchCode     = (int) ($patchResult['code'] ?? 0);
+
+        // Check for server-side merge_failed or 409 conflict: retry once with jitter
+        if (stripos($patchErrorMsg, 'merge_failed') !== false || $patchCode === 409) {
+            $jitterUs = mt_rand(250000, 800000);
+            $this->log->info("[UPDATE] {$endpoint}: PATCH merge conflict ({$patchErrorMsg}) — retrying in " . round($jitterUs / 1000) . "ms...");
+            usleep($jitterUs);
+
+            $patchResult = $this->request('PATCH', $endpoint, $patchOperations, 'application/json-patch+json');
+            if ($patchResult['success']) {
+                $this->log->info("[UPDATE] {$endpoint}: ✓ Updated via PATCH fallback (retry)");
+                return $patchResult;
+            }
+            $patchErrorMsg = self::extractErrorMsg($patchResult);
+        }
+
+        $this->log->warning("[UPDATE] {$endpoint}: ✗ Both PUT and PATCH fallback failed (PATCH: {$patchErrorMsg})");
+        return $patchResult;
+    }
+
+    /**
      * Ownership fields that define WHICH Organization created a resource,
      * grounded in the official SATUSEHAT examples. Medication.manufacturer
      * is deliberately EXCLUDED — it is the drug company, always foreign.

@@ -45,6 +45,26 @@ final class CompositionAndDispenseTest extends TestCase
         $this->assertContains('urn:uuid:obs-1', $sectionRefs);
     }
 
+    public function testCompositionFormatsRawUuidsAsUrnUuid(): void
+    {
+        $row = [
+            'no_rawat' => '2026/08/08/0002', 'nm_pasien' => 'PASIEN DUA', 'nama' => 'Dr. Y',
+            'status_lanjut' => 'Ralan', 'kd_poli' => 'GIG',
+            'tgl_registrasi' => '2026-08-08', 'jam_reg' => '10:00:00',
+        ];
+        $rawUuid = '4ee8f984-a3c7-46fd-87d5-1d9a4cd2372f';
+        $p = \SatuSehatPayloadBuilder::composition(
+            '1000000001', $row, 'ihs-pas', 'ihs-dok', 'enc-1',
+            [
+                'Observation' => [$rawUuid],
+            ],
+            '',
+            'final'
+        );
+
+        $this->assertSame('urn:uuid:' . $rawUuid, $p['section'][0]['entry'][0]['reference']);
+    }
+
     public function testCompositionSectionEmptyWithoutRefs(): void
     {
         $row = ['no_rawat' => 'V-1', 'nm_pasien' => 'NAPSA', 'nama' => 'Dr. X', 'status_lanjut' => 'Ralan', 'kd_poli' => 'UMU'];

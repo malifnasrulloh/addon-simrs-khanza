@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Core;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 /**
  * Global error handling contract:
  *  - exceptions become clean JSON (never stack traces / __DIR__ leaks)

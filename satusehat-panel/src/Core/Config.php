@@ -2,6 +2,8 @@
 
 namespace SatusehatPanel\Core;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 class Config
 {
     private static array $loaded = [];

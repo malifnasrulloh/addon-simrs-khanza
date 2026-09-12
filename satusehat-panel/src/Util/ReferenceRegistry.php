@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Util;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 /**
  * ReferenceRegistry — resolve cross-resource references inside a transaction
  * Bundle by per-instance business keys instead of first-wins-per-type.
@@ -41,6 +43,21 @@ final class ReferenceRegistry
     public function count(string $resourceType): int
     {
         return count($this->entries[$resourceType] ?? []);
+    }
+
+    /**
+     * Check if a raw UUID is registered in this registry.
+     */
+    public function hasUuid(string $uuid): bool
+    {
+        foreach ($this->entries as $entries) {
+            foreach ($entries as $entry) {
+                if ($entry['uuid'] === $uuid) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** @return array<string, list<string>> resourceType => registered uuids */

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Modules\Composition;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\BaseModuleController;
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Util\PayloadAdapter;
@@ -67,7 +69,6 @@ class Controller extends BaseModuleController
             $stmt->execute($params);
             $rows = $stmt->fetchAll() ?: [];
 
-            $sqlite = Database::getSqlite();
             $items = [];
 
             foreach ($rows as $r) {
@@ -125,7 +126,7 @@ class Controller extends BaseModuleController
         $patient = $stmt->fetch();
         if (!$patient) return ['success' => false, 'error' => 'Pasien tidak ditemukan'];
 
-        $payloads = PayloadAdapter::build('Composition', $key, $patient);
+        $payloads = PayloadAdapter::build('Composition', $key, $patient, [], true);
         return ['success' => true, 'data' => $payloads[0] ?? null];
     }
 
@@ -147,7 +148,7 @@ class Controller extends BaseModuleController
                 $patient = $stmt->fetch();
                 if (!$patient) throw new \RuntimeException("Pasien {$noRawat} tidak ditemukan");
 
-                $payloads = PayloadAdapter::build('Composition', $noRawat, $patient);
+                $payloads = PayloadAdapter::build('Composition', $noRawat, $patient, [], true);
                 if (!empty($payloads)) {
                     return ['payload' => $payloads[0], 'meta' => $payloads[0]['_panel_persist_keys'] ?? []];
                 }

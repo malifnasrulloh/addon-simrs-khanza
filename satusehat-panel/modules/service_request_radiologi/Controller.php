@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Modules\ServiceRequestRadiologi;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\BaseModuleController;
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Util\PayloadAdapter;
@@ -33,11 +35,11 @@ class Controller extends BaseModuleController
         }
 
         $sql = "
-            SELECT 
+            SELECT
                 pr.noorder, pr.no_rawat, pr.tgl_permintaan, pr.jam_permintaan, pr.diagnosa_klinis,
                 rp.tgl_registrasi, rp.status_bayar, rp.status_lanjut,
                 pj.no_rkm_medis, pj.nm_pasien, pj.no_ktp as nik_pasien,
-                ppr.kd_jenis_prw, jpr.nm_perawatan,
+                ppr.kd_jenis_prw, jpr.nm_perawatan, smr.code,
                 COALESCE(peg.nama, '') as nm_dokter,
                 COALESCE(peg.no_ktp, '') as nik_dokter,
                 IFNULL(sse.id_encounter, '') as id_encounter,
@@ -61,7 +63,6 @@ class Controller extends BaseModuleController
             $stmt->execute($params);
             $rows = $stmt->fetchAll() ?: [];
 
-            $sqlite = Database::getSqlite();
             $items = [];
 
             foreach ($rows as $r) {
@@ -71,6 +72,9 @@ class Controller extends BaseModuleController
                 $blockers = [];
                 if (empty($r['id_encounter'])) {
                     $blockers[] = 'encounter';
+                }
+                if (empty($r['code'])) {
+                    $blockers[] = 'Tindakan belum dipetakan ke SNOMED/LOINC';
                 }
                 if (empty($r['nik_pasien']) || strlen($r['nik_pasien']) < 16) {
                     $blockers[] = 'ihs_pasien';

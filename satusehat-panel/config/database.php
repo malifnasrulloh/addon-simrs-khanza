@@ -2,6 +2,8 @@
 /**
  * Database configuration for SATUSEHAT Admin Panel
  */
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 return [
     'sqlite' => [
         'path' => __DIR__ . '/../storage/panel.db',

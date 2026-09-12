@@ -5,6 +5,8 @@
  * hosts (T33). Every consumer (CredentialLocator, Settings UI, .env.example)
  * resolves through here; hardcoded api-satusehat hosts elsewhere are bugs.
  */
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 return [
     'dev' => [
         'label' => 'Development',

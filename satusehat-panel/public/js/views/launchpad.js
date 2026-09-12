@@ -34,6 +34,7 @@ export function showLaunchpadView() {
     if (auditView) auditView.hidden = true;
     if (settingsView) settingsView.hidden = true;
     if (rail) rail.hidden = true; // Launchpad is full-width bento grid
+    document.querySelector('.layout')?.classList.remove('has-rail');
 
     renderLaunchpad();
 }

@@ -14,6 +14,7 @@ ServerSignature Off
     RewriteEngine On
     RewriteRule ^(config|src|storage)(/|$) - [F,L]
     RewriteRule ^\.env$ - [F,L]
+    RewriteRule ^(js|css|fonts)/(.*)$ public/$1/$2 [L]
 </IfModule>
 
 # Security headers

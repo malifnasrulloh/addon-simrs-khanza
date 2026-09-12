@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Util;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 /**
  * RuleNumberResolver — resolves SATUSEHAT rule numbers to the official
  * Indonesian descriptions (config/rule_numbers.php, generated from the

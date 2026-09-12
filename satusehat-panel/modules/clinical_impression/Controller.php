@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Modules\ClinicalImpression;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\BaseModuleController;
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Util\PayloadAdapter;
@@ -63,7 +65,6 @@ class Controller extends BaseModuleController
             $stmt->execute($params);
             $rows = $stmt->fetchAll() ?: [];
 
-            $sqlite = Database::getSqlite();
             $items = [];
 
             foreach ($rows as $r) {
@@ -118,6 +119,9 @@ class Controller extends BaseModuleController
     {
         $parts = explode('|', $key);
         $noRawat = $parts[0];
+        $tgl = $parts[1] ?? '';
+        $jam = $parts[2] ?? '';
+        $status = $parts[3] ?? '';
         $db = Database::getMysql();
 
         $stmt = $db->prepare("
@@ -130,8 +134,19 @@ class Controller extends BaseModuleController
         $patient = $stmt->fetch();
         if (!$patient) return ['success' => false, 'error' => 'Pasien tidak ditemukan'];
 
-        $payloads = PayloadAdapter::build('ClinicalImpression', $noRawat, $patient);
-        return ['success' => true, 'data' => $payloads[0] ?? null];
+        $payloads = PayloadAdapter::build('ClinicalImpression', $noRawat, $patient, [], true);
+        $found = null;
+        foreach ($payloads as $p) {
+            $meta = $p['_panel_persist_keys']['keys'] ?? [];
+            if ((empty($tgl) || ($meta['tgl_perawatan'] ?? '') === $tgl) &&
+                (empty($jam) || ($meta['jam_rawat'] ?? '') === $jam) &&
+                (empty($status) || ($meta['status'] ?? '') === $status)) {
+                $found = $p;
+                break;
+            }
+        }
+
+        return ['success' => true, 'data' => $found ?? ($payloads[0] ?? null)];
     }
 
     public static function send(): array
@@ -140,8 +155,11 @@ class Controller extends BaseModuleController
             '/ClinicalImpression',
             function (array|string $itemKey): array {
                 $noRawat = is_array($itemKey) ? ($itemKey['no_rawat'] ?? '') : (string) $itemKey;
-                $db = Database::getMysql();
+                $tgl = is_array($itemKey) ? ($itemKey['tgl_perawatan'] ?? '') : '';
+                $jam = is_array($itemKey) ? ($itemKey['jam_rawat'] ?? '') : '';
+                $status = is_array($itemKey) ? ($itemKey['status'] ?? 'Ralan') : 'Ralan';
 
+                $db = Database::getMysql();
                 $stmt = $db->prepare("
                     SELECT rp.*, pj.nm_pasien, pj.no_ktp, pj.no_rkm_medis
                     FROM reg_periksa rp
@@ -152,8 +170,16 @@ class Controller extends BaseModuleController
                 $patient = $stmt->fetch();
                 if (!$patient) throw new \RuntimeException("Pasien {$noRawat} tidak ditemukan");
 
-                $payloads = PayloadAdapter::build('ClinicalImpression', $noRawat, $patient);
+                $payloads = PayloadAdapter::build('ClinicalImpression', $noRawat, $patient, [], true);
                 if (!empty($payloads)) {
+                    foreach ($payloads as $p) {
+                        $meta = $p['_panel_persist_keys']['keys'] ?? [];
+                        if ((empty($tgl) || ($meta['tgl_perawatan'] ?? '') === $tgl) &&
+                            (empty($jam) || ($meta['jam_rawat'] ?? '') === $jam) &&
+                            (empty($status) || ($meta['status'] ?? '') === $status)) {
+                            return ['payload' => $p, 'meta' => $p['_panel_persist_keys'] ?? []];
+                        }
+                    }
                     return ['payload' => $payloads[0], 'meta' => $payloads[0]['_panel_persist_keys'] ?? []];
                 }
                 throw new \RuntimeException("Payload ClinicalImpression tidak ditemukan");

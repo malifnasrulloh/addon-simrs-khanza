@@ -38,9 +38,14 @@ export function initAuditView() {
 }
 
 export function showAuditView() {
+    $('patient-list-view').hidden = true;
+    $('launchpad-view').hidden = true;
+    if ($('module-view')) $('module-view').hidden = true;
     $('table-wrap').hidden = true;
     $('audit-view').hidden = false;
     $('settings-view').hidden = true;
+    if ($('filter-rail')) $('filter-rail').hidden = true;
+    document.querySelector('.layout')?.classList.remove('has-rail');
     state.auditPage = state.auditPage || 1;
     loadAudit();
     loadAuditStats();

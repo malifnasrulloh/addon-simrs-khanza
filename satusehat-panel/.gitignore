@@ -4,6 +4,9 @@ storage/*.db
 storage/*.db-wal
 storage/*.db-shm
 storage/*.log
+storage/*.json
+storage/*.json.lock
+storage/panel_*/
 storage/.satusehat_env.tmp
 
 # OS / editor

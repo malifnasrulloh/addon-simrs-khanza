@@ -31,6 +31,9 @@ final class ReferenceRewriteTest extends TestCase
         ]);
         $this->assertSame('uuid-enc', $r->resolve('Encounter', []));
         $this->assertSame('uuid-comp', $r->resolve('Composition', []));
+        $this->assertTrue($r->hasUuid('uuid-enc'));
+        $this->assertTrue($r->hasUuid('uuid-comp'));
+        $this->assertFalse($r->hasUuid('uuid-nonexistent'));
     }
 
     public function testTwoMedicationsResolveByKodeBrng(): void

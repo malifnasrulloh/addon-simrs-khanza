@@ -2,6 +2,8 @@
 
 namespace SatusehatPanel\Core;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use PDO;
 use PDOException;
 
@@ -25,10 +27,16 @@ class Database
             $config = require $path;
             $sqlitePath = self::$sqlitePathOverride ?? $config['sqlite']['path'];
 
-            // Ensure directory exists
+            // Ensure directory exists and attempt to ensure write permissions
             $dir = dirname($sqlitePath);
             if (!is_dir($dir)) {
-                mkdir($dir, 0755, true);
+                @mkdir($dir, 0775, true);
+            }
+            if (is_dir($dir) && !is_writable($dir)) {
+                @chmod($dir, 0775);
+            }
+            if (file_exists($sqlitePath) && !is_writable($sqlitePath)) {
+                @chmod($sqlitePath, 0664);
             }
 
             self::$sqlite = new PDO(
@@ -45,9 +53,19 @@ class Database
             // Wait up to 5s for locks instead of failing instantly — parallel
             // FPM workers inserting audit rows can otherwise hit "database is locked"
             self::$sqlite->exec('PRAGMA busy_timeout = 5000');
-            self::$sqlite->exec('PRAGMA journal_mode = WAL');
+            try {
+                self::$sqlite->exec('PRAGMA journal_mode = WAL');
+            } catch (\Throwable $e) {
+                // WAL mode requires write access to create -wal/-shm files.
+                // If directory is currently read-only, keep default journal mode.
+            }
 
-            self::migrateSqlite();
+            try {
+                self::migrateSqlite();
+            } catch (\Throwable $e) {
+                // Do not crash connection on read queries if schema is already readable.
+                error_log('[PANEL] SQLite migration deferred: ' . $e->getMessage());
+            }
         }
 
         return self::$sqlite;
@@ -78,6 +96,27 @@ class Database
     private static function migrateSqlite(): void
     {
         $db = self::$sqlite;
+
+        // Fast path: if schema already exists, avoid executing write/DDL queries on every connection
+        try {
+            $hasAudit = $db->query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit_logs'")->fetchColumn();
+            if ($hasAudit) {
+                $hasEocLinked = false;
+                try {
+                    $encCols = $db->query("PRAGMA table_info(encounter_state)")->fetchAll(\PDO::FETCH_COLUMN, 1);
+                    $hasEocLinked = in_array('eoc_linked', $encCols, true);
+                } catch (\Throwable $e) {
+                    $hasEocLinked = true;
+                }
+
+                if ($hasEocLinked) {
+                    return; // All tables and columns are up-to-date; skip all DDL/DML writes!
+                }
+            }
+        } catch (\Throwable $e) {
+            // Cannot query sqlite_master; abort migration silently
+            return;
+        }
 
         // Audit logs table
         $db->exec("
@@ -156,6 +195,37 @@ class Database
         } catch (\Throwable $e) {
             error_log('[PANEL] login_attempts unique upgrade failed: ' . $e->getMessage());
         }
+
+        // Local state tables for status transition tracking
+        $db->exec("
+            CREATE TABLE IF NOT EXISTS encounter_state (
+                no_rawat VARCHAR(50) PRIMARY KEY,
+                status VARCHAR(20) NOT NULL,
+                eoc_linked INTEGER DEFAULT 0,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+
+        try {
+            $encCols = $db->query("PRAGMA table_info(encounter_state)")->fetchAll(\PDO::FETCH_COLUMN, 1);
+            if (!in_array('eoc_linked', $encCols, true)) {
+                $db->exec("ALTER TABLE encounter_state ADD COLUMN eoc_linked INTEGER DEFAULT 0");
+            }
+        } catch (\Throwable $e) { }
+
+        $db->exec("
+            CREATE TABLE IF NOT EXISTS episode_of_care_state (
+                composite_key VARCHAR(150) PRIMARY KEY,
+                no_rawat VARCHAR(50) NOT NULL,
+                status VARCHAR(20) NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+
+        // Auto-heal any stale privacy_error states in episode_of_care_state
+        try {
+            $db->exec("UPDATE episode_of_care_state SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE status = 'privacy_error'");
+        } catch (\Throwable $e) { }
 
         // Indexes
         $db->exec("CREATE INDEX IF NOT EXISTS idx_audit_patient ON audit_logs(patient_id)");

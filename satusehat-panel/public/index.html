@@ -7,19 +7,15 @@
     <meta name="description" content="Panel admin untuk kirim data pasien SIMRS Khanza ke SATUSEHAT via Bundle transaction">
     <meta name="theme-color" content="#0d9b6c">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%230d9b6c'/%3E%3Cpath d='M5 17h5l3-7 5 12 3-7h6' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-    <link rel="stylesheet" href="css/tokens.css">
-    <link rel="stylesheet" href="css/base.css">
-    <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/tokens.css?v=20260828_2">
+    <link rel="stylesheet" href="css/base.css?v=20260828_2">
+    <link rel="stylesheet" href="css/layout.css?v=20260828_2">
     <script>
-    // Pre-paint theme: apply the saved preference (or system scheme) before
-    // the first render so dark users never see a light flash, and tokens.css
-    // needs only a single dark block (no @media duplicate).
+    // Pre-paint theme: default is dark mode unless explicitly set to 'light'
     (function () {
         var saved = null;
         try { saved = localStorage.getItem('sh-theme'); } catch (e) {}
-        document.documentElement.dataset.theme =
-            (saved === 'dark' || saved === 'light') ? saved
-            : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.dataset.theme = (saved === 'light') ? 'light' : 'dark';
     })();
     </script>
 </head>
@@ -100,7 +96,7 @@
         <main class="layout">
             <!-- Filter rail (sidebar at desktop, sheet on mobile) -->
             <div class="rail-backdrop" id="rail-backdrop" hidden></div>
-            <aside class="rail" id="filter-rail" aria-label="Filter dan statistik">
+            <aside class="rail" id="filter-rail" aria-label="Filter dan statistik" hidden>
                 <div class="rail-head">
                     <h2>Filter</h2>
                     <button class="btn-icon rail-close" id="rail-close" type="button" aria-label="Tutup filter">
@@ -219,38 +215,42 @@
                         </div>
                     </div>
 
-                    <div class="audit-filters module-filters" id="module-filters" aria-label="Filter modul">
-                        <div class="field">
-                            <label class="field-label" for="mod-filter-since">Dari</label>
-                            <input type="date" id="mod-filter-since" class="input">
+                    <div class="module-filters" id="module-filters" aria-label="Filter modul">
+                        <div class="filter-toolbar">
+                            <div class="field filter-item filter-since">
+                                <label class="field-label" for="mod-filter-since">Dari</label>
+                                <input type="date" id="mod-filter-since" class="input">
+                            </div>
+                            <div class="field filter-item filter-until">
+                                <label class="field-label" for="mod-filter-until">Sampai</label>
+                                <input type="date" id="mod-filter-until" class="input">
+                            </div>
+                            <div class="field filter-item filter-billing">
+                                <label class="field-label" for="mod-filter-billing">Billing</label>
+                                <select id="mod-filter-billing" class="input">
+                                    <option value="all">Semua</option>
+                                    <option value="Sudah Bayar">Sudah Bayar</option>
+                                    <option value="Belum Bayar">Belum Bayar</option>
+                                </select>
+                            </div>
+                            <div class="field filter-item filter-sync">
+                                <label class="field-label" for="mod-filter-sync">Status Kirim</label>
+                                <select id="mod-filter-sync" class="input">
+                                    <option value="all">Semua Status</option>
+                                    <option value="ready">Siap Kirim</option>
+                                    <option value="sent">Sudah Terkirim</option>
+                                    <option value="failed">Gagal Kirim</option>
+                                    <option value="blocked">Terblokir (Prasyarat)</option>
+                                </select>
+                            </div>
+                            <div class="field filter-item filter-search">
+                                <label class="field-label" for="mod-filter-search">Cari</label>
+                                <input type="search" id="mod-filter-search" class="input" placeholder="No. Rawat / RM / Pasien...">
+                            </div>
+                            <div class="filter-item filter-actions">
+                                <button class="btn btn-ghost" id="btn-mod-filter-reset" type="button" title="Reset filter ke hari ini">Reset</button>
+                            </div>
                         </div>
-                        <div class="field">
-                            <label class="field-label" for="mod-filter-until">Sampai</label>
-                            <input type="date" id="mod-filter-until" class="input">
-                        </div>
-                        <div class="field">
-                            <label class="field-label" for="mod-filter-billing">Billing</label>
-                            <select id="mod-filter-billing" class="input">
-                                <option value="all">Semua</option>
-                                <option value="Sudah Bayar">Sudah Bayar</option>
-                                <option value="Belum Bayar">Belum Bayar</option>
-                            </select>
-                        </div>
-                        <div class="field">
-                            <label class="field-label" for="mod-filter-sync">Status Kirim</label>
-                            <select id="mod-filter-sync" class="input">
-                                <option value="all">Semua Status</option>
-                                <option value="ready">Siap Kirim</option>
-                                <option value="sent">Sudah Terkirim</option>
-                                <option value="failed">Gagal Kirim</option>
-                                <option value="blocked">Terblokir (Prasyarat)</option>
-                            </select>
-                        </div>
-                        <div class="field" style="flex:1;min-width:180px">
-                            <label class="field-label" for="mod-filter-search">Cari</label>
-                            <input type="search" id="mod-filter-search" class="input" placeholder="No. Rawat / RM / Pasien...">
-                        </div>
-                        <button class="btn btn-ghost btn-sm" id="btn-mod-filter-reset" type="button" title="Reset filter ke hari ini">Reset</button>
                     </div>
 
                     <div id="module-alert" class="list-alert" hidden role="alert"></div>
@@ -620,6 +620,6 @@
        API/asset URLs; hash routes are unaffected. */
     window.PANEL_BASE = '{{BASE_PATH}}';
     </script>
-    <script type="module" src="js/app.js"></script>
+    <script type="module" src="js/app.js?v=20260828_2"></script>
 </body>
 </html>

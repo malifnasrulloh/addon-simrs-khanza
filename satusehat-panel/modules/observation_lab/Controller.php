@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Modules\ObservationLab;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\BaseModuleController;
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Util\PayloadAdapter;
@@ -67,7 +69,6 @@ class Controller extends BaseModuleController
             $stmt->execute($params);
             $rows = $stmt->fetchAll() ?: [];
 
-            $sqlite = Database::getSqlite();
             $items = [];
 
             foreach ($rows as $r) {
@@ -140,11 +141,11 @@ class Controller extends BaseModuleController
         $patient = $stmt->fetch();
         if (!$patient) return ['success' => false, 'error' => 'Pasien tidak ditemukan'];
 
-        $payloads = PayloadAdapter::build('Observation', $noRawat, $patient);
+        $payloads = PayloadAdapter::build('Observation', $noRawat, $patient, [], true);
         $found = null;
         foreach ($payloads as $p) {
             $meta = $p['_panel_persist_keys']['keys'] ?? [];
-            if (($meta['noorder'] ?? '') === $noorder || ($meta['id_template'] ?? 0) === $idTemplate) {
+            if (($meta['noorder'] ?? '') === $noorder && ((int) ($meta['id_template'] ?? 0)) === $idTemplate) {
                 $found = $p;
                 break;
             }
@@ -173,11 +174,11 @@ class Controller extends BaseModuleController
                 $patient = $stmt->fetch();
                 if (!$patient) throw new \RuntimeException("Pasien {$noRawat} tidak ditemukan");
 
-                $payloads = PayloadAdapter::build('Observation', $noRawat, $patient);
+                $payloads = PayloadAdapter::build('Observation', $noRawat, $patient, [], true);
                 if (!empty($payloads)) {
                     foreach ($payloads as $p) {
                         $meta = $p['_panel_persist_keys']['keys'] ?? [];
-                        if (($meta['noorder'] ?? '') === $noorder || ($meta['id_template'] ?? 0) === $idTemplate) {
+                        if (($meta['noorder'] ?? '') === $noorder && ((int) ($meta['id_template'] ?? 0)) === $idTemplate) {
                             return ['payload' => $p, 'meta' => $p['_panel_persist_keys'] ?? []];
                         }
                     }

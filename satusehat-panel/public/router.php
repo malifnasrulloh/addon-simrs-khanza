@@ -78,16 +78,32 @@ if ($path === '/index.php') {
 }
 
 // Serve existing static files directly (css/js/images and modules/ assets)
-$file = __DIR__ . $path;
-if (!is_file($file) && str_starts_with($path, '/modules/')) {
+// First, strip base path if present to find the actual file
+$basePath = panel_base_path();
+$requestPath = $path;
+if ($basePath !== '' && $basePath !== '/' && str_starts_with($requestPath, $basePath)) {
+    $requestPath = substr($requestPath, strlen($basePath));
+    if ($requestPath === '' || $requestPath === false) {
+        $requestPath = '/';
+    }
+}
+
+$file = __DIR__ . $requestPath;
+if (!is_file($file) && str_starts_with($requestPath, '/public/')) {
+    $strippedPublic = substr($requestPath, 7);
+    if (is_file(__DIR__ . $strippedPublic)) {
+        $file = __DIR__ . $strippedPublic;
+    }
+}
+if (!is_file($file) && str_starts_with($requestPath, '/modules/')) {
     // Check in parent directory (satusehat-panel/modules/)
-    $parentModuleFile = __DIR__ . '/..' . $path;
+    $parentModuleFile = __DIR__ . '/..' . $requestPath;
     if (is_file($parentModuleFile)) {
         $file = $parentModuleFile;
     }
 }
 
-if ($path !== '/' && is_file($file)) {
+if ($requestPath !== '/' && is_file($file)) {
     // Only serve whitelisted static extensions
     $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
     if (in_array($ext, ['css', 'js', 'json', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'woff', 'woff2', 'ttf'], true)) {

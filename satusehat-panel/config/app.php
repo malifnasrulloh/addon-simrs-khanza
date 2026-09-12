@@ -2,6 +2,8 @@
 /**
  * Application configuration
  */
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\Config;
 
 return [

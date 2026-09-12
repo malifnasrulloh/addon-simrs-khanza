@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Modules\Procedure;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\BaseModuleController;
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Util\PayloadAdapter;
@@ -57,7 +59,6 @@ class Controller extends BaseModuleController
             $stmt->execute($params);
             $rows = $stmt->fetchAll() ?: [];
 
-            $sqlite = Database::getSqlite();
             $items = [];
 
             foreach ($rows as $r) {
@@ -109,6 +110,7 @@ class Controller extends BaseModuleController
         $parts = explode('|', $key);
         $noRawat = $parts[0];
         $kode = $parts[1] ?? '';
+        $status = $parts[2] ?? '';
         $db = Database::getMysql();
 
         $stmt = $db->prepare("
@@ -121,11 +123,12 @@ class Controller extends BaseModuleController
         $patient = $stmt->fetch();
         if (!$patient) return ['success' => false, 'error' => 'Pasien tidak ditemukan'];
 
-        $payloads = PayloadAdapter::build('Procedure', $noRawat, $patient);
+        $payloads = PayloadAdapter::build('Procedure', $noRawat, $patient, [], true);
         $found = null;
         foreach ($payloads as $p) {
             $c = $p['code']['coding'][0]['code'] ?? ($p['_panel_persist_keys']['keys']['kode'] ?? '');
-            if ($c === $kode || empty($kode)) {
+            $pStatus = $p['_panel_persist_keys']['keys']['status'] ?? '';
+            if (($c === $kode || empty($kode)) && (empty($status) || $pStatus === $status)) {
                 $found = $p;
                 break;
             }
@@ -141,6 +144,7 @@ class Controller extends BaseModuleController
             function (array|string $itemKey): array {
                 $noRawat = is_array($itemKey) ? ($itemKey['no_rawat'] ?? '') : (string) $itemKey;
                 $kode = is_array($itemKey) ? ($itemKey['kode'] ?? '') : '';
+                $status = is_array($itemKey) ? ($itemKey['status'] ?? 'Ralan') : 'Ralan';
                 $db = Database::getMysql();
 
                 $stmt = $db->prepare("
@@ -153,10 +157,11 @@ class Controller extends BaseModuleController
                 $patient = $stmt->fetch();
                 if (!$patient) throw new \RuntimeException("Pasien {$noRawat} tidak ditemukan");
 
-                $payloads = PayloadAdapter::build('Procedure', $noRawat, $patient);
+                $payloads = PayloadAdapter::build('Procedure', $noRawat, $patient, [], true);
                 foreach ($payloads as $p) {
                     $c = $p['code']['coding'][0]['code'] ?? ($p['_panel_persist_keys']['keys']['kode'] ?? '');
-                    if ($c === $kode || empty($kode)) {
+                    $pStatus = $p['_panel_persist_keys']['keys']['status'] ?? '';
+                    if (($c === $kode || empty($kode)) && (empty($status) || $pStatus === $status)) {
                         return ['payload' => $p, 'meta' => $p['_panel_persist_keys'] ?? []];
                     }
                 }

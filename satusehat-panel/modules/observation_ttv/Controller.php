@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Modules\ObservationTtv;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\BaseModuleController;
 use SatusehatPanel\Core\Database;
 use ObservationTTVDictionary;
@@ -16,72 +18,124 @@ class Controller extends BaseModuleController
         $f = self::parseFilters();
         $db = Database::getMysql();
 
-        $where = "WHERE rp.tgl_registrasi BETWEEN ? AND ?";
+        $whereRalan = "WHERE rp.tgl_registrasi BETWEEN ? AND ?";
+        $whereRanap = "WHERE rp.tgl_registrasi BETWEEN ? AND ?";
         $params = [$f['since'], $f['until']];
+        $paramsRanap = [$f['since'], $f['until']];
 
         if ($f['status_bayar'] !== 'all') {
-            $where .= " AND rp.status_bayar = ?";
+            $whereRalan .= " AND rp.status_bayar = ?";
+            $whereRanap .= " AND rp.status_bayar = ?";
             $params[] = $f['status_bayar'];
+            $paramsRanap[] = $f['status_bayar'];
         }
         if ($f['kd_poli'] !== '') {
-            $where .= " AND rp.kd_poli = ?";
+            $whereRalan .= " AND rp.kd_poli = ?";
+            $whereRanap .= " AND rp.kd_poli = ?";
             $params[] = $f['kd_poli'];
+            $paramsRanap[] = $f['kd_poli'];
         }
         if ($f['search'] !== '') {
-            $where .= " AND (rp.no_rawat LIKE ? OR pj.no_rkm_medis LIKE ? OR pj.nm_pasien LIKE ?)";
+            $whereRalan .= " AND (rp.no_rawat LIKE ? OR pj.no_rkm_medis LIKE ? OR pj.nm_pasien LIKE ?)";
+            $whereRanap .= " AND (rp.no_rawat LIKE ? OR pj.no_rkm_medis LIKE ? OR pj.nm_pasien LIKE ?)";
             $s = "%{$f['search']}%";
             array_push($params, $s, $s, $s);
+            array_push($paramsRanap, $s, $s, $s);
         }
 
+        $allParams = array_merge($params, $paramsRanap);
+
         $sql = "
-            SELECT 
-                rp.no_rawat, rp.tgl_registrasi, rp.jam_reg, rp.status_bayar,
-                pj.no_rkm_medis, pj.nm_pasien, pj.no_ktp as nik_pasien,
-                COALESCE(pg.nama, pg_dok.nama, '') as nm_dokter,
-                COALESCE(pg.no_ktp, '') as nik_dokter,
-                COALESCE(pg_dok.no_ktp, '') as nik_dokter_dpjp,
-                COALESCE(pol.nm_poli, 'Rawat Inap') as nm_poli,
-                IFNULL(sse.id_encounter, '') as id_encounter,
-                pr.tgl_perawatan, pr.jam_rawat, 'Ralan' as status_rawat,
-                pr.suhu_tubuh, pr.tensi, pr.nadi, pr.respirasi, pr.spo2, pr.tinggi, pr.berat, pr.lingkar_perut, pr.gcs, pr.kesadaran,
-                IFNULL(st_suhu.id_observation, '') as id_suhu,
-                IFNULL(st_tensi.id_observation, '') as id_tensi,
-                IFNULL(st_nadi.id_observation, '') as id_nadi,
-                IFNULL(st_respirasi.id_observation, '') as id_respirasi,
-                IFNULL(st_spo2.id_observation, '') as id_spo2,
-                IFNULL(st_tb.id_observation, '') as id_tb,
-                IFNULL(st_bb.id_observation, '') as id_bb,
-                IFNULL(st_lp.id_observation, '') as id_lp,
-                IFNULL(st_gcs.id_observation, '') as id_gcs,
-                IFNULL(st_kesadaran.id_observation, '') as id_kesadaran
-            FROM reg_periksa rp
-            LEFT JOIN pasien pj ON pj.no_rkm_medis = rp.no_rkm_medis
-            INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
-            LEFT JOIN pegawai pg ON pg.nik = pr.nip
-            LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
-            LEFT JOIN poliklinik pol ON pol.kd_poli = rp.kd_poli
-            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
-            LEFT JOIN satu_sehat_observationttvsuhu st_suhu ON st_suhu.no_rawat = pr.no_rawat AND st_suhu.tgl_perawatan = pr.tgl_perawatan AND st_suhu.jam_rawat = pr.jam_rawat AND st_suhu.status = 'Ralan'
-            LEFT JOIN satu_sehat_observationttvtensi st_tensi ON st_tensi.no_rawat = pr.no_rawat AND st_tensi.tgl_perawatan = pr.tgl_perawatan AND st_tensi.jam_rawat = pr.jam_rawat AND st_tensi.status = 'Ralan'
-            LEFT JOIN satu_sehat_observationttvnadi st_nadi ON st_nadi.no_rawat = pr.no_rawat AND st_nadi.tgl_perawatan = pr.tgl_perawatan AND st_nadi.jam_rawat = pr.jam_rawat AND st_nadi.status = 'Ralan'
-            LEFT JOIN satu_sehat_observationttvrespirasi st_respirasi ON st_respirasi.no_rawat = pr.no_rawat AND st_respirasi.tgl_perawatan = pr.tgl_perawatan AND st_respirasi.jam_rawat = pr.jam_rawat AND st_respirasi.status = 'Ralan'
-            LEFT JOIN satu_sehat_observationttvspo2 st_spo2 ON st_spo2.no_rawat = pr.no_rawat AND st_spo2.tgl_perawatan = pr.tgl_perawatan AND st_spo2.jam_rawat = pr.jam_rawat AND st_spo2.status = 'Ralan'
-            LEFT JOIN satu_sehat_observationttvtb st_tb ON st_tb.no_rawat = pr.no_rawat AND st_tb.tgl_perawatan = pr.tgl_perawatan AND st_tb.jam_rawat = pr.jam_rawat AND st_tb.status = 'Ralan'
-            LEFT JOIN satu_sehat_observationttvbb st_bb ON st_bb.no_rawat = pr.no_rawat AND st_bb.tgl_perawatan = pr.tgl_perawatan AND st_bb.jam_rawat = pr.jam_rawat AND st_bb.status = 'Ralan'
-            LEFT JOIN satu_sehat_observationttvlp st_lp ON st_lp.no_rawat = pr.no_rawat AND st_lp.tgl_perawatan = pr.tgl_perawatan AND st_lp.jam_rawat = pr.jam_rawat AND st_lp.status = 'Ralan'
-            LEFT JOIN satu_sehat_observationttvgcs st_gcs ON st_gcs.no_rawat = pr.no_rawat AND st_gcs.tgl_perawatan = pr.tgl_perawatan AND st_gcs.jam_rawat = pr.jam_rawat AND st_gcs.status = 'Ralan'
-            LEFT JOIN satu_sehat_observationttvkesadaran st_kesadaran ON st_kesadaran.no_rawat = pr.no_rawat AND st_kesadaran.tgl_perawatan = pr.tgl_perawatan AND st_kesadaran.jam_rawat = pr.jam_rawat AND st_kesadaran.status = 'Ralan'
-            {$where}
-            ORDER BY pr.tgl_perawatan DESC, pr.jam_rawat DESC
+            SELECT * FROM (
+                SELECT
+                    rp.no_rawat, rp.tgl_registrasi, rp.jam_reg, rp.status_bayar,
+                    pj.no_rkm_medis, pj.nm_pasien, pj.no_ktp as nik_pasien,
+                    COALESCE(pg.nama, pg_dok.nama, '') as nm_dokter,
+                    COALESCE(pg.no_ktp, '') as nik_dokter,
+                    COALESCE(pg_dok.no_ktp, '') as nik_dokter_dpjp,
+                    COALESCE(pol.nm_poli, 'Rawat Jalan/IGD') as nm_poli,
+                    IFNULL(sse.id_encounter, '') as id_encounter,
+                    pr.tgl_perawatan, pr.jam_rawat, 'Ralan' as status_rawat,
+                    pr.suhu_tubuh, pr.tensi, pr.nadi, pr.respirasi, pr.spo2, pr.tinggi, pr.berat, pr.lingkar_perut, pr.gcs, pr.kesadaran,
+                    IFNULL(st_suhu.id_observation, '') as id_suhu,
+                    IFNULL(st_tensi.id_observation, '') as id_tensi,
+                    IFNULL(st_nadi.id_observation, '') as id_nadi,
+                    IFNULL(st_respirasi.id_observation, '') as id_respirasi,
+                    IFNULL(st_spo2.id_observation, '') as id_spo2,
+                    IFNULL(st_tb.id_observation, '') as id_tb,
+                    IFNULL(st_bb.id_observation, '') as id_bb,
+                    IFNULL(st_lp.id_observation, '') as id_lp,
+                    IFNULL(st_gcs.id_observation, '') as id_gcs,
+                    IFNULL(st_kesadaran.id_observation, '') as id_kesadaran
+                FROM reg_periksa rp
+                LEFT JOIN pasien pj ON pj.no_rkm_medis = rp.no_rkm_medis
+                INNER JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
+                LEFT JOIN pegawai pg ON pg.nik = pr.nip
+                LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
+                LEFT JOIN poliklinik pol ON pol.kd_poli = rp.kd_poli
+                LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                LEFT JOIN satu_sehat_observationttvsuhu st_suhu ON st_suhu.no_rawat = pr.no_rawat AND st_suhu.tgl_perawatan = pr.tgl_perawatan AND st_suhu.jam_rawat = pr.jam_rawat AND st_suhu.status = 'Ralan'
+                LEFT JOIN satu_sehat_observationttvtensi st_tensi ON st_tensi.no_rawat = pr.no_rawat AND st_tensi.tgl_perawatan = pr.tgl_perawatan AND st_tensi.jam_rawat = pr.jam_rawat AND st_tensi.status = 'Ralan'
+                LEFT JOIN satu_sehat_observationttvnadi st_nadi ON st_nadi.no_rawat = pr.no_rawat AND st_nadi.tgl_perawatan = pr.tgl_perawatan AND st_nadi.jam_rawat = pr.jam_rawat AND st_nadi.status = 'Ralan'
+                LEFT JOIN satu_sehat_observationttvrespirasi st_respirasi ON st_respirasi.no_rawat = pr.no_rawat AND st_respirasi.tgl_perawatan = pr.tgl_perawatan AND st_respirasi.jam_rawat = pr.jam_rawat AND st_respirasi.status = 'Ralan'
+                LEFT JOIN satu_sehat_observationttvspo2 st_spo2 ON st_spo2.no_rawat = pr.no_rawat AND st_spo2.tgl_perawatan = pr.tgl_perawatan AND st_spo2.jam_rawat = pr.jam_rawat AND st_spo2.status = 'Ralan'
+                LEFT JOIN satu_sehat_observationttvtb st_tb ON st_tb.no_rawat = pr.no_rawat AND st_tb.tgl_perawatan = pr.tgl_perawatan AND st_tb.jam_rawat = pr.jam_rawat AND st_tb.status = 'Ralan'
+                LEFT JOIN satu_sehat_observationttvbb st_bb ON st_bb.no_rawat = pr.no_rawat AND st_bb.tgl_perawatan = pr.tgl_perawatan AND st_bb.jam_rawat = pr.jam_rawat AND st_bb.status = 'Ralan'
+                LEFT JOIN satu_sehat_observationttvlp st_lp ON st_lp.no_rawat = pr.no_rawat AND st_lp.tgl_perawatan = pr.tgl_perawatan AND st_lp.jam_rawat = pr.jam_rawat AND st_lp.status = 'Ralan'
+                LEFT JOIN satu_sehat_observationttvgcs st_gcs ON st_gcs.no_rawat = pr.no_rawat AND st_gcs.tgl_perawatan = pr.tgl_perawatan AND st_gcs.jam_rawat = pr.jam_rawat AND st_gcs.status = 'Ralan'
+                LEFT JOIN satu_sehat_observationttvkesadaran st_kesadaran ON st_kesadaran.no_rawat = pr.no_rawat AND st_kesadaran.tgl_perawatan = pr.tgl_perawatan AND st_kesadaran.jam_rawat = pr.jam_rawat AND st_kesadaran.status = 'Ralan'
+                {$whereRalan}
+
+                UNION ALL
+
+                SELECT
+                    rp.no_rawat, rp.tgl_registrasi, rp.jam_reg, rp.status_bayar,
+                    pj.no_rkm_medis, pj.nm_pasien, pj.no_ktp as nik_pasien,
+                    COALESCE(pg.nama, pg_dok.nama, '') as nm_dokter,
+                    COALESCE(pg.no_ktp, '') as nik_dokter,
+                    COALESCE(pg_dok.no_ktp, '') as nik_dokter_dpjp,
+                    COALESCE(pol.nm_poli, 'Rawat Inap') as nm_poli,
+                    IFNULL(sse.id_encounter, '') as id_encounter,
+                    pi.tgl_perawatan, pi.jam_rawat, 'Ranap' as status_rawat,
+                    pi.suhu_tubuh, pi.tensi, pi.nadi, pi.respirasi, pi.spo2, pi.tinggi, pi.berat, NULL as lingkar_perut, pi.gcs, pi.kesadaran,
+                    IFNULL(st_suhu.id_observation, '') as id_suhu,
+                    IFNULL(st_tensi.id_observation, '') as id_tensi,
+                    IFNULL(st_nadi.id_observation, '') as id_nadi,
+                    IFNULL(st_respirasi.id_observation, '') as id_respirasi,
+                    IFNULL(st_spo2.id_observation, '') as id_spo2,
+                    IFNULL(st_tb.id_observation, '') as id_tb,
+                    IFNULL(st_bb.id_observation, '') as id_bb,
+                    IFNULL(st_lp.id_observation, '') as id_lp,
+                    IFNULL(st_gcs.id_observation, '') as id_gcs,
+                    IFNULL(st_kesadaran.id_observation, '') as id_kesadaran
+                FROM reg_periksa rp
+                LEFT JOIN pasien pj ON pj.no_rkm_medis = rp.no_rkm_medis
+                INNER JOIN pemeriksaan_ranap pi ON pi.no_rawat = rp.no_rawat
+                LEFT JOIN pegawai pg ON pg.nik = pi.nip
+                LEFT JOIN pegawai pg_dok ON pg_dok.nik = rp.kd_dokter
+                LEFT JOIN poliklinik pol ON pol.kd_poli = rp.kd_poli
+                LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
+                LEFT JOIN satu_sehat_observationttvsuhu st_suhu ON st_suhu.no_rawat = pi.no_rawat AND st_suhu.tgl_perawatan = pi.tgl_perawatan AND st_suhu.jam_rawat = pi.jam_rawat AND st_suhu.status = 'Ranap'
+                LEFT JOIN satu_sehat_observationttvtensi st_tensi ON st_tensi.no_rawat = pi.no_rawat AND st_tensi.tgl_perawatan = pi.tgl_perawatan AND st_tensi.jam_rawat = pi.jam_rawat AND st_tensi.status = 'Ranap'
+                LEFT JOIN satu_sehat_observationttvnadi st_nadi ON st_nadi.no_rawat = pi.no_rawat AND st_nadi.tgl_perawatan = pi.tgl_perawatan AND st_nadi.jam_rawat = pi.jam_rawat AND st_nadi.status = 'Ranap'
+                LEFT JOIN satu_sehat_observationttvrespirasi st_respirasi ON st_respirasi.no_rawat = pi.no_rawat AND st_respirasi.tgl_perawatan = pi.tgl_perawatan AND st_respirasi.jam_rawat = pi.jam_rawat AND st_respirasi.status = 'Ranap'
+                LEFT JOIN satu_sehat_observationttvspo2 st_spo2 ON st_spo2.no_rawat = pi.no_rawat AND st_spo2.tgl_perawatan = pi.tgl_perawatan AND st_spo2.jam_rawat = pi.jam_rawat AND st_spo2.status = 'Ranap'
+                LEFT JOIN satu_sehat_observationttvtb st_tb ON st_tb.no_rawat = pi.no_rawat AND st_tb.tgl_perawatan = pi.tgl_perawatan AND st_tb.jam_rawat = pi.jam_rawat AND st_tb.status = 'Ranap'
+                LEFT JOIN satu_sehat_observationttvbb st_bb ON st_bb.no_rawat = pi.no_rawat AND st_bb.tgl_perawatan = pi.tgl_perawatan AND st_bb.jam_rawat = pi.jam_rawat AND st_bb.status = 'Ranap'
+                LEFT JOIN satu_sehat_observationttvlp st_lp ON st_lp.no_rawat = pi.no_rawat AND st_lp.tgl_perawatan = pi.tgl_perawatan AND st_lp.jam_rawat = pi.jam_rawat AND st_lp.status = 'Ranap'
+                LEFT JOIN satu_sehat_observationttvgcs st_gcs ON st_gcs.no_rawat = pi.no_rawat AND st_gcs.tgl_perawatan = pi.tgl_perawatan AND st_gcs.jam_rawat = pi.jam_rawat AND st_gcs.status = 'Ranap'
+                LEFT JOIN satu_sehat_observationttvkesadaran st_kesadaran ON st_kesadaran.no_rawat = pi.no_rawat AND st_kesadaran.tgl_perawatan = pi.tgl_perawatan AND st_kesadaran.jam_rawat = pi.jam_rawat AND st_kesadaran.status = 'Ranap'
+                {$whereRanap}
+            ) AS combined
+            ORDER BY tgl_perawatan DESC, jam_rawat DESC
             LIMIT {$f['per_page']} OFFSET {$f['offset']}
         ";
 
         try {
             $stmt = $db->prepare($sql);
-            $stmt->execute($params);
+            $stmt->execute($allParams);
             $rows = $stmt->fetchAll() ?: [];
 
-            $sqlite = Database::getSqlite();
             $defs = ObservationTTVDictionary::getDefinitions();
             $items = [];
 
@@ -173,11 +227,13 @@ class Controller extends BaseModuleController
         $patient = $stmt->fetch();
         if (!$patient) return ['success' => false, 'error' => 'Pasien tidak ditemukan'];
 
-        $payloads = PayloadAdapter::build('ObservationTTV', $noRawat, $patient);
+        $payloads = PayloadAdapter::build('ObservationTTV', $noRawat, $patient, [], true);
         $found = null;
         foreach ($payloads as $p) {
             $meta = $p['_panel_persist_keys']['keys'] ?? [];
-            if (($p['_panel_ttv_type'] ?? '') === $ttvType || ($meta['tgl_perawatan'] ?? '') === $tgl) {
+            if ((empty($ttvType) || ($p['_panel_ttv_type'] ?? '') === $ttvType) &&
+                (empty($tgl) || ($meta['tgl_perawatan'] ?? '') === $tgl) &&
+                (empty($jam) || ($meta['jam_rawat'] ?? '') === $jam)) {
                 $found = $p;
                 break;
             }
@@ -207,12 +263,13 @@ class Controller extends BaseModuleController
                 $patient = $stmt->fetch();
                 if (!$patient) throw new \RuntimeException("Pasien {$noRawat} tidak ditemukan");
 
-                $payloads = PayloadAdapter::build('ObservationTTV', $noRawat, $patient);
+                $payloads = PayloadAdapter::build('ObservationTTV', $noRawat, $patient, [], true);
                 foreach ($payloads as $p) {
-                    $typeMatch = ($p['_panel_ttv_type'] ?? '') === $ttvType;
+                    $typeMatch = empty($ttvType) || ($p['_panel_ttv_type'] ?? '') === $ttvType;
                     $meta = $p['_panel_persist_keys']['keys'] ?? [];
                     $dateMatch = empty($tgl) || ($meta['tgl_perawatan'] ?? '') === $tgl;
-                    if ($typeMatch && $dateMatch) {
+                    $jamMatch = empty($jam) || ($meta['jam_rawat'] ?? '') === $jam;
+                    if ($typeMatch && $dateMatch && $jamMatch) {
                         return ['payload' => $p, 'meta' => $p['_panel_persist_keys'] ?? []];
                     }
                 }

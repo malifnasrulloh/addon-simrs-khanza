@@ -2,6 +2,8 @@
 
 namespace SatusehatPanel\Core;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Controller\AuthController;
 use SatusehatPanel\Controller\AuditController;
 use SatusehatPanel\Controller\PatientController;

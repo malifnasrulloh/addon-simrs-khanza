@@ -2,6 +2,8 @@
 
 namespace SatusehatPanel\Util;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Core\Config;
 
@@ -32,30 +34,30 @@ class PayloadAdapter
      * @return array List of FHIR payloads. Empty array if no data exists.
      *               Each item is a complete FHIR resource ready for a Bundle entry.
      */
-    public static function build(string $resource, string $noRawat, array $patient, array $refs = []): array
+    public static function build(string $resource, string $noRawat, array $patient, array $refs = [], bool $includeSent = false): array
     {
         $db = Database::getMysql();
         $orgId = (string) Config::get('satusehat.org_id', '');
 
         return match ($resource) {
             'Encounter' => self::wrapSingle(self::buildEncounter($db, $patient)),
-            'Condition' => self::buildConditionMulti($db, $patient),
-            'Procedure' => self::buildProcedureMulti($db, $patient),
-            'Medication' => self::buildMedicationMulti($db, $noRawat, $orgId),
-            'MedicationRequest' => self::buildMedicationFamilyMulti($db, $patient, $orgId, 'request'),
-            'MedicationDispense' => self::buildMedicationFamilyMulti($db, $patient, $orgId, 'dispense'),
-            'MedicationStatement' => self::buildMedicationFamilyMulti($db, $patient, $orgId, 'statement'),
-            'CarePlan' => self::buildCarePlanMulti($db, $patient, $orgId),
-            'AllergyIntolerance' => self::buildAllergyMulti($db, $patient),
-            'Immunization' => self::buildImmunizationMulti($db, $patient),
-            'ClinicalImpression' => self::buildClinicalImpressionMulti($db, $patient),
-            'ServiceRequest' => self::buildLabPipelineMulti($db, $patient, $orgId, 'serviceRequest'),
-            'Specimen' => self::buildLabPipelineMulti($db, $patient, $orgId, 'specimen'),
-            'Observation' => self::buildLabPipelineMulti($db, $patient, $orgId, 'observation'),
-            'DiagnosticReport' => self::buildLabPipelineMulti($db, $patient, $orgId, 'diagnosticReport'),
-            'Composition' => self::wrapSingle(self::buildComposition($db, $patient, $orgId, $refs)),
-            'QuestionnaireResponse' => self::buildQuestionnaireResponseMulti($db, $patient),
-            'EpisodeOfCare' => self::buildEpisodeOfCareMulti($db, $patient, $orgId),
+            'Condition' => self::buildConditionMulti($db, $patient, $includeSent),
+            'Procedure' => self::buildProcedureMulti($db, $patient, $includeSent),
+            'Medication' => self::buildMedicationMulti($db, $noRawat, $orgId, $includeSent),
+            'MedicationRequest' => self::buildMedicationFamilyMulti($db, $patient, $orgId, 'request', $includeSent),
+            'MedicationDispense' => self::buildMedicationFamilyMulti($db, $patient, $orgId, 'dispense', $includeSent),
+            'MedicationStatement' => self::buildMedicationFamilyMulti($db, $patient, $orgId, 'statement', $includeSent),
+            'CarePlan' => self::buildCarePlanMulti($db, $patient, $orgId, $includeSent),
+            'AllergyIntolerance' => self::buildAllergyMulti($db, $patient, $includeSent),
+            'Immunization' => self::buildImmunizationMulti($db, $patient, $includeSent),
+            'ClinicalImpression' => self::buildClinicalImpressionMulti($db, $patient, $includeSent),
+            'ServiceRequest' => self::buildLabPipelineMulti($db, $patient, $orgId, 'serviceRequest', $includeSent),
+            'Specimen' => self::buildLabPipelineMulti($db, $patient, $orgId, 'specimen', $includeSent),
+            'Observation' => self::buildLabPipelineMulti($db, $patient, $orgId, 'observation', $includeSent),
+            'DiagnosticReport' => self::buildLabPipelineMulti($db, $patient, $orgId, 'diagnosticReport', $includeSent),
+            'Composition' => self::wrapSingle(self::buildComposition($db, $patient, $orgId, $refs, $includeSent)),
+            'QuestionnaireResponse' => self::buildQuestionnaireResponseMulti($db, $patient, $includeSent),
+            'EpisodeOfCare' => self::buildEpisodeOfCareMulti($db, $patient, $orgId, $includeSent),
             'ObservationTTV' => self::buildObservationTTVMulti($db, $patient),
             default => [],
         };
@@ -127,15 +129,18 @@ class PayloadAdapter
 
     // EpisodeOfCare (MULTI-ROW per visit & diagnosis)
 
-    private static function buildEpisodeOfCareMulti(\PDO $db, array $patient, string $orgId): array
+    private static function buildEpisodeOfCareMulti(\PDO $db, array $patient, string $orgId, bool $includeSent = false): array
     {
         $ihs = self::getIhsIds($patient);
+        $sentClause = $includeSent ? "" : "AND (sseo.id_episode_of_care IS NULL OR sseo.id_episode_of_care IN ('', '-'))";
         $stmt = $db->prepare("
             SELECT
                 rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
                 pj.nm_pasien, pj.no_ktp, rp.kd_dokter, pg.nama, pg.no_ktp AS ktpdokter,
                 dp.kd_penyakit, py.nm_penyakit, rp.stts, rp.status_lanjut, dp.status,
                 pr.tgl_perawatan, pr.jam_rawat, ki.tgl_keluar, ki.jam_keluar,
+                COALESCE(nj.tanggal, ni.tanggal) AS tgl_keluar_nota,
+                COALESCE(nj.jam, ni.jam) AS jam_keluar_nota,
                 sse.id_encounter, ssc.id_condition, IFNULL(sseo.id_episode_of_care, '') AS id_episode_of_care
             FROM reg_periksa rp
             JOIN pasien pj ON pj.no_rkm_medis = rp.no_rkm_medis
@@ -145,12 +150,14 @@ class PayloadAdapter
             LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             LEFT JOIN pemeriksaan_ralan pr ON pr.no_rawat = rp.no_rawat
             LEFT JOIN kamar_inap ki ON ki.no_rawat = rp.no_rawat
-            LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.kd_penyakit = dp.kd_penyakit
+            LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
+            LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
+            LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.kd_penyakit = dp.kd_penyakit AND ssc.status = dp.status
             LEFT JOIN satu_sehat_episode_of_care sseo ON sseo.no_rawat = rp.no_rawat
                 AND sseo.kd_penyakit = dp.kd_penyakit
                 AND sseo.status = dp.status
             WHERE rp.no_rawat = ?
-              AND (sseo.id_episode_of_care IS NULL OR sseo.id_episode_of_care IN ('', '-'))
+              {$sentClause}
         ");
         $stmt->execute([$patient['no_rawat']]);
         $rows = $stmt->fetchAll();
@@ -162,8 +169,27 @@ class PayloadAdapter
                 continue; // Not a recognized government health program ICD code (e.g. TB, HIV, ANC)
             }
 
+            // Determine status: if visit discharged, status = finished
+            $hasDischarge = !empty($row['tgl_keluar_nota']) || !empty($row['tgl_keluar']);
+            $status = $hasDischarge ? 'finished' : 'active';
+            $waktuPulang = null;
+            if ($hasDischarge) {
+                $tglKeluar = $row['tgl_keluar_nota'] ?: $row['tgl_keluar'];
+                $jamKeluar = $row['jam_keluar_nota'] ?: ($row['jam_keluar'] ?: '00:00:00');
+                $waktuPulang = trim($tglKeluar . ' ' . $jamKeluar);
+            }
+            $row['waktu_pulang'] = $waktuPulang;
+
+            $diagnoses = [];
+            if (!empty($row['id_condition'])) {
+                $diagnoses[] = [
+                    'id_condition' => $row['id_condition'],
+                    'nm_penyakit'  => $row['nm_penyakit'] ?? '',
+                ];
+            }
+
             $payload = \SatuSehatPayloadBuilder::episodeOfCare(
-                $orgId, $row, $ihs['pasien'], $ihs['dokter'], 'active', $type, $row['id_episode_of_care'] ?? ''
+                $orgId, $row, $ihs['pasien'], $ihs['dokter'], $status, $type, $row['id_episode_of_care'] ?? '', $diagnoses
             );
             if ($payload !== null) {
                 $payload = self::withPersistKeys(
@@ -210,27 +236,42 @@ class PayloadAdapter
     {
         $db = Database::getMysql();
         $ihsPasien = '';
-        if (!empty($patient['no_ktp'])) {
+        if (!empty($patient['ihs_pasien']) && !str_contains($patient['ihs_pasien'], 'PLACEHOLDER')) {
+            $ihsPasien = $patient['ihs_pasien'];
+        } elseif (!empty($patient['no_ktp'])) {
             try {
                 $stmt = $db->prepare("SELECT ihspasien FROM satu_sehat_ihs_patient WHERE nikpasien = ? LIMIT 1");
                 $stmt->execute([$patient['no_ktp']]);
                 $ihsPasien = trim((string) ($stmt->fetchColumn() ?: ''));
                 if ($ihsPasien === '-') $ihsPasien = '';
             } catch (\Throwable $e) { $ihsPasien = ''; }
+            if ($ihsPasien === '') {
+                $ihsPasien = self::resolvePatientIhs($db, $patient['no_ktp']);
+            }
         }
+
         $ihsDokter = '';
-        if (!empty($patient['no_rawat'])) {
+        if (!empty($patient['ihs_dokter']) && !str_contains($patient['ihs_dokter'], 'PLACEHOLDER')) {
+            $ihsDokter = $patient['ihs_dokter'];
+        } elseif (!empty($patient['no_rawat'])) {
             try {
                 $stmt2 = $db->prepare("
-                    SELECT ihspegawai FROM satu_sehat_ihs_practitioner
-                    WHERE nikpegawai = (SELECT pg.nik FROM reg_periksa rp JOIN pegawai pg ON pg.nik = rp.kd_dokter WHERE rp.no_rawat = ? LIMIT 1)
-                    LIMIT 1
+                    SELECT pg.no_ktp, sih.ihspegawai
+                    FROM reg_periksa rp
+                    JOIN pegawai pg ON pg.nik = rp.kd_dokter
+                    LEFT JOIN satu_sehat_ihs_practitioner sih ON sih.nikpegawai = pg.no_ktp
+                    WHERE rp.no_rawat = ? LIMIT 1
                 ");
                 $stmt2->execute([$patient['no_rawat']]);
-                $ihsDokter = trim((string) ($stmt2->fetchColumn() ?: ''));
+                $docRow = $stmt2->fetch();
+                $ihsDokter = trim((string) ($docRow['ihspegawai'] ?? ''));
                 if ($ihsDokter === '-') $ihsDokter = '';
+                if ($ihsDokter === '' && !empty($docRow['no_ktp'])) {
+                    $ihsDokter = self::resolveDokterIhs($db, $docRow['no_ktp']);
+                }
             } catch (\Throwable $e) { $ihsDokter = ''; }
         }
+
         if ($ihsPasien === '') $ihsPasien = 'P-PASIEN-IHS-PLACEHOLDER';
         if ($ihsDokter === '') $ihsDokter = 'N-DOKTER-IHS-PLACEHOLDER';
         return ['pasien' => $ihsPasien, 'dokter' => $ihsDokter];
@@ -256,6 +297,15 @@ class PayloadAdapter
                  FROM pemeriksaan_ralan pr2
                  WHERE pr2.no_rawat = rp.no_rawat
                  ORDER BY pr2.tgl_perawatan DESC, pr2.jam_rawat DESC LIMIT 1) AS waktu_perawatan,
+                COALESCE(
+                    (SELECT sseo.id_episode_of_care
+                     FROM satu_sehat_episode_of_care sseo
+                     WHERE sseo.no_rawat = rp.no_rawat
+                       AND sseo.id_episode_of_care IS NOT NULL
+                       AND sseo.id_episode_of_care NOT IN ('', '-')
+                     LIMIT 1),
+                    ''
+                ) AS id_episode_of_care,
                 IFNULL(sse.id_encounter, '') AS id_encounter
             FROM reg_periksa rp
             JOIN pasien pj ON pj.no_rkm_medis = rp.no_rkm_medis
@@ -290,23 +340,48 @@ class PayloadAdapter
         $row = self::fetchEncounterRow($patient);
         $ihs = self::getIhsIds($patient);
 
+        // Fetch diagnoses for this visit
+        $diagnoses = [];
+        try {
+            $stmtDiag = $db->prepare("
+                SELECT dp.kd_penyakit, py.nm_penyakit, dp.prioritas, IFNULL(ssc.id_condition, '') AS id_condition
+                FROM diagnosa_pasien dp
+                LEFT JOIN penyakit py ON py.kd_penyakit = dp.kd_penyakit
+                LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = dp.no_rawat
+                    AND ssc.kd_penyakit = dp.kd_penyakit AND ssc.status = dp.status
+                WHERE dp.no_rawat = ?
+                ORDER BY dp.prioritas ASC
+            ");
+            $stmtDiag->execute([$patient['no_rawat']]);
+            $diagnoses = $stmtDiag->fetchAll() ?: [];
+        } catch (\Throwable $e) { $diagnoses = []; }
+
         // Status logic matching CLI's 3-phase lifecycle:
         // Phase 1: Ranap always starts at 'in-progress', Ralan at 'arrived'
         // Phase 2: In-progress when examination exists (pemeriksaan_ralan/ranap)
-        // Phase 3: Finished when discharge note exists (nota_jalan/nota_inap)
+        // Phase 3: Finished when discharge note exists AND diagnosis exists (Rule 10457: encounter cannot finish without diagnosis)
         $isRanap = strtolower($row['status_lanjut'] ?? '') === 'ranap';
         $hasDischarge = !empty($row['tgl_keluar']);
 
-        if ($hasDischarge) {
+        if ($hasDischarge && !empty($diagnoses)) {
             $status = 'finished';
-        } elseif ($isRanap) {
+        } elseif ($isRanap || !empty($row['waktu_perawatan']) || $hasDischarge) {
             $status = 'in-progress';
         } else {
             $status = 'arrived';
         }
 
+        $idEpisodeOfCare = !empty($row['id_episode_of_care']) ? $row['id_episode_of_care'] : null;
+
         $payload = \SatuSehatPayloadBuilder::encounter(
-            (string) Config::get('satusehat.org_id', ''), $row, $ihs['pasien'], $ihs['dokter'], $status, [], $row['id_encounter'] ?? ''
+            (string) Config::get('satusehat.org_id', ''),
+            $row,
+            $ihs['pasien'],
+            $ihs['dokter'],
+            $status,
+            $diagnoses,
+            $row['id_encounter'] ?? '',
+            $idEpisodeOfCare
         );
         if ($payload !== null) {
             $payload = self::withPersistKeys($payload, 'satu_sehat_encounter', 'id_encounter', $row, ['no_rawat']);
@@ -317,17 +392,18 @@ class PayloadAdapter
     // Condition (MULTI-ROW: ALL diagnoses for this visit) + chief complaints
     // (keluhan utama, official rajal pattern) — merged under one type.
 
-    private static function buildConditionMulti(\PDO $db, array $patient): array
+    private static function buildConditionMulti(\PDO $db, array $patient, bool $includeSent = false): array
     {
         return array_merge(
-            self::buildDiagnosisMulti($db, $patient),
-            self::buildChiefComplaintMulti($db, $patient)
+            self::buildDiagnosisMulti($db, $patient, $includeSent),
+            self::buildChiefComplaintMulti($db, $patient, $includeSent)
         );
     }
 
-    private static function buildDiagnosisMulti(\PDO $db, array $patient): array
+    private static function buildDiagnosisMulti(\PDO $db, array $patient, bool $includeSent = false): array
     {
         $ihs = self::getIhsIds($patient);
+        $sentClause = $includeSent ? "" : "AND (ssc.id_condition IS NULL OR ssc.id_condition IN ('', '-'))";
         $stmt = $db->prepare("
             SELECT dp.*, pn.nm_penyakit, sse.id_encounter, pg.nama AS nm_dokter, IFNULL(ssc.id_condition, '') AS id_condition
             FROM diagnosa_pasien dp
@@ -337,7 +413,7 @@ class PayloadAdapter
             LEFT JOIN pegawai pg ON pg.nik = rp.kd_dokter
             LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = dp.no_rawat AND ssc.kd_penyakit = dp.kd_penyakit AND ssc.status = dp.status
             WHERE dp.no_rawat = ?
-              AND (ssc.id_condition IS NULL OR ssc.id_condition IN ('', '-'))
+              {$sentClause}
         ");
         $stmt->execute([$patient['no_rawat']]);
         $rows = $stmt->fetchAll();
@@ -373,11 +449,12 @@ class PayloadAdapter
     // satu_sehat_condition with kd_penyakit='CHIEF-COMPLAINT' so re-sends
     // do not duplicate.
 
-    private static function buildChiefComplaintMulti(\PDO $db, array $patient): array
+    private static function buildChiefComplaintMulti(\PDO $db, array $patient, bool $includeSent = false): array
     {
         $ihs = self::getIhsIds($patient);
         $noRawat = $patient['no_rawat'];
         $payloads = [];
+        $sentClause = $includeSent ? "" : "AND (ssc.id_condition IS NULL OR ssc.id_condition IN ('', '-'))";
 
         foreach (['Ralan' => 'pemeriksaan_ralan', 'Ranap' => 'pemeriksaan_ranap'] as $status => $table) {
             $stmt = $db->prepare("
@@ -391,7 +468,7 @@ class PayloadAdapter
                     ON ssc.no_rawat = pr.no_rawat AND ssc.kd_penyakit = 'CHIEF-COMPLAINT' AND ssc.status = ?
                 WHERE pr.no_rawat = ?
                   AND pr.keluhan IS NOT NULL AND pr.keluhan != ''
-                  AND (ssc.id_condition IS NULL OR ssc.id_condition IN ('', '-'))
+                  {$sentClause}
                 ORDER BY pr.tgl_perawatan, pr.jam_rawat
             ");
             $stmt->execute([$status, $noRawat]);
@@ -426,7 +503,7 @@ class PayloadAdapter
                         $row['tgl_perawatan'] ?? null, $row['jam_rawat'] ?? null, $row
                     ),
                     'recordedDate' => \SatuSehatPayloadBuilder::sanitizeDateTime(
-                        $row['tgl_perawatan'] ?? null, $row['jam_rawat'] ?? null, $row, [], true
+                        $row['tgl_perawatan'] ?? null, $row['jam_rawat'] ?? null, $row
                     ),
                     'recorder' => [
                         'reference' => 'Practitioner/' . $ihs['dokter'],
@@ -444,7 +521,7 @@ class PayloadAdapter
                     'id_col' => 'id_condition',
                     'keys' => [
                         'no_rawat' => $noRawat,
-                        'kd_penyakit' => 'CHIEF-COMPLAINT-' . ($row['tgl_perawatan'] ?? '') . '-' . ($row['jam_rawat'] ?? ''),
+                        'kd_penyakit' => 'CHIEF-COMPLAINT',
                         'status' => $status,
                     ],
                 ];
@@ -456,9 +533,10 @@ class PayloadAdapter
 
     // Procedure (MULTI-ROW: ALL procedures for this visit)
 
-    private static function buildProcedureMulti(\PDO $db, array $patient): array
+    private static function buildProcedureMulti(\PDO $db, array $patient, bool $includeSent = false): array
     {
         $ihs = self::getIhsIds($patient);
+        $sentClause = $includeSent ? "" : "AND (ssp.id_procedure IS NULL OR ssp.id_procedure IN ('', '-'))";
         $stmt = $db->prepare("
             SELECT
                 rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
@@ -473,9 +551,9 @@ class PayloadAdapter
             JOIN prosedur_pasien pp ON pp.no_rawat = rp.no_rawat
             JOIN icd9 py ON py.kode = pp.kode
             LEFT JOIN pegawai pg ON pg.nik = rp.kd_dokter
-            LEFT JOIN satu_sehat_procedure ssp ON ssp.no_rawat = pp.no_rawat AND ssp.kode = pp.kode
+            LEFT JOIN satu_sehat_procedure ssp ON ssp.no_rawat = pp.no_rawat AND ssp.kode = pp.kode AND ssp.status = pp.status
             WHERE rp.no_rawat = ?
-              AND (ssp.id_procedure IS NULL OR ssp.id_procedure IN ('', '-'))
+              {$sentClause}
         ");
         $stmt->execute([$patient['no_rawat']]);
         $rows = $stmt->fetchAll();
@@ -502,8 +580,9 @@ class PayloadAdapter
 
     // Medication (MULTI-ROW: ALL drugs for this visit)
 
-    private static function buildMedicationMulti(\PDO $db, string $noRawat, string $orgId): array
+    private static function buildMedicationMulti(\PDO $db, string $noRawat, string $orgId, bool $includeSent = false): array
     {
+        $sentClause = $includeSent ? "" : "AND (ssm.id_medication IS NULL OR ssm.id_medication IN ('', '-'))";
         $stmt = $db->prepare("
             SELECT
                 ssmo.obat_code, ssmo.obat_system, db.status,
@@ -516,7 +595,7 @@ class PayloadAdapter
             INNER JOIN databarang db ON db.kode_brng = ssmo.kode_brng
             LEFT JOIN satu_sehat_medication ssm ON ssm.kode_brng = ssmo.kode_brng
             WHERE ro.no_rawat = ?
-              AND (ssm.id_medication IS NULL OR ssm.id_medication IN ('', '-'))
+              {$sentClause}
             GROUP BY ssmo.kode_brng
         ");
         $stmt->execute([$noRawat]);
@@ -540,7 +619,7 @@ class PayloadAdapter
 
     // MedicationDispense — dpo-based (CLI parity: columns + authorizing request)
 
-    private static function buildDispenseFromDpo(\PDO $db, array $patient, string $orgId, array $ihs): array
+    private static function buildDispenseFromDpo(\PDO $db, array $patient, string $orgId, array $ihs, bool $includeSent = false): array
     {
         $stmt = $db->prepare("
             SELECT
@@ -584,7 +663,7 @@ class PayloadAdapter
 
         $payloads = [];
         foreach ($rows as $row) {
-            if (trim((string) ($row['id_medicationdispense'] ?? '')) !== '') {
+            if (!$includeSent && trim((string) ($row['id_medicationdispense'] ?? '')) !== '') {
                 continue; // already synced (real id present)
             }
             // In-bundle or synced MedicationRequest check:
@@ -611,7 +690,7 @@ class PayloadAdapter
 
     // MedicationRequest / Dispense / Statement (MULTI-ROW)
 
-    private static function buildMedicationFamilyMulti(\PDO $db, array $patient, string $orgId, string $kind): array
+    private static function buildMedicationFamilyMulti(\PDO $db, array $patient, string $orgId, string $kind, bool $includeSent = false): array
     {
         $ihs = self::getIhsIds($patient);
         $payloads = [];
@@ -620,7 +699,7 @@ class PayloadAdapter
         // dpo-based flow) — NOT from the prescription row set, which lacks
         // tgl_perawatan/jam/no_batch/no_faktur/status_pemberian/location.
         if ($kind === 'dispense') {
-            return self::buildDispenseFromDpo($db, $patient, $orgId, $ihs);
+            return self::buildDispenseFromDpo($db, $patient, $orgId, $ihs, $includeSent);
         }
 
         // Regular prescriptions
@@ -709,7 +788,7 @@ class PayloadAdapter
         $itemSeq = [];
 
         foreach (array_merge($regularRows, $racikanRows) as $row) {
-            if ($isAlreadySent($row, $kind)) {
+            if (!$includeSent && $isAlreadySent($row, $kind)) {
                 continue;
             }
             $resepKey = (string) ($row['no_resep'] ?? '');
@@ -760,11 +839,12 @@ class PayloadAdapter
 
     // CarePlan (MULTI-ROW: ralan + ranap)
 
-    private static function buildCarePlanMulti(\PDO $db, array $patient, string $orgId): array
+    private static function buildCarePlanMulti(\PDO $db, array $patient, string $orgId, bool $includeSent = false): array
     {
         $ihs = self::getIhsIds($patient);
         $noRawat = $patient['no_rawat'];
         $payloads = [];
+        $sentClause = $includeSent ? "" : "AND (ssc.id_careplan IS NULL OR ssc.id_careplan IN ('', '-'))";
 
         // Ralan CarePlans
         try {
@@ -781,7 +861,7 @@ class PayloadAdapter
                     AND ssc.jam_rawat = pr.jam_rawat
                     AND ssc.status = 'Ralan'
                 WHERE pr.no_rawat = ? AND pr.rtl IS NOT NULL AND pr.rtl != ''
-                  AND (ssc.id_careplan IS NULL OR ssc.id_careplan IN ('', '-'))
+                  {$sentClause}
             ");
             $stmtR->execute([$noRawat]);
             $ralanRows = $stmtR->fetchAll();
@@ -812,7 +892,7 @@ class PayloadAdapter
                     AND ssc.jam_rawat = pr.jam_rawat
                     AND ssc.status = 'Ranap'
                 WHERE pr.no_rawat = ? AND pr.rtl IS NOT NULL AND pr.rtl != ''
-                  AND (ssc.id_careplan IS NULL OR ssc.id_careplan IN ('', '-'))
+                  {$sentClause}
             ");
             $stmtN->execute([$noRawat]);
             $ranapRows = $stmtN->fetchAll();
@@ -833,7 +913,7 @@ class PayloadAdapter
 
     // AllergyIntolerance (MULTI-ROW: ralan + ranap)
 
-    private static function buildAllergyMulti(\PDO $db, array $patient): array
+    private static function buildAllergyMulti(\PDO $db, array $patient, bool $includeSent = false): array
     {
         $ihs = self::getIhsIds($patient);
         $noRawat = $patient['no_rawat'];
@@ -846,6 +926,7 @@ class PayloadAdapter
             )
         );
         $orgId = (string) Config::get('satusehat.org_id', '');
+        $sentClause = $includeSent ? "" : "AND (ssai.id_allergy_intolerance IS NULL OR ssai.id_allergy_intolerance IN ('', '-'))";
 
         // Ralan allergies
         try {
@@ -862,7 +943,7 @@ class PayloadAdapter
                     AND ssai.status = 'Ralan'
                 WHERE pr.no_rawat = ?
                   AND pr.alergi IS NOT NULL AND pr.alergi != '' AND pr.alergi != '-'
-                  AND (ssai.id_allergy_intolerance IS NULL OR ssai.id_allergy_intolerance IN ('', '-'))
+                  {$sentClause}
             ");
             $stmtR->execute([$noRawat]);
             $ralanRows = $stmtR->fetchAll();
@@ -896,7 +977,7 @@ class PayloadAdapter
                     AND ssai.status = 'Ranap'
                 WHERE pr.no_rawat = ?
                   AND pr.alergi IS NOT NULL AND pr.alergi != '' AND pr.alergi != '-'
-                  AND (ssai.id_allergy_intolerance IS NULL OR ssai.id_allergy_intolerance IN ('', '-'))
+                  {$sentClause}
             ");
             $stmtN->execute([$noRawat]);
             $ranapRows = $stmtN->fetchAll();
@@ -920,9 +1001,10 @@ class PayloadAdapter
 
     // Immunization (MULTI-ROW)
 
-    private static function buildImmunizationMulti(\PDO $db, array $patient): array
+    private static function buildImmunizationMulti(\PDO $db, array $patient, bool $includeSent = false): array
     {
         $ihs = self::getIhsIds($patient);
+        $sentClause = $includeSent ? "" : "AND (ssi.id_immunization IS NULL OR ssi.id_immunization IN ('', '-'))";
         $stmt = $db->prepare("
             SELECT rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis,
                 pj.nm_pasien, pj.no_ktp, rp.stts, rp.status_lanjut, sse.id_encounter,
@@ -945,7 +1027,7 @@ class PayloadAdapter
             LEFT JOIN data_batch db ON db.no_batch = dpo.no_batch AND db.kode_brng = dpo.kode_brng AND db.no_faktur = dpo.no_faktur
             LEFT JOIN satu_sehat_immunization ssi ON ssi.no_rawat = dpo.no_rawat AND ssi.tgl_perawatan = dpo.tgl_perawatan AND ssi.jam = dpo.jam AND ssi.kode_brng = dpo.kode_brng AND ssi.no_batch = dpo.no_batch AND ssi.no_faktur = dpo.no_faktur
             WHERE dpo.no_rawat = ? AND dpo.no_batch <> ''
-              AND (ssi.id_immunization IS NULL OR ssi.id_immunization IN ('', '-'))
+              {$sentClause}
         ");
         $stmt->execute([$patient['no_rawat']]);
         $rows = $stmt->fetchAll();
@@ -964,11 +1046,12 @@ class PayloadAdapter
 
     // ClinicalImpression (MULTI-ROW: ralan + ranap)
 
-    private static function buildClinicalImpressionMulti(\PDO $db, array $patient): array
+    private static function buildClinicalImpressionMulti(\PDO $db, array $patient, bool $includeSent = false): array
     {
         $ihs = self::getIhsIds($patient);
         $noRawat = $patient['no_rawat'];
         $payloads = [];
+        $sentClause = $includeSent ? "" : "AND (ssci.id_clinicalimpression IS NULL OR ssci.id_clinicalimpression IN ('', '-'))";
 
         // Ralan ClinicalImpressions
         try {
@@ -994,7 +1077,7 @@ class PayloadAdapter
                     AND ssci.jam_rawat = pem.jam_rawat
                     AND ssci.status = 'Ralan'
                 WHERE pem.penilaian <> '' AND rp.no_rawat = ?
-                    AND (ssci.id_clinicalimpression IS NULL OR ssci.id_clinicalimpression IN ('', '-'))
+                    {$sentClause}
             ");
             $stmtR->execute([$noRawat]);
             $ralanRows = $stmtR->fetchAll();
@@ -1033,7 +1116,7 @@ class PayloadAdapter
                     AND ssci.jam_rawat = pem.jam_rawat
                     AND ssci.status = 'Ranap'
                 WHERE pem.penilaian <> '' AND rp.no_rawat = ?
-                    AND (ssci.id_clinicalimpression IS NULL OR ssci.id_clinicalimpression IN ('', '-'))
+                    {$sentClause}
             ");
             $stmtN->execute([$noRawat]);
             $ranapRows = $stmtN->fetchAll();
@@ -1053,7 +1136,7 @@ class PayloadAdapter
 
     // Lab Pipeline (MULTI-ROW: all LabPK + LabMB + Radiologi)
 
-    private static function buildLabPipelineMulti(\PDO $db, array $patient, string $orgId, string $stage): array
+    private static function buildLabPipelineMulti(\PDO $db, array $patient, string $orgId, string $stage, bool $includeSent = false): array
     {
         $ihs = self::getIhsIds($patient);
         $noRawat = $patient['no_rawat'];
@@ -1061,9 +1144,9 @@ class PayloadAdapter
 
         // Collect rows from all three variants
         $variants = [
-            ['rows' => self::safeLabFetch($db, $noRawat, 'pk', $stage), 'isRad' => false, 'variantName' => 'pk'],
-            ['rows' => self::safeLabFetch($db, $noRawat, 'mb', $stage), 'isRad' => false, 'variantName' => 'mb'],
-            ['rows' => self::safeLabFetch($db, $noRawat, 'rad', $stage), 'isRad' => true, 'variantName' => 'rad'],
+            ['rows' => self::safeLabFetch($db, $noRawat, 'pk', $stage, $includeSent), 'isRad' => false, 'variantName' => 'pk'],
+            ['rows' => self::safeLabFetch($db, $noRawat, 'mb', $stage, $includeSent), 'isRad' => false, 'variantName' => 'mb'],
+            ['rows' => self::safeLabFetch($db, $noRawat, 'rad', $stage, $includeSent), 'isRad' => true, 'variantName' => 'rad'],
         ];
 
         foreach ($variants as $v) {
@@ -1150,16 +1233,16 @@ class PayloadAdapter
         return self::withPersistKeys($payload, $table, $idCol, $row, $wanted);
     }
 
-    private static function safeLabFetch(\PDO $db, string $noRawat, string $variant, string $stage): array
+    private static function safeLabFetch(\PDO $db, string $noRawat, string $variant, string $stage, bool $includeSent = false): array
     {
         try {
-            return self::fetchLabRows($db, $noRawat, $variant, $stage);
+            return self::fetchLabRows($db, $noRawat, $variant, $stage, $includeSent);
         } catch (\Throwable $e) {
             return [];  // Table may not exist
         }
     }
 
-    private static function fetchLabRows(\PDO $db, string $noRawat, string $variant, string $stage): array
+    private static function fetchLabRows(\PDO $db, string $noRawat, string $variant, string $stage, bool $includeSent = false): array
     {
         // Build table names based on variant
         $tables = match ($variant) {
@@ -1179,7 +1262,7 @@ class PayloadAdapter
         };
 
         if ($variant === 'rad') {
-            return self::fetchRadRows($db, $noRawat, $stage);
+            return self::fetchRadRows($db, $noRawat, $stage, $includeSent);
         }
         if (empty($tables)) return [];
 
@@ -1187,6 +1270,7 @@ class PayloadAdapter
         $sp = $tables['sp']; $ob = $tables['obs']; $drT = $tables['dr']; $mp = $tables['map'];
 
         if ($stage === 'serviceRequest') {
+            $sentClause = $includeSent ? "" : "AND (sssl.id_servicerequest IS NULL OR sssl.id_servicerequest IN ('', '-'))";
             $stmt = $db->prepare("
                 SELECT rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, pj.nm_pasien, pj.no_ktp, rp.status_lanjut,
                     sse.id_encounter, pl.noorder, pl.tgl_permintaan, pl.jam_permintaan, pl.diagnosa_klinis,
@@ -1201,12 +1285,13 @@ class PayloadAdapter
                 LEFT JOIN {$mp} sml ON sml.id_template = tl.id_template
                 LEFT JOIN {$sr} sssl ON sssl.noorder = pdpl.noorder AND sssl.id_template = pdpl.id_template AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
                 WHERE rp.no_rawat = ? AND sml.code IS NOT NULL
-                  AND (sssl.id_servicerequest IS NULL OR sssl.id_servicerequest IN ('', '-'))
+                  {$sentClause}
             ");
             $stmt->execute([$noRawat]);
             return $stmt->fetchAll();
         }
         if ($stage === 'specimen') {
+            $sentClause = $includeSent ? "" : "AND (sssp.id_specimen IS NULL OR sssp.id_specimen IN ('', '-'))";
             $stmt = $db->prepare("
                 SELECT rp.no_rawat, rp.no_rkm_medis, rp.tgl_registrasi, rp.jam_reg, pj.nm_pasien,
                     pl.noorder, pl.tgl_sampel, pl.jam_sampel, tl.Pemeriksaan,
@@ -1221,12 +1306,13 @@ class PayloadAdapter
                 LEFT JOIN {$sr} sssl ON sssl.noorder = pdpl.noorder AND sssl.id_template = pdpl.id_template AND sssl.kd_jenis_prw = pdpl.kd_jenis_prw
                 LEFT JOIN {$sp} sssp ON sssp.noorder = pdpl.noorder AND sssp.id_template = pdpl.id_template AND sssp.kd_jenis_prw = pdpl.kd_jenis_prw
                 WHERE rp.no_rawat = ? AND sml.sampel_code IS NOT NULL
-                  AND (sssp.id_specimen IS NULL OR sssp.id_specimen IN ('', '-'))
+                  {$sentClause}
             ");
             $stmt->execute([$noRawat]);
             return $stmt->fetchAll();
         }
         if ($stage === 'observation') {
+            $sentClause = $includeSent ? "" : "AND (sso.id_observation IS NULL OR sso.id_observation IN ('', '-'))";
             $stmt = $db->prepare("
                 SELECT rp.no_rawat, rp.no_rkm_medis, rp.tgl_registrasi, rp.jam_reg, pj.nm_pasien,
                     pl.noorder, pl.tgl_hasil, pl.jam_hasil, tl.Pemeriksaan, tl.satuan,
@@ -1240,18 +1326,19 @@ class PayloadAdapter
                 INNER JOIN template_laboratorium tl ON tl.id_template = pdpl.id_template
                 LEFT JOIN {$mp} sml ON sml.id_template = tl.id_template
                 LEFT JOIN {$sp} sssp ON sssp.noorder = pdpl.noorder AND sssp.id_template = pdpl.id_template AND sssp.kd_jenis_prw = pdpl.kd_jenis_prw
-                INNER JOIN periksa_lab per ON per.no_rawat = pl.no_rawat AND per.tgl_periksa = pl.tgl_hasil AND per.jam = pl.jam_hasil AND per.noorder = pl.noorder
+                INNER JOIN periksa_lab per ON per.no_rawat = pl.no_rawat AND per.tgl_periksa = pl.tgl_hasil AND per.jam = pl.jam_hasil AND per.kd_jenis_prw = pdpl.kd_jenis_prw
                 INNER JOIN detail_periksa_lab dpl ON dpl.no_rawat = per.no_rawat AND dpl.tgl_periksa = per.tgl_periksa AND dpl.jam = per.jam AND dpl.id_template = pdpl.id_template AND dpl.kd_jenis_prw = pdpl.kd_jenis_prw
                 LEFT JOIN pegawai peg ON peg.nik = per.kd_dokter
                 LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
                 LEFT JOIN {$ob} sso ON sso.noorder = pdpl.noorder AND sso.id_template = pdpl.id_template AND sso.kd_jenis_prw = pdpl.kd_jenis_prw
                 WHERE rp.no_rawat = ? AND sml.code IS NOT NULL
-                  AND (sso.id_observation IS NULL OR sso.id_observation IN ('', '-'))
+                  {$sentClause}
             ");
             $stmt->execute([$noRawat]);
             return $stmt->fetchAll();
         }
         if ($stage === 'diagnosticReport') {
+            $sentClause = $includeSent ? "" : "AND (ssdr.id_diagnosticreport IS NULL OR ssdr.id_diagnosticreport IN ('', '-'))";
             $stmt = $db->prepare("
                 SELECT rp.no_rawat, rp.no_rkm_medis, rp.tgl_registrasi, rp.jam_reg, pj.nm_pasien,
                     pl.noorder, pl.tgl_hasil, pl.jam_hasil, pl.diagnosa_klinis,
@@ -1266,14 +1353,14 @@ class PayloadAdapter
                 LEFT JOIN {$mp} sml ON sml.id_template = tl.id_template
                 LEFT JOIN {$sr} sssr ON sssr.noorder = pdpl.noorder AND sssr.id_template = pdpl.id_template AND sssr.kd_jenis_prw = pdpl.kd_jenis_prw
                 LEFT JOIN {$sp} sssp ON sssp.noorder = pdpl.noorder AND sssp.id_template = pdpl.id_template AND sssp.kd_jenis_prw = pdpl.kd_jenis_prw
-                INNER JOIN periksa_lab per ON per.no_rawat = pl.no_rawat AND per.tgl_periksa = pl.tgl_hasil AND per.jam = pl.jam_hasil AND per.noorder = pl.noorder
+                INNER JOIN periksa_lab per ON per.no_rawat = pl.no_rawat AND per.tgl_periksa = pl.tgl_hasil AND per.jam = pl.jam_hasil AND per.kd_jenis_prw = pdpl.kd_jenis_prw
                 LEFT JOIN saran_kesan_lab skl ON per.no_rawat = skl.no_rawat AND per.tgl_periksa = skl.tgl_periksa AND per.jam = skl.jam
                 LEFT JOIN {$ob} sso ON sso.noorder = pdpl.noorder AND sso.id_template = pdpl.id_template AND sso.kd_jenis_prw = pdpl.kd_jenis_prw
                 LEFT JOIN pegawai peg ON peg.nik = per.kd_dokter
                 LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
                 LEFT JOIN {$drT} ssdr ON ssdr.noorder = pdpl.noorder AND ssdr.id_template = pdpl.id_template AND ssdr.kd_jenis_prw = pdpl.kd_jenis_prw
                 WHERE rp.no_rawat = ? AND sml.code IS NOT NULL
-                  AND (ssdr.id_diagnosticreport IS NULL OR ssdr.id_diagnosticreport IN ('', '-'))
+                  {$sentClause}
             ");
             $stmt->execute([$noRawat]);
             return $stmt->fetchAll();
@@ -1281,9 +1368,10 @@ class PayloadAdapter
         return [];
     }
 
-    private static function fetchRadRows(\PDO $db, string $noRawat, string $stage): array
+    private static function fetchRadRows(\PDO $db, string $noRawat, string $stage, bool $includeSent = false): array
     {
         if ($stage === 'serviceRequest') {
+            $sentClause = $includeSent ? "" : "AND (ssr.id_servicerequest IS NULL OR ssr.id_servicerequest IN ('', '-'))";
             $stmt = $db->prepare("
                 SELECT rp.tgl_registrasi, rp.jam_reg, rp.no_rawat, rp.no_rkm_medis, pj.nm_pasien, pj.no_ktp, rp.status_lanjut,
                     sse.id_encounter, pr.noorder, pr.tgl_permintaan, pr.jam_permintaan, pr.diagnosa_klinis,
@@ -1297,12 +1385,13 @@ class PayloadAdapter
                 LEFT JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
                 LEFT JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
                 WHERE rp.no_rawat = ? AND smr.code IS NOT NULL
-                  AND (ssr.id_servicerequest IS NULL OR ssr.id_servicerequest IN ('', '-'))
+                  {$sentClause}
             ");
             $stmt->execute([$noRawat]);
             return $stmt->fetchAll();
         }
         if ($stage === 'specimen') {
+            $sentClause = $includeSent ? "" : "AND (sssp.id_specimen IS NULL OR sssp.id_specimen IN ('', '-'))";
             // FIXED: specimen JOIN uses ppr alias (not ssr) to avoid wrong-alias bug
             $stmt = $db->prepare("
                 SELECT rp.no_rawat, rp.no_rkm_medis, rp.tgl_registrasi, rp.jam_reg, pj.nm_pasien,
@@ -1318,12 +1407,13 @@ class PayloadAdapter
                 LEFT JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
                 LEFT JOIN satu_sehat_specimen_radiologi sssp ON sssp.noorder = ppr.noorder AND sssp.kd_jenis_prw = ppr.kd_jenis_prw
                 WHERE rp.no_rawat = ? AND smr.sampel_code IS NOT NULL
-                  AND (sssp.id_specimen IS NULL OR sssp.id_specimen IN ('', '-'))
+                  {$sentClause}
             ");
             $stmt->execute([$noRawat]);
             return $stmt->fetchAll();
         }
-if ($stage === 'observation') {
+        if ($stage === 'observation') {
+            $sentClause = $includeSent ? "" : "AND (sso.id_observation IS NULL OR sso.id_observation IN ('', '-'))";
             $stmt = $db->prepare("
                 SELECT rp.no_rawat, rp.no_rkm_medis, rp.tgl_registrasi, rp.jam_reg, pj.nm_pasien,
                     pr.noorder, pr.tgl_hasil, pr.jam_hasil, jpr.nm_perawatan,
@@ -1339,18 +1429,19 @@ if ($stage === 'observation') {
                 LEFT JOIN satu_sehat_mapping_radiologi smr ON smr.kd_jenis_prw = jpr.kd_jenis_prw
                 LEFT JOIN satu_sehat_specimen_radiologi sssp ON sssp.noorder = ppr.noorder AND sssp.kd_jenis_prw = ppr.kd_jenis_prw
                 LEFT JOIN satu_sehat_imagingstudy_radiologi ssi ON ssi.noorder = ppr.noorder AND ssi.kd_jenis_prw = ppr.kd_jenis_prw
-                INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil
-                INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam AND hr.kd_jenis_prw = prad.kd_jenis_prw
+                INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil AND prad.kd_jenis_prw = ppr.kd_jenis_prw
+                INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam
                 LEFT JOIN pegawai peg ON peg.nik = prad.kd_dokter
                 LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
                 LEFT JOIN satu_sehat_observation_radiologi sso ON sso.noorder = ppr.noorder AND sso.kd_jenis_prw = ppr.kd_jenis_prw
                 WHERE rp.no_rawat = ? AND smr.code IS NOT NULL
-                  AND (sso.id_observation IS NULL OR sso.id_observation IN ('', '-'))
+                  {$sentClause}
             ");
             $stmt->execute([$noRawat]);
             return $stmt->fetchAll();
         }
         if ($stage === 'diagnosticReport') {
+            $sentClause = $includeSent ? "" : "AND (ssdr.id_diagnosticreport IS NULL OR ssdr.id_diagnosticreport IN ('', '-'))";
             $stmt = $db->prepare("
                 SELECT rp.no_rawat, rp.no_rkm_medis, rp.tgl_registrasi, rp.jam_reg, pj.nm_pasien,
                     pr.noorder, pr.tgl_hasil, pr.jam_hasil, pr.diagnosa_klinis,
@@ -1367,14 +1458,14 @@ if ($stage === 'observation') {
                 LEFT JOIN satu_sehat_servicerequest_radiologi ssr ON ssr.noorder = ppr.noorder AND ssr.kd_jenis_prw = ppr.kd_jenis_prw
                 LEFT JOIN satu_sehat_specimen_radiologi sssp ON sssp.noorder = ppr.noorder AND sssp.kd_jenis_prw = ppr.kd_jenis_prw
                 LEFT JOIN satu_sehat_imagingstudy_radiologi ssi ON ssi.noorder = ppr.noorder AND ssi.kd_jenis_prw = ppr.kd_jenis_prw
-                INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil
-                INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam AND hr.kd_jenis_prw = prad.kd_jenis_prw
+                INNER JOIN periksa_radiologi prad ON prad.no_rawat = pr.no_rawat AND prad.tgl_periksa = pr.tgl_hasil AND prad.jam = pr.jam_hasil AND prad.kd_jenis_prw = ppr.kd_jenis_prw
+                INNER JOIN hasil_radiologi hr ON prad.no_rawat = hr.no_rawat AND prad.tgl_periksa = hr.tgl_periksa AND prad.jam = hr.jam
                 LEFT JOIN satu_sehat_observation_radiologi sso ON sso.noorder = ppr.noorder AND sso.kd_jenis_prw = ppr.kd_jenis_prw
                 LEFT JOIN pegawai peg ON peg.nik = prad.kd_dokter
                 LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
                 LEFT JOIN satu_sehat_diagnosticreport_radiologi ssdr ON ssdr.noorder = ppr.noorder AND ssdr.kd_jenis_prw = ppr.kd_jenis_prw
                 WHERE rp.no_rawat = ?
-                  AND (ssdr.id_diagnosticreport IS NULL OR ssdr.id_diagnosticreport IN ('', '-'))
+                  {$sentClause}
             ");
             $stmt->execute([$noRawat]);
             return $stmt->fetchAll();
@@ -1384,9 +1475,10 @@ if ($stage === 'observation') {
 
     // Composition (single per visit — only when discharge note exists)
 
-    private static function buildComposition(\PDO $db, array $patient, string $orgId, array $refs = []): ?array
+    private static function buildComposition(\PDO $db, array $patient, string $orgId, array $refs = [], bool $includeSent = false): ?array
     {
         $ihs = self::getIhsIds($patient);
+        $sentClause = $includeSent ? "" : "AND (ssc.id_composition IS NULL OR ssc.id_composition IN ('', '-'))";
         // Composition should only be sent after discharge — validate nota exists
         $stmt = $db->prepare("
             SELECT rp.no_rawat, rp.tgl_registrasi, rp.jam_reg, rp.no_rkm_medis,
@@ -1398,7 +1490,7 @@ if ($stage === 'observation') {
             WHERE rp.no_rawat = ?
               AND (EXISTS (SELECT 1 FROM nota_jalan nj WHERE nj.no_rawat = rp.no_rawat)
                    OR EXISTS (SELECT 1 FROM nota_inap ni WHERE ni.no_rawat = rp.no_rawat))
-              AND (ssc.id_composition IS NULL OR ssc.id_composition IN ('', '-'))
+              {$sentClause}
             LIMIT 1
         ");
         $stmt->execute([$patient['no_rawat']]);
@@ -1422,9 +1514,10 @@ if ($stage === 'observation') {
 
     // QuestionnaireResponse (MULTI-ROW — all telaah_farmasi reviews per visit)
 
-    private static function buildQuestionnaireResponseMulti(\PDO $db, array $patient): array
+    private static function buildQuestionnaireResponseMulti(\PDO $db, array $patient, bool $includeSent = false): array
     {
         $ihs = self::getIhsIds($patient);
+        $sentClause = $includeSent ? "" : "AND (ssqr.id_questionresponse IS NULL OR ssqr.id_questionresponse IN ('', '-'))";
         $stmt = $db->prepare("
             SELECT tf.*, ro.tgl_peresepan, ro.jam_peresepan, sse.id_encounter,
                    IFNULL(ssqr.id_questionresponse, '') AS id_questionresponse
@@ -1432,7 +1525,7 @@ if ($stage === 'observation') {
             LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = ro.no_rawat
             LEFT JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = ro.no_resep
             WHERE ro.no_rawat = ?
-              AND (ssqr.id_questionresponse IS NULL OR ssqr.id_questionresponse IN ('', '-'))
+              {$sentClause}
             ORDER BY ro.tgl_peresepan, ro.jam_peresepan
         ");
         $stmt->execute([$patient['no_rawat']]);
@@ -1468,26 +1561,32 @@ if ($stage === 'observation') {
     {
         $ihs = self::getIhsIds($patient);
         $noRawat = $patient['no_rawat'];
-        $statusRawat = 'Ralan';
+        $rows = [];
 
-        $stmt = $db->prepare("
-            SELECT pr.*, sse.id_encounter, pg.nama, pg.no_ktp AS ktpdokter,
-                   rp.kd_poli, pol.nm_poli, pr.tgl_perawatan AS tgl_observasi, pr.jam_rawat AS jam_observasi
-            FROM pemeriksaan_ralan pr
-            JOIN reg_periksa rp ON rp.no_rawat = pr.no_rawat
-            LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
-            LEFT JOIN pegawai pg ON pg.nik = pr.nip
-            LEFT JOIN poliklinik pol ON pol.kd_poli = rp.kd_poli
-            WHERE pr.no_rawat = ?
-            ORDER BY pr.tgl_perawatan, pr.jam_rawat
-        ");
-        $stmt->execute([$noRawat]);
-        $rows = $stmt->fetchAll();
-        if (empty($rows)) {
-            $statusRawat = 'Ranap';
+        // 1. Outpatient (Ralan) examinations
+        try {
             $stmt = $db->prepare("
                 SELECT pr.*, sse.id_encounter, pg.nama, pg.no_ktp AS ktpdokter,
-                       rp.kd_poli, pol.nm_poli, pr.tgl_perawatan AS tgl_observasi, pr.jam_rawat AS jam_observasi
+                       rp.kd_poli, pol.nm_poli, pr.tgl_perawatan AS tgl_observasi, pr.jam_rawat AS jam_observasi,
+                       'Ralan' AS status_rawat
+                FROM pemeriksaan_ralan pr
+                JOIN reg_periksa rp ON rp.no_rawat = pr.no_rawat
+                LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
+                LEFT JOIN pegawai pg ON pg.nik = pr.nip
+                LEFT JOIN poliklinik pol ON pol.kd_poli = rp.kd_poli
+                WHERE pr.no_rawat = ?
+                ORDER BY pr.tgl_perawatan, pr.jam_rawat
+            ");
+            $stmt->execute([$noRawat]);
+            $rows = array_merge($rows, $stmt->fetchAll() ?: []);
+        } catch (\Throwable $e) { }
+
+        // 2. Inpatient (Ranap) examinations
+        try {
+            $stmt = $db->prepare("
+                SELECT pr.*, sse.id_encounter, pg.nama, pg.no_ktp AS ktpdokter,
+                       rp.kd_poli, pol.nm_poli, pr.tgl_perawatan AS tgl_observasi, pr.jam_rawat AS jam_observasi,
+                       'Ranap' AS status_rawat
                 FROM pemeriksaan_ranap pr
                 JOIN reg_periksa rp ON rp.no_rawat = pr.no_rawat
                 LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = pr.no_rawat
@@ -1497,18 +1596,18 @@ if ($stage === 'observation') {
                 ORDER BY pr.tgl_perawatan, pr.jam_rawat
             ");
             $stmt->execute([$noRawat]);
-            $rows = $stmt->fetchAll();
-        }
+            $rows = array_merge($rows, $stmt->fetchAll() ?: []);
+        } catch (\Throwable $e) { }
+
         if (empty($rows)) return [];
 
         $definitions = \ObservationTTVDictionary::getDefinitions();
         $payloads = [];
 
-        // Every exam of the visit, newest last (the old LIMIT 1 silently
-        // dropped later examinations — the CLI iterates all of them).
         foreach ($rows as $row) {
             $row['nm_pasien'] = $patient['nm_pasien'];
             $row['no_ktp'] = $patient['no_ktp'];
+            $statusRawat = $row['status_rawat'] ?? 'Ralan';
 
             foreach ($definitions as $ttvKey => $def) {
                 $dbCol = $def['db_column'];
@@ -1517,11 +1616,37 @@ if ($stage === 'observation') {
                 // Skip empty/null/dash values
                 if ($value === '' || $value === '-' || $value === '0') continue;
 
-                // Build per-TTV Observation using PayloadBuilder
+                // Check existing ID in state table
+                $existingId = '';
+                try {
+                    $stateTable = $def['state_table'];
+                    $stmtId = $db->prepare("SELECT id_observation FROM {$stateTable} WHERE no_rawat = ? AND tgl_perawatan = ? AND jam_rawat = ? AND status = ? LIMIT 1");
+                    $stmtId->execute([$noRawat, $row['tgl_perawatan'], $row['jam_rawat'], $statusRawat]);
+                    $existingId = (string) ($stmtId->fetchColumn() ?: '');
+                    if ($existingId === '-') $existingId = '';
+                } catch (\Throwable $e) { }
+
+                // Build per-TTV Observation using PayloadBuilder with existingId if present
                 $ttvRow = $row;
                 $ttvRow['value'] = $value;
 
-                $payload = \SatuSehatPayloadBuilder::observationTTV($ttvRow, $ihs['pasien'], $ihs['dokter'], $def);
+                // Resolve examiner IHS from examination row (nip -> no_ktp -> ihspegawai)
+                $examinerIhs = '';
+                if (!empty($row['ktpdokter'])) {
+                    try {
+                        $stmtEx = $db->prepare("SELECT ihspegawai FROM satu_sehat_ihs_practitioner WHERE nikpegawai = ? LIMIT 1");
+                        $stmtEx->execute([$row['ktpdokter']]);
+                        $examinerIhs = trim((string) ($stmtEx->fetchColumn() ?: ''));
+                        if ($examinerIhs === '-' || $examinerIhs === '') {
+                            $examinerIhs = self::resolveDokterIhs($db, $row['ktpdokter']);
+                        }
+                    } catch (\Throwable $e) { $examinerIhs = ''; }
+                }
+                if ($examinerIhs === '' || str_contains($examinerIhs, 'PLACEHOLDER')) {
+                    $examinerIhs = $ihs['dokter'];
+                }
+
+                $payload = \SatuSehatPayloadBuilder::observationTTV($ttvRow, $ihs['pasien'], $examinerIhs, $def, $existingId);
                 if ($payload !== null) {
                     // Attach TTV type metadata for correct persist routing
                     $payload['_panel_ttv_type'] = $ttvKey;

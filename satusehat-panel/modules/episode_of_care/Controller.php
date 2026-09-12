@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Modules\EpisodeOfCare;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\BaseModuleController;
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Util\PayloadAdapter;
@@ -34,14 +36,18 @@ class Controller extends BaseModuleController
         }
 
         $sql = "
-            SELECT 
+            SELECT
                 rp.no_rawat, rp.tgl_registrasi, rp.jam_reg, rp.status_bayar, rp.status_lanjut,
                 pj.no_rkm_medis, pj.nm_pasien, pj.no_ktp as nik_pasien,
                 dp.kd_penyakit, py.nm_penyakit, dp.status as status_diagnosa,
                 peg.nama as nm_dokter, peg.no_ktp as nik_dokter,
                 IFNULL(sse.id_encounter, '') as id_encounter,
                 IFNULL(ssc.id_condition, '') as id_condition,
-                IFNULL(sseo.id_episode_of_care, '') as id_episode_of_care
+                IFNULL(sseo.id_episode_of_care, '') as id_episode_of_care,
+                COALESCE(
+                    (SELECT nj.tanggal FROM nota_jalan nj WHERE nj.no_rawat = rp.no_rawat LIMIT 1),
+                    (SELECT ni.tanggal FROM nota_inap ni WHERE ni.no_rawat = rp.no_rawat LIMIT 1)
+                ) as tgl_keluar
             FROM reg_periksa rp
             LEFT JOIN pasien pj ON pj.no_rkm_medis = rp.no_rkm_medis
             INNER JOIN diagnosa_pasien dp ON dp.no_rawat = rp.no_rawat
@@ -51,6 +57,13 @@ class Controller extends BaseModuleController
             LEFT JOIN satu_sehat_condition ssc ON ssc.no_rawat = rp.no_rawat AND ssc.kd_penyakit = dp.kd_penyakit
             LEFT JOIN satu_sehat_episode_of_care sseo ON sseo.no_rawat = rp.no_rawat AND sseo.kd_penyakit = dp.kd_penyakit AND sseo.status = dp.status
             {$where}
+              AND (
+                  dp.kd_penyakit LIKE 'O%' OR
+                  dp.kd_penyakit LIKE 'P%' OR
+                  dp.kd_penyakit LIKE 'C%' OR
+                  dp.kd_penyakit LIKE 'H%' OR
+                  dp.kd_penyakit REGEXP '^(A1[5-9]|B90|Z3[4589]|N18|D[0-4]|Z51|I2[0-5]|I6[0-9]|B2[0-4]|Z21|E1[0-4])'
+              )
             ORDER BY rp.tgl_registrasi DESC, rp.jam_reg DESC
             LIMIT {$f['per_page']} OFFSET {$f['offset']}
         ";
@@ -60,7 +73,6 @@ class Controller extends BaseModuleController
             $stmt->execute($params);
             $rows = $stmt->fetchAll() ?: [];
 
-            $sqlite = Database::getSqlite();
             $items = [];
 
             foreach ($rows as $r) {
@@ -90,7 +102,26 @@ class Controller extends BaseModuleController
                     $blockers[] = 'billing';
                 }
 
-                $statusInfo = self::evaluateStatus($r, $r['id_episode_of_care'], $localState, $blockers);
+                $hasId = !empty($r['id_episode_of_care']) && $r['id_episode_of_care'] !== '-';
+                $isDischarged = !empty($r['tgl_keluar']);
+                $needsUpdate = false;
+                $updateReason = null;
+                $updateLabel = 'Perlu Update';
+
+                if ($hasId && $isDischarged && $localState !== 'finished') {
+                    $needsUpdate = true;
+                    $updateLabel = 'Tutup Episode';
+                    $updateReason = 'Pasien sudah pulang — perbarui status EpisodeOfCare ke finished via PATCH';
+                }
+
+                $options = [
+                    'needs_update'   => $needsUpdate,
+                    'update_label'  => $updateLabel,
+                    'update_reason' => $updateReason,
+                    'allow_reupdate'=> true,
+                ];
+
+                $statusInfo = self::evaluateStatus($r, $r['id_episode_of_care'], $localState, $blockers, $options);
 
                 if ($f['status_sync'] !== 'all' && $statusInfo['status'] !== $f['status_sync']) {
                     continue;
@@ -104,6 +135,7 @@ class Controller extends BaseModuleController
                     ],
                     'eoc_program'  => $eocType->display,
                     'status_info'  => $statusInfo,
+                    'is_finished'  => $isDischarged,
                 ]);
             }
 
@@ -134,7 +166,7 @@ class Controller extends BaseModuleController
         $patient = $stmt->fetch();
         if (!$patient) return ['success' => false, 'error' => 'Pasien tidak ditemukan'];
 
-        $payloads = PayloadAdapter::build('EpisodeOfCare', $noRawat, $patient);
+        $payloads = PayloadAdapter::build('EpisodeOfCare', $noRawat, $patient, [], true);
         $found = null;
         foreach ($payloads as $p) {
             $code = $p['_panel_persist_keys']['keys']['kd_penyakit'] ?? '';
@@ -166,7 +198,7 @@ class Controller extends BaseModuleController
                 $patient = $stmt->fetch();
                 if (!$patient) throw new \RuntimeException("Pasien {$noRawat} tidak ditemukan");
 
-                $payloads = PayloadAdapter::build('EpisodeOfCare', $noRawat, $patient);
+                $payloads = PayloadAdapter::build('EpisodeOfCare', $noRawat, $patient, [], true);
                 foreach ($payloads as $p) {
                     $c = $p['_panel_persist_keys']['keys']['kd_penyakit'] ?? '';
                     if ($c === $kdPenyakit || empty($kdPenyakit)) {
@@ -178,7 +210,7 @@ class Controller extends BaseModuleController
             function (array|string $itemKey, string $satusehatId, array $outcome): void {
                 $noRawat = is_array($itemKey) ? ($itemKey['no_rawat'] ?? '') : (string) $itemKey;
                 $kdPenyakit = is_array($itemKey) ? ($itemKey['kd_penyakit'] ?? '') : '';
-                $status = is_array($itemKey) ? ($itemKey['status'] ?? 'Ralan') : 'Ralan';
+                $status = is_array($itemKey) ? ($itemKey['status'] ?? 'Utama') : 'Utama';
                 $db = Database::getMysql();
 
                 $stmt = $db->prepare("
@@ -187,6 +219,27 @@ class Controller extends BaseModuleController
                     ON DUPLICATE KEY UPDATE id_episode_of_care = VALUES(id_episode_of_care)
                 ");
                 $stmt->execute([$noRawat, $kdPenyakit, $status, $satusehatId]);
+
+                // Track finished status in SQLite
+                try {
+                    $sqlite = Database::getSqlite();
+                    $stmtCheck = $db->prepare("
+                        SELECT COALESCE(nj.tanggal, ni.tanggal) as tgl_keluar
+                        FROM reg_periksa rp
+                        LEFT JOIN nota_jalan nj ON nj.no_rawat = rp.no_rawat
+                        LEFT JOIN nota_inap ni ON ni.no_rawat = rp.no_rawat
+                        WHERE rp.no_rawat = ? LIMIT 1
+                    ");
+                    $stmtCheck->execute([$noRawat]);
+                    $disc = $stmtCheck->fetch();
+                    $eocStatus = !empty($disc['tgl_keluar']) ? 'finished' : 'active';
+                    $compositeKey = $noRawat . '_' . $kdPenyakit . '_' . $status;
+                    $sqlite->prepare("
+                        INSERT INTO episode_of_care_state (composite_key, no_rawat, status, updated_at)
+                        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+                    ")->execute([$compositeKey, $noRawat, $eocStatus]);
+                } catch (\Throwable $e) { /* non-fatal */ }
             }
         );
     }

@@ -65,7 +65,7 @@ function renderTable(list) {
                 ${list.map(r => {
                     const st = r.status_info || {};
                     const keyStr = r.kode_brng;
-                    const canSend = st.status === 'ready' || st.status === 'failed';
+                    const canSend = st.status !== 'blocked';
                     return `
                         <tr data-key="${escapeHtml(keyStr)}">
                             <td><input type="checkbox" class="row-check" value="${escapeHtml(keyStr)}" ${canSend ? '' : 'disabled'}></td>

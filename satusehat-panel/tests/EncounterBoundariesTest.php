@@ -146,6 +146,28 @@ final class EncounterBoundariesTest extends TestCase
         $this->assertSame(['arrived'], array_column($h, 'status'));
     }
 
+    public function testFinishedStatusHistoryAllEntriesHaveStartAndEndRule10122(): void
+    {
+        // Even when discharge time was dropped or missing, finished target
+        // MUST have non-null start and end for every statusHistory entry (SATUSEHAT Rule 10122)
+        $b = SatuSehatPayloadBuilder::resolveEncounterBoundaries([
+            'status_lanjut' => 'Ralan',
+            'tgl_registrasi' => '2026-01-05', 'jam_reg' => '08:00:00',
+            'waktu_perawatan' => '2026-01-05T09:30:00+07:00',
+            'waktu_pulang' => '2026-01-05T08:00:00+07:00', // contradictory -> dropped to null
+        ]);
+        $this->assertNull($b['t2']);
+
+        $h = SatuSehatPayloadBuilder::buildEncounterStatusHistory($b, 'finished');
+        $this->assertCount(3, $h);
+        foreach ($h as $entry) {
+            $this->assertArrayHasKey('start', $entry['period']);
+            $this->assertNotNull($entry['period']['start'], "{$entry['status']} must have non-null start");
+            $this->assertArrayHasKey('end', $entry['period']);
+            $this->assertNotNull($entry['period']['end'], "{$entry['status']} must have non-null end (Rule 10122)");
+        }
+    }
+
     public function testConvertedIgdRanapFollowsSameChainAsImp(): void
     {
         // kd_poli is irrelevant to the timeline — an IGDK visit converted to

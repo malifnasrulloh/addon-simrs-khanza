@@ -2,6 +2,8 @@
 
 namespace SatusehatPanel\Core;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 class Router
 {
     private array $routes = [];

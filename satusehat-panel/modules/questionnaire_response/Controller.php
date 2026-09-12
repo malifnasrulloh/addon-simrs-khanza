@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SatusehatPanel\Modules\QuestionnaireResponse;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\BaseModuleController;
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Util\PayloadAdapter;
@@ -44,7 +46,7 @@ class Controller extends BaseModuleController
             FROM resep_obat ro
             JOIN reg_periksa rp ON rp.no_rawat = ro.no_rawat
             LEFT JOIN pasien pj ON pj.no_rkm_medis = rp.no_rkm_medis
-            LEFT JOIN telaah_farmasi tf ON tf.no_resep = ro.no_resep
+            INNER JOIN telaah_farmasi tf ON tf.no_resep = ro.no_resep
             LEFT JOIN pegawai peg ON peg.nik = ro.kd_dokter
             LEFT JOIN satu_sehat_encounter sse ON sse.no_rawat = rp.no_rawat
             LEFT JOIN satu_sehat_questionresponse_telaah_farmasi ssqr ON ssqr.no_resep = ro.no_resep
@@ -58,7 +60,6 @@ class Controller extends BaseModuleController
             $stmt->execute($params);
             $rows = $stmt->fetchAll() ?: [];
 
-            $sqlite = Database::getSqlite();
             $items = [];
 
             foreach ($rows as $r) {
@@ -120,7 +121,7 @@ class Controller extends BaseModuleController
         $patient = $stmt->fetch();
         if (!$patient) return ['success' => false, 'error' => 'Pasien tidak ditemukan'];
 
-        $payloads = PayloadAdapter::build('QuestionnaireResponse', $noRawat, $patient);
+        $payloads = PayloadAdapter::build('QuestionnaireResponse', $noRawat, $patient, [], true);
         $found = null;
         foreach ($payloads as $p) {
             $meta = $p['_panel_persist_keys']['keys'] ?? [];
@@ -152,7 +153,7 @@ class Controller extends BaseModuleController
                 $patient = $stmt->fetch();
                 if (!$patient) throw new \RuntimeException("Pasien {$noRawat} tidak ditemukan");
 
-                $payloads = PayloadAdapter::build('QuestionnaireResponse', $noRawat, $patient);
+                $payloads = PayloadAdapter::build('QuestionnaireResponse', $noRawat, $patient, [], true);
                 foreach ($payloads as $p) {
                     $meta = $p['_panel_persist_keys']['keys'] ?? [];
                     if (($meta['no_resep'] ?? '') === $noResep || empty($noResep)) {

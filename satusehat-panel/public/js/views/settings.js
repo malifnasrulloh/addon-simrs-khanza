@@ -13,9 +13,14 @@ export function initSettingsView() {
 }
 
 export function showSettingsView() {
+    $('patient-list-view').hidden = true;
+    $('launchpad-view').hidden = true;
+    if ($('module-view')) $('module-view').hidden = true;
     $('table-wrap').hidden = true;
     $('audit-view').hidden = true;
     $('settings-view').hidden = false;
+    if ($('filter-rail')) $('filter-rail').hidden = true;
+    document.querySelector('.layout')?.classList.remove('has-rail');
     loadSettings();
 }
 

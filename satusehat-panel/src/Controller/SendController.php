@@ -2,6 +2,8 @@
 
 namespace SatusehatPanel\Controller;
 
+defined('PANEL_BASE') || exit('Direct script access denied.');
+
 use SatusehatPanel\Core\Database;
 use SatusehatPanel\Core\Config;
 use SatusehatPanel\Util\PayloadAdapter;
@@ -12,6 +14,50 @@ use SatusehatPanel\Util\IdempotencyStore;
 
 class SendController
 {
+    public const RESOURCE_DEPENDENCY_ORDER = [
+        'EpisodeOfCare',
+        'Encounter',
+        'Medication',
+        'ServiceRequest',
+        'Specimen',
+        'Condition',
+        'Observation',
+        'ObservationTTV',
+        'Procedure',
+        'AllergyIntolerance',
+        'MedicationRequest',
+        'Immunization',
+        'MedicationDispense',
+        'MedicationStatement',
+        'DiagnosticReport',
+        'QuestionnaireResponse',
+        'ClinicalImpression',
+        'CarePlan',
+        'ImagingStudy',
+        'Composition',
+    ];
+
+    public const RESOURCE_PREREQUISITES = [
+        'Condition'             => ['Encounter'],
+        'Procedure'             => ['Encounter'],
+        'AllergyIntolerance'    => ['Encounter'],
+        'Observation'           => ['Encounter'],
+        'ObservationTTV'        => ['Encounter'],
+        'MedicationRequest'     => ['Encounter'],
+        'MedicationDispense'    => ['Encounter', 'MedicationRequest'],
+        'MedicationStatement'   => ['Encounter'],
+        'ServiceRequest'        => ['Encounter'],
+        'Specimen'              => ['Encounter', 'ServiceRequest'],
+        'DiagnosticReport'      => ['Encounter', 'ServiceRequest'],
+        'Immunization'          => ['Encounter'],
+        'CarePlan'              => ['Encounter'],
+        'ClinicalImpression'    => ['Encounter'],
+        'QuestionnaireResponse' => ['Encounter'],
+        'ImagingStudy'          => ['Encounter', 'ServiceRequest'],
+        'Composition'           => ['Encounter'],
+        'EpisodeOfCare'         => ['Encounter'],
+    ];
+
     /**
      * Build a FHIR transaction Bundle from checked resources and POST it.
      *
@@ -24,11 +70,6 @@ class SendController
         $input = json_decode(file_get_contents('php://input'), true);
         if (!is_array($input)) {
             return ['success' => false, 'error' => 'Invalid JSON body'];
-        }
-
-        $resources = $input['resources'] ?? [];
-        if (empty($resources)) {
-            return ['success' => false, 'error' => 'No resources selected'];
         }
 
         // Fetch patient
@@ -45,6 +86,26 @@ class SendController
             return ['success' => false, 'error' => 'Patient not found'];
         }
 
+        $resources = $input['resources'] ?? [];
+        if (empty($resources)) {
+            // Auto-detect available unsent resources for this visit if not explicitly passed
+            $manifest = PatientController::buildResourceManifest($noRawat, $patient);
+            $resources = array_column(array_filter($manifest, static fn($m) => !empty($m['available']) && empty($m['sent'])), 'type');
+        }
+
+        if (empty($resources)) {
+            return ['success' => false, 'error' => 'Tidak ada resource yang siap dikirim untuk kunjungan ini (semua sudah terkirim atau tidak ada data).'];
+        }
+
+        // Sort resources topologically into canonical FHIR dependency order
+        usort($resources, function ($a, $b) {
+            $idxA = array_search($a, self::RESOURCE_DEPENDENCY_ORDER, true);
+            $idxB = array_search($b, self::RESOURCE_DEPENDENCY_ORDER, true);
+            $posA = $idxA !== false ? $idxA : 999;
+            $posB = $idxB !== false ? $idxB : 999;
+            return $posA <=> $posB;
+        });
+
         // Billing gate — the CLI only POSTs clinical resources for paid
         // visits (status_bayar = 'Sudah Bayar'). The panel list color-codes
         // billing status precisely to surface this; block sends otherwise.
@@ -54,6 +115,33 @@ class SendController
                 'error' => 'Pasien belum lunas (status_bayar != Sudah Bayar). Sesuai kebijakan CLI, kirim hanya untuk kunjungan yang sudah dibayar.',
                 'build_errors' => [],
             ];
+        }
+
+        // Prerequisite validation: each resource in the bundle must have its parent
+        // either included in this transaction Bundle (via urn:uuid) OR already sent.
+        $hasSentEncounter = (int) $db->query("SELECT COUNT(*) FROM satu_sehat_encounter WHERE no_rawat = " . $db->quote($noRawat) . " AND id_encounter NOT IN ('', '-')")->fetchColumn() > 0;
+        $hasSentMedRequest = (int) $db->query("SELECT COUNT(*) FROM resep_obat ro JOIN satu_sehat_medicationrequest ssmr ON ssmr.no_resep = ro.no_resep WHERE ro.no_rawat = " . $db->quote($noRawat) . " AND ssmr.id_medicationrequest NOT IN ('', '-')")->fetchColumn() > 0;
+        $hasSentServiceReq = (int) $db->query("SELECT (SELECT COUNT(*) FROM permintaan_lab pl JOIN satu_sehat_servicerequest_lab ss ON ss.noorder = pl.noorder WHERE pl.no_rawat = " . $db->quote($noRawat) . " AND ss.id_servicerequest NOT IN ('', '-')) + (SELECT COUNT(*) FROM permintaan_radiologi pr JOIN satu_sehat_servicerequest_radiologi ss ON ss.noorder = pr.noorder WHERE pr.no_rawat = " . $db->quote($noRawat) . " AND ss.id_servicerequest NOT IN ('', '-'))")->fetchColumn() > 0;
+
+        $sentMap = [
+            'Encounter' => $hasSentEncounter,
+            'MedicationRequest' => $hasSentMedRequest,
+            'ServiceRequest' => $hasSentServiceReq,
+        ];
+
+        foreach ($resources as $res) {
+            $reqs = self::RESOURCE_PREREQUISITES[$res] ?? [];
+            foreach ($reqs as $req) {
+                $inBundle = in_array($req, $resources, true);
+                $alreadySent = $sentMap[$req] ?? false;
+                if (!$inBundle && !$alreadySent) {
+                    return [
+                        'success' => false,
+                        'error' => "Resource {$res} memerlukan {$req}. Sertakan {$req} dalam Bundle atau kirim {$req} terlebih dahulu.",
+                        'build_errors' => [],
+                    ];
+                }
+            }
         }
 
         // ── Resolve IHS IDs before building payloads ──────────────────
@@ -83,6 +171,42 @@ class SendController
                 'error' => 'IHS ID Dokter tidak ditemukan. Pastikan NIK dokter (' . $nikDokter . ') terdaftar di SATUSEHAT.',
                 'build_errors' => [],
             ];
+        }
+
+        // Pass resolved IHS IDs into patient context so builders reuse them
+        $patient['ihs_pasien'] = $ihsPasien;
+        $patient['ihs_dokter'] = $ihsDokter;
+
+        // Mandatory Encounter.location pre-flight validation (SATUSEHAT Rule 10120)
+        if (in_array('Encounter', $resources, true)) {
+            $stmtLoc = $db->prepare("
+                SELECT COALESCE(smlranap.id_lokasi_satusehat, smlr.id_lokasi_satusehat, '') AS id_lokasi,
+                       COALESCE(pol.nm_poli, '') AS nm_poli
+                FROM reg_periksa rp
+                LEFT JOIN poliklinik pol ON pol.kd_poli = rp.kd_poli
+                LEFT JOIN satu_sehat_mapping_lokasi_ralan smlr ON smlr.kd_poli = rp.kd_poli
+                LEFT JOIN (
+                    SELECT ki2.no_rawat, ki2.kd_kamar
+                    FROM kamar_inap ki2
+                    WHERE ki2.no_rawat = ?
+                    ORDER BY ki2.tgl_masuk DESC, ki2.jam_masuk DESC
+                    LIMIT 1
+                ) ki ON ki.no_rawat = rp.no_rawat
+                LEFT JOIN satu_sehat_mapping_lokasi_ranap smlranap ON smlranap.kd_kamar = ki.kd_kamar
+                WHERE rp.no_rawat = ?
+                LIMIT 1
+            ");
+            $stmtLoc->execute([$noRawat, $noRawat]);
+            $locRow = $stmtLoc->fetch();
+            $idLokasi = trim((string) ($locRow['id_lokasi'] ?? ''));
+            if ($idLokasi === '' || $idLokasi === '-') {
+                $nmPoli = ($locRow && !empty($locRow['nm_poli'])) ? $locRow['nm_poli'] : 'Poliklinik/Ruangan';
+                return [
+                    'success' => false,
+                    'error' => "Lokasi untuk {$nmPoli} belum dipetakan ke SATUSEHAT (id_lokasi_satusehat kosong). Sesuai aturan Kemenkes (Rule 10120), Encounter wajib memiliki Location. Petakan lokasi poli/kamar terlebih dahulu di menu Mapping Lokasi.",
+                    'build_errors' => [],
+                ];
+            }
         }
 
         // Build each resource payload using the adopted PayloadBuilder logic
@@ -204,6 +328,20 @@ class SendController
                 'build_errors' => $buildErrors,
                 'warnings' => $buildWarnings,
             ];
+        }
+
+        // Pre-flight check: ensure no unresolved PLACEHOLDER references exist in the bundle
+        foreach ($bundle['entry'] as $ent) {
+            $entJson = json_encode($ent['resource'] ?? []);
+            if (str_contains($entJson, 'PLACEHOLDER')) {
+                $type = (string) ($ent['request']['url'] ?? 'Resource');
+                return [
+                    'success' => false,
+                    'error' => "Gagal mengirim: terdapat referensi placeholder pada {$type}. Pastikan NIK praktisi dan pasien terdaftar dan memiliki IHS ID resmi di SATUSEHAT.",
+                    'build_errors' => [],
+                    'warnings' => $buildWarnings,
+                ];
+            }
         }
 
         // Partial failure = a requested resource failed to BUILD. Advisory
@@ -411,7 +549,7 @@ class SendController
                     $bundle['entry'][$i]['_panel_meta'] = $meta;
                 }
             }
-            $created = self::persistCreatedIds($noRawat, $bundle['entry'], $result['data']['entry']);
+            $created = self::persistCreatedIds($noRawat, $bundle['entry'], $result['data']['entry'], $patient);
         }
 
         // ── Record audit log (with full API response) ─────────────────
@@ -536,7 +674,7 @@ class SendController
      *
      * @return array resourceType => SATUSEHAT id (persisted)
      */
-    private static function persistCreatedIds(string $noRawat, array $requestEntries, array $responseEntries): array
+    private static function persistCreatedIds(string $noRawat, array $requestEntries, array $responseEntries, array $patient = []): array
     {
         $db = Database::getMysql();
         $created = [];
@@ -645,6 +783,36 @@ class SendController
                     );
                     $stmt->execute(['nr' => $noRawat, 'id' => $respId, 'id2' => $respId]);
                     $created[$type] = $respId;
+
+                    // Sync local SQLite state so individual module views immediately
+                    // reflect the correct lifecycle status (preventing false "Perlu Update").
+                    try {
+                        $sqlite = Database::getSqlite();
+                        if ($type === 'Encounter') {
+                            $encStatus = !empty($patient['tgl_keluar']) ? 'finished' : 'in-progress';
+                            $hasEoc = !empty($resource['episodeOfCare']) || !empty($created['EpisodeOfCare']);
+                            $sqlite->prepare("
+                                INSERT INTO encounter_state (no_rawat, status, eoc_linked, updated_at)
+                                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                                ON CONFLICT(no_rawat) DO UPDATE SET status = excluded.status, eoc_linked = excluded.eoc_linked, updated_at = CURRENT_TIMESTAMP
+                            ")->execute([$noRawat, $encStatus, $hasEoc ? 1 : 0]);
+                        } elseif ($type === 'EpisodeOfCare') {
+                            $eocStatus = !empty($patient['tgl_keluar']) ? 'finished' : 'active';
+                            $diagKey = 'MAIN';
+                            if (!empty($meta['persist_keys']['keys']['kd_penyakit'])) {
+                                $diagKey = $meta['persist_keys']['keys']['kd_penyakit'] . '|' . ($meta['persist_keys']['keys']['status'] ?? '1');
+                            }
+                            $compKey = $noRawat . '|' . $diagKey;
+                            $sqlite->prepare("
+                                INSERT INTO episode_of_care_state (composite_key, no_rawat, status, updated_at)
+                                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                                ON CONFLICT(composite_key) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+                            ")->execute([$compKey, $noRawat, $eocStatus]);
+                        }
+                    } catch (\Throwable $e) {
+                        // SQLite state update is best-effort
+                    }
+
                     continue;
                 }
 
@@ -788,9 +956,10 @@ class SendController
                 if (preg_match('#^([A-Za-z]+)/(.*)$#', $value, $m)) {
                     $type = $m[1];
                     $id = $m[2];
-                    // Only rewrite if the type is being created in this bundle
-                    // and has no real SATUSEHAT id yet.
-                    if (($id === '' || $id === '-') && $registry->count($type) > 0) {
+                    // If $id matches a UUID registered in this bundle, rewrite directly to urn:uuid:<id>
+                    if ($registry->hasUuid($id)) {
+                        $value = 'urn:uuid:' . $id;
+                    } elseif (($id === '' || $id === '-') && $registry->count($type) > 0) {
                         $uuid = $registry->resolve($type, $contextKeys);
                         if ($uuid !== null) {
                             $value = 'urn:uuid:' . $uuid;
