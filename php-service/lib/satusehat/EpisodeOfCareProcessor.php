@@ -256,10 +256,22 @@ class SatuSehatEpisodeOfCareProcessor
             // ── Build PATCH operations (dynamic ─ only include what we have) ──
             $ops = [];
 
-            // 1. Replace status
+            // 1. Replace patient
+            if ($idPasien) {
+                $ops[] = [
+                    'op' => 'replace',
+                    'path' => '/patient',
+                    'value' => [
+                        'reference' => 'Patient/' . $idPasien,
+                        'display'   => $p['nm_pasien'] ?? ''
+                    ]
+                ];
+            }
+
+            // 2. Replace status
             $ops[] = ['op' => 'replace', 'path' => '/status', 'value' => 'finished'];
 
-            // 2. Replace period (start + end)
+            // 3. Replace period (start + end)
             $ops[] = [
                 'op' => 'replace',
                 'path' => '/period',
@@ -269,7 +281,7 @@ class SatuSehatEpisodeOfCareProcessor
                 ]
             ];
 
-            // 3. Replace statusHistory (full rebuild)
+            // 4. Replace statusHistory (full rebuild)
             $ops[] = [
                 'op' => 'replace',
                 'path' => '/statusHistory',
@@ -291,7 +303,7 @@ class SatuSehatEpisodeOfCareProcessor
                 ]
             ];
 
-            // 4. Replace careManager if practitioner data is available
+            // 5. Replace careManager if practitioner data is available
             if ($idDokter && !empty($p['nama'])) {
                 $ops[] = [
                     'op' => 'replace',
@@ -303,7 +315,7 @@ class SatuSehatEpisodeOfCareProcessor
                 ];
             }
 
-            // 5. Add diagnosis array if id_condition is available
+            // 6. Add diagnosis array if id_condition is available
             if (!empty($p['id_condition'])) {
                 $diagnosisPayload = [
                     [
@@ -403,9 +415,11 @@ class SatuSehatEpisodeOfCareProcessor
 
                 if ($currentStatus !== $targetStatus) {
                     $this->log->info("[RECOVERY] {$noRawat}: Status mismatch (current: {$currentStatus}, target: {$targetStatus}) → PATCHing...");
-                    $operations = [
-                        ['op' => 'replace', 'path' => '/status', 'value' => $targetStatus],
-                    ];
+                    $operations = [];
+                    if (!empty($payload['patient'])) {
+                        $operations[] = ['op' => 'replace', 'path' => '/patient', 'value' => $payload['patient']];
+                    }
+                    $operations[] = ['op' => 'replace', 'path' => '/status', 'value' => $targetStatus];
                     if ($targetStatus === 'finished') {
                         $periodStart = $entry['period']['start'] ?? null;
                         if ($periodStart) {
@@ -508,9 +522,11 @@ class SatuSehatEpisodeOfCareProcessor
     private function patchAndRepost(string $eocId, string $newStatus, ?string $periodStart, array $payload, string $noRawat): ?string
     {
         // Build PATCH operations
-        $operations = [
-            ['op' => 'replace', 'path' => '/status', 'value' => $newStatus],
-        ];
+        $operations = [];
+        if (!empty($payload['patient'])) {
+            $operations[] = ['op' => 'replace', 'path' => '/patient', 'value' => $payload['patient']];
+        }
+        $operations[] = ['op' => 'replace', 'path' => '/status', 'value' => $newStatus];
 
         // Add period.end for "finished" status with a reasonable value
         if ($newStatus === 'finished' && $periodStart) {

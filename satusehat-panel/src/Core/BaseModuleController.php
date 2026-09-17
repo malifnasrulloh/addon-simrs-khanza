@@ -281,9 +281,11 @@ abstract class BaseModuleController
                     if ($endpoint === '/EpisodeOfCare') {
                         // EpisodeOfCare: PUT triggers "Operation cannot be performed due to consent or privacy rules".
                         // Direct targeted PATCH bypasses consent engine on SATUSEHAT.
-                        $ops = [
-                            ['op' => 'replace', 'path' => '/status', 'value' => $payload['status'] ?? 'finished'],
-                        ];
+                        $ops = [];
+                        if (!empty($payload['patient'])) {
+                            $ops[] = ['op' => 'replace', 'path' => '/patient', 'value' => $payload['patient']];
+                        }
+                        $ops[] = ['op' => 'replace', 'path' => '/status', 'value' => $payload['status'] ?? 'finished'];
                         if (!empty($payload['period']['end'])) {
                             $ops[] = ['op' => 'replace', 'path' => '/period/end', 'value' => $payload['period']['end']];
                         }

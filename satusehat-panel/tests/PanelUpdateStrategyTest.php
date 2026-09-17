@@ -94,6 +94,10 @@ final class PanelUpdateStrategyTest extends TestCase
             'resourceType' => 'EpisodeOfCare',
             'id' => 'eoc-100',
             'status' => 'finished',
+            'patient' => [
+                'reference' => 'Patient/P1000',
+                'display' => 'PASIEN TEST',
+            ],
             'period' => ['end' => '2026-09-12T12:00:00+07:00'],
             'diagnosis' => [['condition' => ['reference' => 'Condition/c1']]],
         ];
@@ -105,11 +109,13 @@ final class PanelUpdateStrategyTest extends TestCase
 
         $this->assertSame('PATCH', $call['method']);
         $this->assertSame('/EpisodeOfCare/eoc-100', $call['path']);
-        $this->assertCount(3, $call['ops']);
-        $this->assertSame('/status', $call['ops'][0]['path']);
-        $this->assertSame('finished', $call['ops'][0]['value']);
-        $this->assertSame('/period/end', $call['ops'][1]['path']);
-        $this->assertSame('/diagnosis', $call['ops'][2]['path']);
+        $this->assertCount(4, $call['ops']);
+        $this->assertSame('/patient', $call['ops'][0]['path']);
+        $this->assertSame('Patient/P1000', $call['ops'][0]['value']['reference']);
+        $this->assertSame('PASIEN TEST', $call['ops'][0]['value']['display']);
+        $this->assertSame('/status', $call['ops'][1]['path']);
+        $this->assertSame('/period/end', $call['ops'][2]['path']);
+        $this->assertSame('/diagnosis', $call['ops'][3]['path']);
     }
 
     public function testEncounterWithIdRoutesToPutWithPatchFallback(): void
