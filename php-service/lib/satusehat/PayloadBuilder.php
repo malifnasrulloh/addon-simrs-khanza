@@ -179,14 +179,25 @@ class SatuSehatPayloadBuilder
      */
     private static function compositionRef(string $resourceType, string $id): string
     {
-        if (str_starts_with($id, 'urn:') || str_contains($id, '/')) {
+       // Jika data ID sudah memiliki format rujukan lengkap ("ResourceType/id"), langsung kembalikan
+        if (str_contains($id, '/')) {
+            return $id; 
+        }
+        
+        // Jika ID masih memiliki awalan "urn:uuid:" atau "urn:", hapus prefix tersebut
+        $cleanId = str_replace(['urn:uuid:', 'urn:'], '', $id);
+
+        // Selalu kembalikan dalam format "ResourceType/id"
+        return $resourceType . '/' . $cleanId;
+        /* if (str_starts_with($id, 'urn:') || str_contains($id, '/')) {
             return $id;
         }
         if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $id)) {
             return 'urn:uuid:' . $id;
         }
-        return $resourceType . '/' . $id;
+        return $resourceType . '/' . $id;  */
     }
+    
 
     private static function getLocationPeriodStart(array $p, string $status): ?string
     {
