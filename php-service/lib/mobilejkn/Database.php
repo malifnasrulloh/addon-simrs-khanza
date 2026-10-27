@@ -744,8 +744,6 @@ SQL;
     {
         if (empty($noRawat) && empty($nobooking)) return false;
 
-        unset($this->cachedGeneratedBookings[$noRawat]);
-
         $sql = "DELETE FROM referensi_mobilejkn_bpjs WHERE (no_rawat = :nr OR nobooking = :nb) AND statuskirim != 'Sudah'";
         $stmt = $this->pdo->prepare($sql);
         return $stmt->execute([

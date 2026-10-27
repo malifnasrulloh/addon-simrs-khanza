@@ -221,5 +221,18 @@ ok(QueueProcessor::isTask2DemandedError($msg3) === false, 'isTask2DemandedError 
 $syncFileContent = file_get_contents(BASE_DIR . '/mobilejkn_sync.php');
 ok(!str_contains($syncFileContent, '$lastCatchUp = 0;'), 'mobilejkn_sync daemon does not initialize $lastCatchUp to 0');
 
+echo "\n── 9. Production Log (2) Remedies Verification ─────────\n";
+
+// Test throttling error detection for unmapped HFIS / invalid rujukan
+ok(QueueProcessor::isThrottledAddError('Data dokter tidak ditemukan.') === true, 'isThrottledAddError detects "Data dokter tidak ditemukan"');
+ok(QueueProcessor::isThrottledAddError('Rujukan tidak valid') === true, 'isThrottledAddError detects "Rujukan tidak valid"');
+ok(QueueProcessor::isThrottledAddError('Limit hari tanggal pelayanan adalah 90') === true, 'isThrottledAddError detects "Limit hari tanggal pelayanan adalah 90"');
+ok(QueueProcessor::isThrottledAddError('Koneksi timeout') === false, 'isThrottledAddError returns false for transient network errors');
+
+// Test that deleteReferensiMobileJkn on temporary retry failure does not wipe the cached booking code
+$testDb->deleteReferensiMobileJkn('2026/10/27/999999', $kb1);
+$kb3 = $testDb->fetchOrGenerateNobooking($patientA, true);
+ok($kb3 === $kb1, 'deleteReferensiMobileJkn preserves cached generated booking code so retries do not jump sequence');
+
 echo "\nSummary: {$passed} passed, {$failed} failed.\n";
 exit($failed > 0 ? 1 : 0);

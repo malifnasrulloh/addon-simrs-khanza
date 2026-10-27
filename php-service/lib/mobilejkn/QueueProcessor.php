@@ -40,6 +40,9 @@ class QueueProcessor
     /** @var array<string, array<int, array>> Cached BPJS queue list per date from GET /antrean/pendaftaran/tanggal/{tanggal} */
     private array $bpjsDateCache = [];
 
+    /** @var array<string, array{time: int, reason: string}> In-memory throttle for recurring BPJS /antrean/add rejections */
+    private array $failedAddThrottle = [];
+
     public function __construct(MobileJknDatabase $db, BpjsAntreanClient $api, MobileJknConfig $config, Logger $log)
     {
         $this->db     = $db;
@@ -453,6 +456,15 @@ class QueueProcessor
             $isJkn       = ($kdPj === 'BPJ');
             $this->log->info("[BLOCK 4] ── Patient " . ($idx + 1) . "/{$total}: {$noRawat} (kd_pj={$kdPj}) ──");
 
+            // Check throttle for recurring HFIS / rujukan errors
+            if (isset($this->failedAddThrottle[$noRawat])) {
+                $throttled = $this->failedAddThrottle[$noRawat];
+                if (time() - $throttled['time'] < 1800) {
+                    $this->log->debug("[BLOCK 4] {$noRawat}: temporarily throttled (previously failed: {$throttled['reason']}) — skipping retry until throttle expires");
+                    continue;
+                }
+            }
+
             // Check for missing master data from LEFT JOIN (BUG-D: zero patient loss)
             if (empty($p['nm_dokter']) || empty($p['nm_poli']) || empty($p['no_ktp']) || empty($p['no_peserta'])) {
                 $this->log->warning("[BLOCK 4] {$noRawat}: missing master data (nm_dokter='{$p['nm_dokter']}', nm_poli='{$p['nm_poli']}', no_ktp='{$p['no_ktp']}', no_peserta='{$p['no_peserta']}') — patient fetched but needs manual review");
@@ -536,7 +548,15 @@ class QueueProcessor
                             $kodebooking = $recoveredKb;
                             $this->successCount++;
                         } else {
-                            $this->log->warning("[BLOCK 4] {$noRawat}: ✗ /antrean/add failed ({$addCode}) — {$addResult['message']}");
+                            $errMsg = $addResult['message'] ?? 'Unknown error';
+                            if (self::isThrottledAddError($errMsg)) {
+                                $this->failedAddThrottle[$noRawat] = [
+                                    'time' => time(),
+                                    'reason' => $errMsg
+                                ];
+                                $this->log->warning("[BLOCK 4] {$noRawat}: [THROTTLED-HFIS] {$errMsg} — throttling retries for 30 minutes");
+                            }
+                            $this->log->warning("[BLOCK 4] {$noRawat}: ✗ /antrean/add failed ({$addCode}) — {$errMsg}");
                             $this->db->deleteReferensiMobileJkn($noRawat, $kodebooking);
                             $this->failCount++;
                             continue; // Skip task chain because booking was not accepted on BPJS
@@ -654,6 +674,17 @@ class QueueProcessor
     }
 
     /**
+     * Check if BPJS /antrean/add error message indicates an HFIS master data mismatch or invalid referral that should be throttled.
+     */
+    public static function isThrottledAddError(string $message): bool
+    {
+        $msgLower = strtolower($message);
+        return str_contains($msgLower, 'data dokter tidak ditemukan')
+            || str_contains($msgLower, 'rujukan tidak valid')
+            || str_contains($msgLower, 'limit hari tanggal pelayanan');
+    }
+
+    /**
      * Process task chain 3→4→5→[farmasi]→6→7→[99] for a single patient.
      *
      * Strategy per task: use real DB data first (Fix #1) → if missing, try robot inference.
@@ -709,7 +740,8 @@ class QueueProcessor
         }
 
         // Smart-Bypass Caching: check if patient's active milestones are already fully completed locally
-        if (($state['3'] ?? '') === 'Sudah' && empty($state['2'])) {
+        // Task 2 can only be considered Bypass if Task 1 was never sent (Mobile JKN direct check-in without admisi)
+        if (($state['3'] ?? '') === 'Sudah' && empty($state['2']) && empty($state['1'])) {
             $state['2'] = 'Bypass';
         }
         $t2Done = ($state['2'] === 'Sudah' || $state['2'] === 'Bypass');
@@ -786,8 +818,8 @@ class QueueProcessor
 
         // ── Task 2: pendaftaran dilayani ──────────────────────────────────
         if (($state['99'] ?? '') === '' && ($state['2'] ?? '') === '') {
-            // Guard: If Task 3 is already completed, Task 2 is irrevocably past (Mobile JKN direct check-in bypass)
-            if (($state['3'] ?? '') === 'Sudah') {
+            // Guard: If Task 3 is already completed and Task 1 was never sent, Task 2 is bypassed (Mobile JKN direct check-in)
+            if (($state['3'] ?? '') === 'Sudah' && empty($state['1'])) {
                 $state['2'] = 'Bypass';
             } elseif ($state['1'] !== 'Sudah') {
                 $this->log->debug("[{$label}] {$noRawat} TaskID 2: Task 1 is not completed — pausing task chain");
@@ -1315,9 +1347,9 @@ class QueueProcessor
             }
         }
 
-        // 2. Heal Task 2 if needed (even if marked Bypass when BPJS explicitly demands Task 2)
-        $isT2Demanded = ($missingId === '2');
-        if ($isT2Demanded || (($state['2'] ?? '') !== 'Sudah' && ($state['2'] ?? '') !== 'Bypass')) {
+        // 2. Heal Task 2 if needed (BPJS Rule: If Task 1 exists on BPJS, Task 2 is MANDATORY before Task 3/4 can be accepted!)
+        $isT2Demanded = ($missingId === '2') || (($state['1'] ?? '') === 'Sudah' && ($state['2'] ?? '') !== 'Sudah');
+        if ($isT2Demanded) {
             $this->db->deleteTaskId($noRawat, '2');
             $waktu2Str = RobotInference::inferPrecedingTask('2', $waktu3Str, $this->config->robotRanges);
             $t1Ts = strtotime($state['waktu_1'] ?? '');
@@ -1326,7 +1358,7 @@ class QueueProcessor
             }
             if (!empty($waktu2Str)) {
                 $r2 = $this->sendTaskId($kodebooking, $noRawat, '2', $waktu2Str, $label, $jenisresep);
-                if ($r2['ok']) {
+                if ($r2['ok'] || ($r2['reason'] ?? '') === 'already_in_db') {
                     $state['2'] = 'Sudah';
                     $state['waktu_2'] = $waktu2Str;
                     $this->log->info("[HEAL] {$noRawat}: ✓ TaskID 2 auto-healed on BPJS.");
@@ -1335,7 +1367,7 @@ class QueueProcessor
         }
 
         // 3. Heal Task 3 if needed
-        if ($missingId === '3' || $missingId === '2' || ($state['3'] ?? '') !== 'Sudah') {
+        if ($missingId === '3' || ($targetTaskId >= 4 && ($state['3'] ?? '') !== 'Sudah')) {
             $this->db->deleteTaskId($noRawat, '3');
             $t2Ts = strtotime($state['waktu_2'] ?? '');
             if ($t2Ts !== false && strtotime($waktu3Str) <= $t2Ts) {
@@ -1343,7 +1375,7 @@ class QueueProcessor
             }
             if (!empty($waktu3Str)) {
                 $r3 = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3Str, $label, $jenisresep);
-                if ($r3['ok']) {
+                if ($r3['ok'] || ($r3['reason'] ?? '') === 'already_in_db') {
                     $state['3'] = 'Sudah';
                     $state['waktu_3'] = $waktu3Str;
                     $this->log->info("[HEAL] {$noRawat}: ✓ TaskID 3 auto-healed on BPJS.");
@@ -1878,6 +1910,15 @@ class QueueProcessor
             $kodebooking = $noRawat; // Java uses no_rawat as kodebooking for unsent SEP
             $this->log->info("[BLOCK 5] ── Patient " . ($idx + 1) . "/{$total}: {$noRawat} ──");
 
+            // Check throttle for recurring HFIS / rujukan errors
+            if (isset($this->failedAddThrottle[$noRawat])) {
+                $throttled = $this->failedAddThrottle[$noRawat];
+                if (time() - $throttled['time'] < 1800) {
+                    $this->log->debug("[BLOCK 5] {$noRawat}: temporarily throttled (previously failed: {$throttled['reason']}) — skipping retry until throttle expires");
+                    continue;
+                }
+            }
+
             // Check for missing master data from LEFT JOIN (BUG-D: zero patient loss)
             if (empty($p['nm_dokter']) || empty($p['nm_poli']) || empty($p['no_ktp']) || empty($p['no_peserta'])) {
                 $this->log->warning("[BLOCK 5] {$noRawat}: missing master data (nm_dokter='{$p['nm_dokter']}', nm_poli='{$p['nm_poli']}', no_ktp='{$p['no_ktp']}', no_peserta='{$p['no_peserta']}') — patient fetched but needs manual review");
@@ -1954,7 +1995,15 @@ class QueueProcessor
                             $kodebooking = $recoveredKb;
                             $this->successCount++;
                         } else {
-                            $this->log->warning("[BLOCK 5] {$noRawat}: ✗ /antrean/add failed ({$addCode}) — {$addResult['message']}");
+                            $errMsg = $addResult['message'] ?? 'Unknown error';
+                            if (self::isThrottledAddError($errMsg)) {
+                                $this->failedAddThrottle[$noRawat] = [
+                                    'time' => time(),
+                                    'reason' => $errMsg
+                                ];
+                                $this->log->warning("[BLOCK 5] {$noRawat}: [THROTTLED-HFIS] {$errMsg} — throttling retries for 30 minutes");
+                            }
+                            $this->log->warning("[BLOCK 5] {$noRawat}: ✗ /antrean/add failed ({$addCode}) — {$errMsg}");
                             $this->db->deleteReferensiMobileJkn($noRawat, $kodebooking);
                             $this->failCount++;
                             continue; // Skip task chain because booking was not accepted on BPJS
