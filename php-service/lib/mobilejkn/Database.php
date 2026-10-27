@@ -15,6 +15,9 @@ class MobileJknDatabase
     /** @var array<string, int> In-memory tracking of last generated sequence number per date to prevent collisions */
     private array $lastGeneratedSeq = [];
 
+    /** @var array<string, string> Map of no_rawat => cached generated nobooking to stabilize retries */
+    private array $cachedGeneratedBookings = [];
+
     // Indonesian day-of-week map (ISO-8601: 1=Monday, 7=Sunday)
     private const HARI_MAP = [1=>'SENIN',2=>'SELASA',3=>'RABU',4=>'KAMIS',5=>'JUMAT',6=>'SABTU',7=>'AKHAD'];
 
@@ -531,7 +534,7 @@ SQL;
         if (empty($noRawat)) return '';
         $norm = $p['no_rkm_medis'] ?? '';
 
-        // 1. Check existing active referensi_mobilejkn_bpjs record matching BOTH no_rawat AND norm
+        // 1. Check existing active referensi_mobilejkn_bpjs record matching BOTH no_rawat AND norm (DB takes highest precedence)
         $sql = "SELECT nobooking FROM referensi_mobilejkn_bpjs WHERE no_rawat = :nr" . (!empty($norm) ? " AND norm = :norm" : "") . " AND status != 'Batal' LIMIT 1";
         $stmt = $this->pdo->prepare($sql);
         $params = ['nr' => $noRawat];
@@ -541,7 +544,13 @@ SQL;
         $stmt->execute($params);
         $row = $stmt->fetch();
         if ($row && !empty($row['nobooking'])) {
+            $this->cachedGeneratedBookings[$noRawat] = $row['nobooking'];
             return $row['nobooking'];
+        }
+
+        // Check in-memory cache to guarantee identical stable booking code on retries
+        if (isset($this->cachedGeneratedBookings[$noRawat])) {
+            return $this->cachedGeneratedBookings[$noRawat];
         }
 
         // 2. If formatting is disabled, fallback to raw no_rawat
@@ -561,7 +570,9 @@ SQL;
         $maxNum  = max($dbMax, $lastSeq + 1);
         $this->lastGeneratedSeq[$tglPeriksa] = $maxNum;
 
-        return str_replace('-', '', $tglPeriksa) . sprintf('%06d', $maxNum);
+        $generated = str_replace('-', '', $tglPeriksa) . sprintf('%06d', $maxNum);
+        $this->cachedGeneratedBookings[$noRawat] = $generated;
+        return $generated;
     }
 
     /**
@@ -595,6 +606,7 @@ SQL;
         }
 
         if ($needsPurge) {
+            unset($this->cachedGeneratedBookings[$noRawat]);
             // Delete mismatched or cancelled referensi record
             $delRef = $this->pdo->prepare("DELETE FROM referensi_mobilejkn_bpjs WHERE no_rawat = :nr AND (norm != :norm OR status = 'Batal')");
             $delRef->execute(['nr' => $noRawat, 'norm' => $currentNorm]);
@@ -642,6 +654,7 @@ SQL;
         $cleanKartu = substr(trim((string)($p['no_peserta'] ?? '')), 0, 25) ?: '-';
         $cleanRef = substr(trim((string)$nomorRef), 0, 40);
 
+        $this->cachedGeneratedBookings[$noRawat] = $nobooking;
         return $stmtIns->execute([
             'nb' => $nobooking,
             'nr' => $noRawat,
@@ -700,6 +713,7 @@ SQL;
         $cleanKartu = substr(trim((string)($p['no_peserta'] ?? '')), 0, 25) ?: '-';
         $cleanRef = substr(trim((string)$nomorRef), 0, 40);
 
+        $this->cachedGeneratedBookings[$noRawat] = $nobooking;
         return $stmtIns->execute([
             'nb' => $nobooking,
             'nr' => $noRawat,
@@ -729,6 +743,8 @@ SQL;
     public function deleteReferensiMobileJkn(string $noRawat, string $nobooking = ''): bool
     {
         if (empty($noRawat) && empty($nobooking)) return false;
+
+        unset($this->cachedGeneratedBookings[$noRawat]);
 
         $sql = "DELETE FROM referensi_mobilejkn_bpjs WHERE (no_rawat = :nr OR nobooking = :nb) AND statuskirim != 'Sudah'";
         $stmt = $this->pdo->prepare($sql);

@@ -192,7 +192,7 @@ $processor = new QueueProcessor($db, $api, $config, $log);
 if ($isDaemon) {
     $log->info("[DAEMON] Starting near-realtime worker loop (15s interval, memory guard 128MB)...");
     $interval = 15;
-    $lastCatchUp = 0;
+    $lastCatchUp = time(); // Initialize to boot time so Cycle #1 focuses 100% on today's live queue
     $iterations = 0;
 
     while (true) {

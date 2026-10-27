@@ -186,5 +186,40 @@ ok(QueueProcessor::isCancellationResponse(200, 'Ok'), 'isCancellationResponse re
 $lateJadwal = MobileJknDatabase::buildSyntheticJadwal('SENIN', '23:30:00');
 ok($lateJadwal['jam_selesai'] === '23:59:00', 'buildSyntheticJadwal clamps late night schedule before midnight rollover');
 
+echo "\n── 8. Production Remedies Verification ─────────────────\n";
+
+// Test that JKN on-site patient without referral number is skipped from blind /antrean/add
+$jknNoRef = [
+    'kd_pj' => 'BPJ',
+    'no_rawat' => '2026/10/27/000991',
+    'nomorreferensi' => '',
+];
+ok(QueueProcessor::shouldSkipBlindJknAdd($jknNoRef, '') === true, 'shouldSkipBlindJknAdd returns true for JKN without referral');
+ok(QueueProcessor::shouldSkipBlindJknAdd($jknNoRef, '-') === true, 'shouldSkipBlindJknAdd returns true for JKN with literal dash referral');
+ok(QueueProcessor::shouldSkipBlindJknAdd($jknNoRef, '  -  ') === true, 'shouldSkipBlindJknAdd returns true for JKN with whitespace dash referral');
+ok(QueueProcessor::shouldSkipBlindJknAdd($jknNoRef, '0197R0061026K001234') === false, 'shouldSkipBlindJknAdd returns false when referral exists');
+ok(QueueProcessor::shouldSkipBlindJknAdd(['kd_pj' => 'A22'], '') === false, 'shouldSkipBlindJknAdd returns false for Non-JKN');
+
+// Test stable booking code generation across multiple calls for same no_rawat
+require_once BASE_DIR . '/lib/mobilejkn/Config.php';
+$testConfig = new MobileJknConfig(BASE_DIR . '/.env');
+$testDb = new MobileJknDatabase($testConfig, $log);
+$patientA = ['no_rawat' => '2026/10/27/999999', 'tgl_registrasi' => '2026-10-27'];
+$kb1 = $testDb->fetchOrGenerateNobooking($patientA, true);
+$kb2 = $testDb->fetchOrGenerateNobooking($patientA, true);
+ok($kb1 === $kb2, 'fetchOrGenerateNobooking returns identical booking code on repeated calls for same no_rawat');
+
+// Test detection of Task 2 demand from BPJS error message
+$msg1 = 'Task=1 ada. TaskId=2 belum ada';
+ok(QueueProcessor::isTask2DemandedError($msg1) === true, 'isTask2DemandedError detects "Task=1 ada. TaskId=2 belum ada"');
+$msg2 = 'TaskId=2 belum ada';
+ok(QueueProcessor::isTask2DemandedError($msg2) === true, 'isTask2DemandedError detects "TaskId=2 belum ada"');
+$msg3 = 'TaskId=3 belum ada';
+ok(QueueProcessor::isTask2DemandedError($msg3) === false, 'isTask2DemandedError returns false for other task numbers');
+
+// Test that mobilejkn_sync.php daemon initializes lastCatchUp to time() instead of 0
+$syncFileContent = file_get_contents(BASE_DIR . '/mobilejkn_sync.php');
+ok(!str_contains($syncFileContent, '$lastCatchUp = 0;'), 'mobilejkn_sync daemon does not initialize $lastCatchUp to 0');
+
 echo "\nSummary: {$passed} passed, {$failed} failed.\n";
 exit($failed > 0 ? 1 : 0);
