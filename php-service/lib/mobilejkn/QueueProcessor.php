@@ -49,10 +49,43 @@ class QueueProcessor
     }
 
     /**
-     * Run all processing blocks. Returns stats.
+     * Run all processing blocks for configured lookback period. Returns stats.
      * @return array{success: int, fail: int, skip: int}
      */
     public function run(): array
+    {
+        return $this->runDateRange($this->config->lookbackDate(), $this->config->todayDate());
+    }
+
+    /**
+     * Run processing blocks for today only (near-realtime execution).
+     * @return array{success: int, fail: int, skip: int}
+     */
+    public function runLiveToday(): array
+    {
+        $today = $this->config->todayDate();
+        return $this->runDateRange($today, $today);
+    }
+
+    /**
+     * Run processing blocks for past dates (historical catch-up lookback).
+     * @return array{success: int, fail: int, skip: int}
+     */
+    public function runCatchUpLookback(): array
+    {
+        $lookback = $this->config->lookbackDate();
+        $yesterday = date('Y-m-d', strtotime('-1 day'));
+        if ($lookback > $yesterday) {
+            $lookback = $yesterday;
+        }
+        return $this->runDateRange($lookback, $yesterday);
+    }
+
+    /**
+     * Run all processing blocks for a specified date range.
+     * @return array{success: int, fail: int, skip: int}
+     */
+    public function runDateRange(string $dateFrom, string $dateTo): array
     {
         $this->successCount  = 0;
         $this->failCount     = 0;
@@ -61,23 +94,20 @@ class QueueProcessor
         $this->sentThisCycle = [];
         $this->bpjsDateCache = [];
 
-        $today    = $this->config->todayDate();
-        $lookback = $this->config->lookbackDate();
-
         // Block 1: Add unsent JKN bookings
-        $this->processNewJknBookings($lookback, $today);
+        $this->processNewJknBookings($dateFrom, $dateTo);
 
         // Block 2: Cancellations
-        $this->processCancellations($lookback, $today);
+        $this->processCancellations($dateFrom, $dateTo);
 
         // Block 3: JKN task chain (statuskirim='Sudah')
-        $this->processJknTasks($lookback, $today);
+        $this->processJknTasks($dateFrom, $dateTo);
 
-        // Block 4: Missing on-site BPJ patients
-        $this->processMissingOnsitePatients($lookback, $today);
+        // Block 4: Missing on-site patients
+        $this->processMissingOnsitePatients($dateFrom, $dateTo);
 
         // Block 5: Unsent SEP recovery (safety net from ANTROL-ROBOT.JAVA)
-        $this->processUnsentSepPatients($lookback, $today);
+        $this->processUnsentSepPatients($dateFrom, $dateTo);
 
         return [
             'success' => $this->successCount,
@@ -263,8 +293,9 @@ class QueueProcessor
             $code   = (string) ($result['code'] ?? '');
             $msg    = (string) ($result['message'] ?? '');
 
-            // 200 = Success, 208 = Already cancelled, 201 with 'tidak dapat membatalkan' = Already cancelled on BPJS
-            $isBatalSuccess = $result['success'] || $code === '208' || ($code === '201' && str_contains(strtolower($msg), 'tidak dapat membatalkan'));
+            $isBatalSuccess = self::isCancellationResponse($code, $msg);
+            $waktuStr = $c['tanggalbatal'] ?? date('Y-m-d H:i:s');
+            $targetRawat = !empty($noRawat) ? $noRawat : $nb;
 
             if ($isBatalSuccess) {
                 $this->db->markCancellationAsSent($c['nomorreferensi'] ?? '', $nb);
@@ -272,12 +303,19 @@ class QueueProcessor
                 $this->successCount++;
 
                 // Step 2: Send taskid=99
-                $waktuStr = $c['tanggalbatal'] ?? date('Y-m-d H:i:s');
-                $targetRawat = !empty($noRawat) ? $noRawat : $nb;
                 $this->sendTaskId($nb, $targetRawat, '99', $waktuStr, 'BLOCK 2');
             } else {
-                $this->log->warning("[BLOCK 2] ✗ Cancel failed {$nb}: {$msg}");
-                $this->failCount++;
+                // Fallback: If /antrean/batal returned 201/error, attempt sending Task 99 directly
+                $this->log->warning("[BLOCK 2] /antrean/batal returned {$code} ({$msg}). Attempting fallback Task 99...");
+                $r99 = $this->sendTaskId($nb, $targetRawat, '99', $waktuStr, 'BLOCK 2');
+                if ($r99['ok'] || ($r99['reason'] ?? '') === 'already_in_db' || ($r99['reason'] ?? '') === 'cancelled_on_bpjs') {
+                    $this->db->markCancellationAsSent($c['nomorreferensi'] ?? '', $nb);
+                    $this->log->info("[BLOCK 2] ✓ Fallback Task 99 accepted for booking {$nb}. Cancellation finalized.");
+                    $this->successCount++;
+                } else {
+                    $this->log->warning("[BLOCK 2] ✗ Cancel and Task 99 failed for {$nb}: {$msg}");
+                    $this->failCount++;
+                }
             }
         }
     }
@@ -344,15 +382,10 @@ class QueueProcessor
                 $this->log->warning("[BLOCK 3] {$noRawat}: missing master data (nm_dokter='{$p['nm_dokter']}', nm_poli='{$p['nm_poli']}') — patient fetched but needs manual review");
             }
 
-            // Resolve jadwal from pre-loaded dictionary (Fix #7)
+            // Resolve jadwal with dynamic fallback (never skip due to missing schedule)
             $hari   = $this->db->hariForDate($p['tgl_registrasi']);
             $jamReg = $p['jam_reg'] ?? '08:00:00';
-            $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli'], $jamReg);
-            if (!$jadwal) {
-                // Log which patient is being skipped and WHY (BUG-D: clear reason for skip)
-                $this->log->warning("[BLOCK 3] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
-                continue;
-            }
+            $jadwal = MobileJknDatabase::fetchJadwalWithFallback($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli'], $jamReg);
 
             // Load pre-fetched prescription number and racikan status (Fix #5)
             $noResep   = $noResepMap[$noRawat] ?? '';
@@ -435,14 +468,10 @@ class QueueProcessor
                 continue;
             }
 
-            // Resolve jadwal from pre-loaded dictionary (Fix #7)
+            // Resolve jadwal with dynamic fallback (never skip due to missing schedule)
             $hari   = $this->db->hariForDate($p['tgl_registrasi']);
             $jamReg = $p['jam_reg'] ?? '08:00:00';
-            $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli'], $jamReg);
-            if (!$jadwal) {
-                $this->log->warning("[BLOCK 4] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
-                continue;
-            }
+            $jadwal = MobileJknDatabase::fetchJadwalWithFallback($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli'], $jamReg);
 
             $p['jam_mulai']      = $jadwal['jam_mulai'];
             $p['jam_selesai']    = $jadwal['jam_selesai'];
@@ -485,6 +514,14 @@ class QueueProcessor
                         $this->log->info("[BLOCK 4] {$noRawat}: ✓ /antrean/add accepted (code={$addCode})");
                         $this->successCount++;
                     } else {
+                        // Check if error is due to SEP already issued externally
+                        if (self::isSepExternalError($addResult['message'] ?? '')) {
+                            $this->log->warning("[BLOCK 4] {$noRawat}: [SKIP-SEP-EXT] SEP External Exist ({$addCode}) — {$addResult['message']}");
+                            $this->db->markBookingAsFailed($p, $kodebooking, $nomorRef);
+                            $this->failCount++;
+                            continue;
+                        }
+
                         // Layer 2: Regex extraction from error message (e.g. "sudah digunakan pada kode booking X")
                         $recoveredKb = $this->extractKodebookingFromError($addResult['message'] ?? '');
                         if (!empty($recoveredKb)) {
@@ -534,6 +571,55 @@ class QueueProcessor
         if (!$jadwal) return false;
 
         return date('H:i:s') < $jadwal['jam_selesai'];
+    }
+
+    /**
+     * Check if a patient visit is past the pharmacy operational grace period (1 hour after clinic closes or past date).
+     * Used by Smart Hybrid pharmacy to avoid leaving prescriptions dangling on BPJS.
+     */
+    public static function isPastGracePeriod(string $tglRegistrasi, string $jamSelesai, ?int $currentTime = null): bool
+    {
+        $now = $currentTime ?? time();
+        $today = date('Y-m-d', $now);
+        if ($tglRegistrasi < $today) {
+            return true;
+        }
+        if ($tglRegistrasi > $today) {
+            return false;
+        }
+        $closingTs = strtotime("{$tglRegistrasi} {$jamSelesai}");
+        if ($closingTs === false) {
+            return false;
+        }
+        return $now > ($closingTs + 3600);
+    }
+
+    /**
+     * Check if BPJS /antrean/add error message indicates that SEP was already issued externally.
+     */
+    public static function isSepExternalError(string $message): bool
+    {
+        $msgLower = strtolower($message);
+        return str_contains($msgLower, 'terbit sep') || str_contains($msgLower, 'sudah terbit sep');
+    }
+
+    /**
+     * Check if BPJS cancellation response indicates that cancellation was accepted or already cancelled.
+     */
+    public static function isCancellationResponse(int|string $code, string $message): bool
+    {
+        $codeStr = (string) $code;
+        $msgLower = strtolower($message);
+        if ($codeStr === '200' || $codeStr === '208') {
+            return true;
+        }
+        if ($codeStr === '201') {
+            return str_contains($msgLower, 'tidak dapat membatalkan')
+                || str_contains($msgLower, 'dibatalkan')
+                || str_contains($msgLower, 'sudah batal')
+                || str_contains($msgLower, 'terakhir 99');
+        }
+        return false;
     }
 
     /**
@@ -592,6 +678,9 @@ class QueueProcessor
         }
 
         // Smart-Bypass Caching: check if patient's active milestones are already fully completed locally
+        if (($state['3'] ?? '') === 'Sudah' && empty($state['2'])) {
+            $state['2'] = 'Bypass';
+        }
         $t2Done = ($state['2'] === 'Sudah' || $state['2'] === 'Bypass');
         $isCompleted = ($state['1'] === 'Sudah' && $t2Done && $state['3'] === 'Sudah' && $state['4'] === 'Sudah' && $state['5'] === 'Sudah');
         if ($isCompleted) {
@@ -665,30 +754,34 @@ class QueueProcessor
         }
 
         // ── Task 2: pendaftaran dilayani ──────────────────────────────────
-        if (($state['99'] ?? '') === '' && $state['2'] === '') {
-            if ($state['1'] !== 'Sudah') {
+        if (($state['99'] ?? '') === '' && ($state['2'] ?? '') === '') {
+            // Guard: If Task 3 is already completed, Task 2 is irrevocably past (Mobile JKN direct check-in bypass)
+            if (($state['3'] ?? '') === 'Sudah') {
+                $state['2'] = 'Bypass';
+            } elseif ($state['1'] !== 'Sudah') {
                 $this->log->debug("[{$label}] {$noRawat} TaskID 2: Task 1 is not completed — pausing task chain");
                 return;
-            }
-            $waktu2Str = RobotInference::inferPrecedingTask('2', $waktu3Str, $this->config->robotRanges);
-            // Monotonicity Gate: Ensure T1 < T2
-            $t1Ts = strtotime($state['waktu_1'] ?? '');
-            if ($t1Ts !== false && strtotime($waktu2Str) <= $t1Ts) {
-                $waktu2Str = date('Y-m-d H:i:s', $t1Ts + 180); // 3 minutes after Task 1
-            }
+            } else {
+                $waktu2Str = RobotInference::inferPrecedingTask('2', $waktu3Str, $this->config->robotRanges);
+                // Monotonicity Gate: Ensure T1 < T2
+                $t1Ts = strtotime($state['waktu_1'] ?? '');
+                if ($t1Ts !== false && strtotime($waktu2Str) <= $t1Ts) {
+                    $waktu2Str = date('Y-m-d H:i:s', $t1Ts + 180); // 3 minutes after Task 1
+                }
 
-            if (!empty($waktu2Str) && strtotime($waktu2Str) <= time()) {
-                $r2 = $this->sendTaskId($kodebooking, $noRawat, '2', $waktu2Str, $label, $jenisresep);
-                if ($r2['ok']) {
-                    $state['2'] = 'Sudah';
-                    $state['waktu_2'] = $waktu2Str;
-                    $bpjsTasks['2'] = true;
-                } elseif (($r2['reason'] ?? '') === 'task2_not_valid') {
-                    $this->log->info("[{$label}] {$noRawat} TaskID 2: not applicable for this booking (Mobile JKN direct check-in) — bypassing to Task 3");
-                    $state['2'] = 'Bypass';
-                } else {
-                    $this->log->warning("[{$label}] {$noRawat} TaskID 2 failed ({$r2['reason']}) — halting task chain for this patient");
-                    return;
+                if (!empty($waktu2Str) && strtotime($waktu2Str) <= time()) {
+                    $r2 = $this->sendTaskId($kodebooking, $noRawat, '2', $waktu2Str, $label, $jenisresep);
+                    if ($r2['ok']) {
+                        $state['2'] = 'Sudah';
+                        $state['waktu_2'] = $waktu2Str;
+                        $bpjsTasks['2'] = true;
+                    } elseif (($r2['reason'] ?? '') === 'task2_not_valid') {
+                        $this->log->info("[{$label}] {$noRawat} TaskID 2: not applicable for this booking (Mobile JKN direct check-in) — bypassing to Task 3");
+                        $state['2'] = 'Bypass';
+                    } else {
+                        $this->log->warning("[{$label}] {$noRawat} TaskID 2 failed ({$r2['reason']}) — halting task chain for this patient");
+                        return;
+                    }
                 }
             }
         }
@@ -721,7 +814,10 @@ class QueueProcessor
                             $t3bTs = strtotime($waktu3Str) + 180; // 3 minutes after 1st Task 3
                             if ($t3bTs <= time()) {
                                 $waktu3bStr = date('Y-m-d H:i:s', $t3bTs);
-                                $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3bStr, $label, $jenisresep, true);
+                                $r3b = $this->sendTaskId($kodebooking, $noRawat, '3', $waktu3bStr, $label, $jenisresep, true);
+                                if ($r3b['ok']) {
+                                    $state['waktu_3'] = $waktu3bStr;
+                                }
                             }
                         }
                     } elseif (($r['reason'] ?? '') === 'preceding_tasks_missing') {
@@ -999,8 +1095,12 @@ class QueueProcessor
                     // Pure Robot Mode
                     $waktu6Str = RobotInference::infer('6', $prevWaktu, $isRacikan, $this->config->robotRanges);
                 } else {
-                    // Realtime Mode: strictly from real SIMRS tables
+                    // Realtime Mode: strictly from real SIMRS tables first, fallback to inference if past grace period
                     $waktu6Str = $realEvents['6'] ?? '';
+                    if (empty($waktu6Str) && self::isPastGracePeriod($patient['tgl_registrasi'], $jamSelesai)) {
+                        $waktu6Str = RobotInference::infer('6', $prevWaktu, $isRacikan, $this->config->robotRanges);
+                        $this->log->info("[{$label}] {$noRawat} TaskID 6: clinic closed > 1h / past date — auto-inferred Task 6 ({$waktu6Str})");
+                    }
                 }
 
                 if (!empty($waktu6Str)) {
@@ -1064,8 +1164,12 @@ class QueueProcessor
                 // Pure Robot Mode
                 $waktu7Str = RobotInference::infer('7', $prevWaktu, $isRacikan, $this->config->robotRanges);
             } else {
-                // Realtime Mode: strictly from real SIMRS tables
+                // Realtime Mode: strictly from real SIMRS tables first, fallback to inference if past grace period
                 $waktu7Str = $realEvents['7'] ?? '';
+                if (empty($waktu7Str) && self::isPastGracePeriod($patient['tgl_registrasi'], $jamSelesai)) {
+                    $waktu7Str = RobotInference::infer('7', $prevWaktu, $isRacikan, $this->config->robotRanges);
+                    $this->log->info("[{$label}] {$noRawat} TaskID 7: clinic closed > 1h / past date — auto-inferred Task 7 ({$waktu7Str})");
+                }
             }
 
             if (!empty($waktu7Str)) {
@@ -1750,15 +1854,10 @@ class QueueProcessor
                 continue;
             }
 
-            // Resolve jadwal from pre-loaded dictionary (Fix #7)
+            // Resolve jadwal with dynamic fallback (never skip due to missing schedule)
             $hari   = $this->db->hariForDate($p['tgl_registrasi']);
             $jamReg = $p['jam_reg'] ?? '08:00:00';
-            $jadwal = $this->db->lookupJadwal($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli'], $jamReg);
-            if (!$jadwal) {
-                // Log which patient is being skipped and WHY (BUG-D: clear reason for skip)
-                $this->log->warning("[BLOCK 5] {$noRawat}: no jadwal found (hari={$hari}, kd_dokter={$p['kd_dokter']}, kd_poli={$p['kd_poli']}) — patient fetched but SKIPPED (no schedule mapping)");
-                continue;
-            }
+            $jadwal = MobileJknDatabase::fetchJadwalWithFallback($jadwalDict, $hari, $p['kd_dokter'], $p['kd_poli'], $jamReg);
 
             $p['jam_mulai']      = $jadwal['jam_mulai'];
             $p['jam_selesai']    = $jadwal['jam_selesai'];
@@ -1801,6 +1900,14 @@ class QueueProcessor
                         $this->log->info("[BLOCK 5] {$noRawat}: ✓ /antrean/add accepted (code={$addCode})");
                         $this->successCount++;
                     } else {
+                        // Check if error is due to SEP already issued externally
+                        if (self::isSepExternalError($addResult['message'] ?? '')) {
+                            $this->log->warning("[BLOCK 5] {$noRawat}: [SKIP-SEP-EXT] SEP External Exist ({$addCode}) — {$addResult['message']}");
+                            $this->db->markBookingAsFailed($p, $kodebooking, $nomorRef);
+                            $this->failCount++;
+                            continue;
+                        }
+
                         // Layer 2: Regex extraction from error message
                         $recoveredKb = $this->extractKodebookingFromError($addResult['message'] ?? '');
                         if (!empty($recoveredKb)) {

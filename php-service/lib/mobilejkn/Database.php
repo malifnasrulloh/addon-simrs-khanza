@@ -35,6 +35,8 @@ class MobileJknDatabase
 
     public function close(): void { unset($this->pdo); }
 
+    public function getPdo(): PDO { return $this->pdo; }
+
     /**
      * Get Indonesian day name for a given date string.
      * Java robot calculates hCari per patient's tgl_registrasi, not today.
@@ -267,6 +269,8 @@ LEFT JOIN dokter d ON rp.kd_dokter = d.kd_dokter
 LEFT JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
 LEFT JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
 WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+  AND rp.status_lanjut = 'Ralan'
+  AND rp.kd_poli != 'IGDK'
   AND rp.stts != 'Batal'
   AND NOT EXISTS (
       SELECT 1 FROM referensi_mobilejkn_bpjs rmb
@@ -274,6 +278,14 @@ WHERE rp.tgl_registrasi BETWEEN :df AND :dt
         AND rmb.norm = rp.no_rkm_medis
         AND rmb.status != 'Batal'
         AND rmb.tanggalperiksa BETWEEN :df2 AND :dt2
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM referensi_mobilejkn_bpjs_batal b
+      WHERE b.nobooking = rp.no_rawat OR b.no_rawat_batal = rp.no_rawat
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM referensi_mobilejkn_bpjs_taskid t
+      WHERE t.no_rawat = rp.no_rawat AND t.taskid = '99'
   )
 ORDER BY CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg)
 SQL;
@@ -625,20 +637,83 @@ SQL;
             ON DUPLICATE KEY UPDATE statuskirim = 'Sudah'";
 
         $stmtIns = $this->pdo->prepare($insertSql);
+        $cleanHp = substr(preg_replace('/[^0-9]/', '', (string)($p['no_tlp'] ?? '')) ?: '080000000000', 0, 15);
+        $cleanNik = substr(trim((string)($p['no_ktp'] ?? '')), 0, 30) ?: '-';
+        $cleanKartu = substr(trim((string)($p['no_peserta'] ?? '')), 0, 25) ?: '-';
+        $cleanRef = substr(trim((string)$nomorRef), 0, 40);
+
         return $stmtIns->execute([
             'nb' => $nobooking,
             'nr' => $noRawat,
-            'nk' => $isJkn ? ($p['no_peserta'] ?: '-') : '-',
-            'nik' => $isJkn ? ($p['no_ktp'] ?: '-') : '-',
-            'hp' => $p['no_tlp'] ?: '-',
-            'kp' => $kdPoliBpjs,
+            'nk' => $isJkn ? $cleanKartu : '-',
+            'nik' => $isJkn ? $cleanNik : '-',
+            'hp' => $cleanHp,
+            'kp' => substr((string)$kdPoliBpjs, 0, 15),
             'pb' => $statusDaftar,
-            'rm' => $p['no_rkm_medis'] ?? '',
+            'rm' => substr((string)($p['no_rkm_medis'] ?? ''), 0, 15),
             'tgl' => $tglPeriksa,
-            'kd' => $kdDokterBpjs,
+            'kd' => substr((string)$kdDokterBpjs, 0, 20),
             'jp' => $jamPraktek,
-            'ref' => $nomorRef,
-            'na' => "{$kdPoliBpjs}-{$noReg}",
+            'ref' => $cleanRef,
+            'na' => substr("{$kdPoliBpjs}-{$noReg}", 0, 15),
+            'aa' => $noReg,
+            'est' => $estimasiMs,
+            'skj' => max(0, $kuota - $noReg),
+            'kj' => $kuota,
+            'sknj' => max(0, $kuota - $noReg),
+            'knj' => $kuota,
+        ]);
+    }
+
+    /**
+     * Mark a booking as failed/un-retryable in referensi_mobilejkn_bpjs (e.g. SEP issued externally).
+     * Prevents infinite loop re-queries in daemon mode.
+     */
+    public function markBookingAsFailed(array $p, string $nobooking, string $nomorRef = ''): bool
+    {
+        $noRawat = $p['no_rawat'] ?? '';
+        if (empty($noRawat) || empty($nobooking)) return false;
+
+        $tglPeriksa = $p['tgl_registrasi'] ?? date('Y-m-d');
+        $noReg      = (int) ($p['no_reg'] ?? 1);
+        $isJkn      = (($p['kd_pj'] ?? '') === 'BPJ');
+        $statusDaftar = match ($p['stts_daftar'] ?? '-') {
+            'Baru' => '1',
+            default => '0',
+        };
+        $jamMulai   = substr($p['jam_mulai'] ?? '08:00:00', 0, 5);
+        $jamSelesai = substr($p['jam_selesai'] ?? '16:00:00', 0, 5);
+        $jamPraktek = "{$jamMulai}-{$jamSelesai}";
+        $kdPoliBpjs = $p['kd_poli_bpjs'] ?? '';
+        $kdDokterBpjs = $p['kd_dokter_bpjs'] ?? '';
+        $kuota      = (int) ($p['kuota'] ?? 30);
+        $estimasiMs = strtotime("{$tglPeriksa} {$jamMulai}") * 1000;
+
+        $insertSql = "INSERT INTO referensi_mobilejkn_bpjs
+            (nobooking, no_rawat, nomorkartu, nik, nohp, kodepoli, pasienbaru, norm, tanggalperiksa, kodedokter, jampraktek, jeniskunjungan, nomorreferensi, nomorantrean, angkaantrean, estimasidilayani, sisakuotajkn, kuotajkn, sisakuotanonjkn, kuotanonjkn, status, validasi, statuskirim)
+            VALUES (:nb, :nr, :nk, :nik, :hp, :kp, :pb, :rm, :tgl, :kd, :jp, '3 (Kontrol)', :ref, :na, :aa, :est, :skj, :kj, :sknj, :knj, 'Gagal', NOW(), 'Sudah')
+            ON DUPLICATE KEY UPDATE status = 'Gagal', statuskirim = 'Sudah'";
+
+        $stmtIns = $this->pdo->prepare($insertSql);
+        $cleanHp = substr(preg_replace('/[^0-9]/', '', (string)($p['no_tlp'] ?? '')) ?: '080000000000', 0, 15);
+        $cleanNik = substr(trim((string)($p['no_ktp'] ?? '')), 0, 30) ?: '-';
+        $cleanKartu = substr(trim((string)($p['no_peserta'] ?? '')), 0, 25) ?: '-';
+        $cleanRef = substr(trim((string)$nomorRef), 0, 40);
+
+        return $stmtIns->execute([
+            'nb' => $nobooking,
+            'nr' => $noRawat,
+            'nk' => $isJkn ? $cleanKartu : '-',
+            'nik' => $isJkn ? $cleanNik : '-',
+            'hp' => $cleanHp,
+            'kp' => substr((string)$kdPoliBpjs, 0, 15),
+            'pb' => $statusDaftar,
+            'rm' => substr((string)($p['no_rkm_medis'] ?? ''), 0, 15),
+            'tgl' => $tglPeriksa,
+            'kd' => substr((string)$kdDokterBpjs, 0, 20),
+            'jp' => $jamPraktek,
+            'ref' => $cleanRef,
+            'na' => substr("{$kdPoliBpjs}-{$noReg}", 0, 15),
             'aa' => $noReg,
             'est' => $estimasiMs,
             'skj' => max(0, $kuota - $noReg),
@@ -747,9 +822,40 @@ SQL;
     }
 
     /**
+     * Build synthetic schedule for doctor who practiced without a pre-registered schedule in SIMRS.
+     */
+    public static function buildSyntheticJadwal(string $hari, string $jamReg): array
+    {
+        $jamMulai = !empty($jamReg) ? substr($jamReg, 0, 5) . ':00' : '08:00:00';
+        $calculatedEnd = strtotime($jamMulai) + 7200;
+        $jamSelesai = (date('Y-m-d', $calculatedEnd) === date('Y-m-d', strtotime($jamMulai)))
+            ? date('H:i:s', $calculatedEnd)
+            : '23:59:00';
+        return [
+            'hari_kerja'  => $hari,
+            'jam_mulai'   => $jamMulai,
+            'jam_selesai' => $jamSelesai,
+            'kuota'       => 30,
+        ];
+    }
+
+    /**
+     * Lookup best matching jadwal slot from pre-loaded hash map, with synthetic fallback.
+     * Prevents dropping patients whose schedule was not entered in SIMRS jadwal table.
+     */
+    public static function fetchJadwalWithFallback(array $jadwalDict, string $hari, string $kdDokter, string $kdPoli, string $jamReg = ''): array
+    {
+        $jadwal = self::lookupJadwal($jadwalDict, $hari, $kdDokter, $kdPoli, $jamReg);
+        if ($jadwal !== null) {
+            return $jadwal;
+        }
+        return self::buildSyntheticJadwal($hari, $jamReg);
+    }
+
+    /**
      * Lookup best matching jadwal slot from pre-loaded hash map.
      */
-    public function lookupJadwal(array $jadwalDict, string $hari, string $kdDokter, string $kdPoli, string $jamReg = ''): ?array
+    public static function lookupJadwal(array $jadwalDict, string $hari, string $kdDokter, string $kdPoli, string $jamReg = ''): ?array
     {
         $key = "{$hari}|{$kdDokter}|{$kdPoli}";
         $slots = $jadwalDict[$key] ?? [];
@@ -972,6 +1078,9 @@ WHERE rp.tgl_registrasi BETWEEN :df AND :dt
       WHERE c.tglsep BETWEEN :df2 AND :dt2
         AND c.no_rawat NOT IN (
             SELECT no_rawat FROM referensi_mobilejkn_bpjs_taskid
+        )
+        AND c.no_rawat NOT IN (
+            SELECT no_rawat FROM referensi_mobilejkn_bpjs WHERE status = 'Gagal'
         )
   )
 ORDER BY CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg)

@@ -154,8 +154,8 @@ class RobotInference
     private static function getRange(string $taskId, bool $isRacikan): array
     {
         return match ($taskId) {
-            '1' => [15, 30],
-            '2' => [5, 15],
+            '1' => [16, 26],
+            '2' => [5, 12],
             '3' => [10, 20],
             '4' => [35, 58],
             '5' => [3, 10],

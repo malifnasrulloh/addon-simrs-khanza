@@ -47,11 +47,14 @@ if (php_sapi_name() !== 'cli') {
     set_time_limit(0);
     header('Content-Type: text/plain; charset=utf-8');
     
-    $isDryRun  = isset($_GET['dry-run']);
-    $isVerbose = isset($_GET['verbose']);
+    $isDryRun    = isset($_GET['dry-run']);
+    $isVerbose   = isset($_GET['verbose']);
+    $isDaemon    = false;
+    $isReconcile = false;
+    $targetDate  = null;
 } else {
     // ─── Parse CLI arguments ───────────────────────────────────────────────────
-    $options = getopt('', ['help', 'dry-run', 'verbose']);
+    $options = getopt('', ['help', 'dry-run', 'verbose', 'daemon', 'reconcile', 'date::']);
 
     if (isset($options['help'])) {
         $ver = SERVICE_VERSION;
@@ -68,6 +71,9 @@ if (php_sapi_name() !== 'cli') {
       --help       Show this help message
       --dry-run    Simulate run without sending API requests
       --verbose    Enable debug-level logging to terminal
+      --daemon     Run as near-realtime continuous background worker (15s loop)
+      --reconcile  Run historical catch-up lookback (or specify --date=YYYY-MM-DD)
+      --date=DATE  Target specific date for reconciliation (e.g. --date=2026-10-01)
 
     Environment:
       Configure MOBILEJKN_* variables in .env (or reuse APLICARE_* credentials).
@@ -87,8 +93,11 @@ if (php_sapi_name() !== 'cli') {
         exit(0);
     }
 
-    $isDryRun  = isset($options['dry-run']);
-    $isVerbose = isset($options['verbose']);
+    $isDryRun    = isset($options['dry-run']);
+    $isVerbose   = isset($options['verbose']);
+    $isDaemon    = isset($options['daemon']);
+    $isReconcile = isset($options['reconcile']) || !empty($options['date']);
+    $targetDate  = $options['date'] ?? null;
 }
 
 // ─── Logger setup ──────────────────────────────────────────────────────────
@@ -177,13 +186,62 @@ $api = new BpjsAntreanClient(
 
 
 
+// ─── Execute ───────────────────────────────────────────────────────────────
 $processor = new QueueProcessor($db, $api, $config, $log);
 
-// ─── Execute ───────────────────────────────────────────────────────────────
+if ($isDaemon) {
+    $log->info("[DAEMON] Starting near-realtime worker loop (15s interval, memory guard 128MB)...");
+    $interval = 15;
+    $lastCatchUp = 0;
+    $iterations = 0;
+
+    while (true) {
+        $startTime = microtime(true);
+        $iterations++;
+
+        try {
+            $stats = $processor->runLiveToday();
+            $elapsed = round(microtime(true) - $startTime, 2);
+            $log->debug("[DAEMON-TICK] Cycle #{$iterations} finished in {$elapsed}s. Success: {$stats['success']}, Failed: {$stats['fail']}, Skipped: {$stats['skip']}");
+
+            // Hourly Catch-Up for lookback days
+            if (time() - $lastCatchUp >= 3600) {
+                $log->info("[DAEMON-CATCHUP] Executing hourly lookback reconciliation...");
+                $catchupStats = $processor->runCatchUpLookback();
+                $log->info("[DAEMON-CATCHUP] Finished. Success: {$catchupStats['success']}, Failed: {$catchupStats['fail']}, Skipped: {$catchupStats['skip']}");
+                $lastCatchUp = time();
+            }
+        } catch (\Throwable $e) {
+            $log->error("[DAEMON-ERROR] Unhandled exception in cycle #{$iterations}: " . $e->getMessage());
+        }
+
+        // Memory guard & max iteration recycle (clean exit so systemd restarts fresh process)
+        $memUsage = memory_get_usage(true);
+        if ($memUsage > 134217728 || $iterations >= 1000) {
+            $log->info("[DAEMON] Memory guard threshold ({$memUsage} bytes) or max iterations ({$iterations}) reached. Clean exit for systemd auto-restart.");
+            $db->close();
+            exit(0);
+        }
+
+        sleep($interval);
+    }
+}
+
 $startTime = microtime(true);
+$stats = ['success' => 0, 'fail' => 0, 'skip' => 0];
 
 try {
-    $stats = $processor->run();
+    if ($isReconcile) {
+        if (!empty($targetDate)) {
+            $log->info("[RECONCILE] Processing specific date: {$targetDate}");
+            $stats = $processor->runDateRange($targetDate, $targetDate);
+        } else {
+            $log->info("[RECONCILE] Processing lookback period ({$config->lookbackDate()} to yesterday)...");
+            $stats = $processor->runCatchUpLookback();
+        }
+    } else {
+        $stats = $processor->run();
+    }
 } catch (\Throwable $e) {
     $log->error("[FATAL] Unhandled exception: " . $e->getMessage());
     $log->error("[FATAL] Stack trace: " . $e->getTraceAsString());

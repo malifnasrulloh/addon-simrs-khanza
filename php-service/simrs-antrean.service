@@ -1,0 +1,16 @@
+[Unit]
+Description=SIMRS Khanza Mobile JKN Queue Sync Daemon
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=malifnasrulloh
+WorkingDirectory=/addon-simrs-khanza/php-service
+ExecStart=php8.4 /addon-simrs-khanza/php-service/mobilejkn_sync.php --daemon
+Restart=always
+RestartSec=5
+StandardOutput=append:/addon-simrs-khanza/php-service/logs/daemon.log
+StandardError=append:/addon-simrs-khanza/php-service/logs/daemon_error.log
+
+[Install]
+WantedBy=multi-user.target

@@ -68,7 +68,7 @@ class MobileJknConfig
         // ── Database ────────────────────────────────────────────────────
         $this->dbHost = $this->require('DB_HOST');
         $this->dbPort = (int) $this->get('DB_PORT', '3306');
-        $this->dbName = $this->require('DB_NAME');
+        $this->dbName = $this->get('DB_NAME', 'siknu');
         $this->dbUser = $this->require('DB_USER');
         $this->dbPass = $this->get('DB_PASS', '');
 
@@ -76,7 +76,7 @@ class MobileJknConfig
         $this->consId    = $this->getWithFallback('MOBILEJKN_CONS_ID',    'APLICARE_CONS_ID');
         $this->secretKey = $this->getWithFallback('MOBILEJKN_SECRET_KEY', 'APLICARE_SECRET_KEY');
         $this->userKey   = $this->getWithFallback('MOBILEJKN_USER_KEY',   'APLICARE_USER_KEY');
-        $this->baseUrl   = rtrim($this->require('MOBILEJKN_BASE_URL'), '/');
+        $this->baseUrl   = rtrim($this->get('MOBILEJKN_BASE_URL', 'https://apijkn.bpjs-kesehatan.go.id/antreanrs'), '/');
 
         if (empty($this->consId) || empty($this->secretKey)) {
             throw new \RuntimeException(
@@ -97,8 +97,8 @@ class MobileJknConfig
         $rawNomorFormat                 = strtolower($this->get('MOBILEJKN_NOMORANTREAN_FORMAT', 'prefix'));
         $this->nomorantreanFormat       = in_array($rawNomorFormat, ['prefix', 'raw'], true) ? $rawNomorFormat : 'prefix';
         $this->robotRanges              = [
-            '1' => self::parseRange($this->get('ROBOT_RANGE_1', '15,30'), [15, 30]),
-            '2' => self::parseRange($this->get('ROBOT_RANGE_2', '5,15'), [5, 15]),
+            '1' => self::parseRange($this->get('ROBOT_RANGE_1', '16,26'), [16, 26]),
+            '2' => self::parseRange($this->get('ROBOT_RANGE_2', '5,12'), [5, 12]),
             '3' => self::parseRange($this->get('ROBOT_RANGE_3', '10,20'), [10, 20]),
             '4' => self::parseRange($this->get('ROBOT_RANGE_4', '35,58'), [35, 58]),
             '5' => self::parseRange($this->get('ROBOT_RANGE_5', '3,10'), [3, 10]),
