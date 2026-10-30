@@ -43,6 +43,9 @@ class QueueProcessor
     /** @var array<string, array{time: int, reason: string}> In-memory throttle for recurring BPJS /antrean/add rejections */
     private array $failedAddThrottle = [];
 
+    /** @var array<string, true> Cache no_rawat of cancelled patients not registered on BPJS (clean skip) */
+    private array $unregisteredCancelled = [];
+
     public function __construct(MobileJknDatabase $db, BpjsAntreanClient $api, MobileJknConfig $config, Logger $log)
     {
         $this->db     = $db;
@@ -282,41 +285,106 @@ class QueueProcessor
         }
 
         if (empty($cancellations)) {
-            $this->log->info("[BLOCK 2] No pending cancellations.");
+            $this->log->debug("[BLOCK 2] No pending cancellations in reference tables.");
+        } else {
+            $this->log->info("[BLOCK 2] Found " . count($cancellations) . " cancellation(s) in reference tables.");
+
+            foreach ($cancellations as $c) {
+                $nb      = $c['nobooking'];
+                $noRawat = $c['no_rawat_batal'] ?? '';
+
+                // Step 1: /antrean/batal
+                $result = $this->api->batalAntrean($nb, $c['keterangan'] ?? 'Dibatalkan');
+                $code   = (string) ($result['code'] ?? '');
+                $msg    = (string) ($result['message'] ?? '');
+
+                $isBatalSuccess = self::isCancellationResponse($code, $msg);
+                $waktuStr = $c['tanggalbatal'] ?? date('Y-m-d H:i:s');
+                $targetRawat = !empty($noRawat) ? $noRawat : $nb;
+
+                if ($isBatalSuccess) {
+                    $this->db->markCancellationAsSent($c['nomorreferensi'] ?? '', $nb);
+                    $this->log->info("[BLOCK 2] ✓ Cancelled booking {$nb} on BPJS (code={$code})");
+                    $this->successCount++;
+
+                    // Step 2: Send taskid=99
+                    $r99 = $this->sendTaskId($nb, $targetRawat, '99', $waktuStr, 'BLOCK 2');
+                    if (!$r99['ok'] && ($r99['reason'] ?? '') !== 'already_in_db') {
+                        $this->db->insertTaskId($targetRawat, '99', $waktuStr);
+                    }
+                } else {
+                    // Fallback: If /antrean/batal returned 201/error, attempt sending Task 99 directly
+                    $this->log->warning("[BLOCK 2] /antrean/batal returned {$code} ({$msg}). Attempting fallback Task 99...");
+                    $r99 = $this->sendTaskId($nb, $targetRawat, '99', $waktuStr, 'BLOCK 2');
+                    if ($r99['ok'] || ($r99['reason'] ?? '') === 'already_in_db' || ($r99['reason'] ?? '') === 'cancelled_on_bpjs') {
+                        $this->db->markCancellationAsSent($c['nomorreferensi'] ?? '', $nb);
+                        $this->log->info("[BLOCK 2] ✓ Fallback Task 99 accepted for booking {$nb}. Cancellation finalized.");
+                        $this->successCount++;
+                    } else {
+                        $this->log->warning("[BLOCK 2] ✗ Cancel and Task 99 failed for {$nb}: {$msg}");
+                        $this->failCount++;
+                    }
+                }
+            }
+        }
+
+        // Step 3: Process unlinked cancelled patients from reg_periksa
+        try {
+            $unlinked = $this->db->fetchCancelledRegistrationsWithoutRef($dateFrom, $dateTo);
+        } catch (\PDOException $e) {
+            $this->log->error("[BLOCK 2] DB query for unlinked cancellations failed: " . $e->getMessage());
             return;
         }
-        $this->log->info("[BLOCK 2] Found " . count($cancellations) . " cancellation(s).");
 
-        foreach ($cancellations as $c) {
-            $nb      = $c['nobooking'];
-            $noRawat = $c['no_rawat_batal'] ?? '';
+        foreach ($unlinked as $p) {
+            $noRawat = $p['no_rawat'];
+            if (isset($this->unregisteredCancelled[$noRawat])) {
+                continue;
+            }
 
-            // Step 1: /antrean/batal
-            $result = $this->api->batalAntrean($nb, $c['keterangan'] ?? 'Dibatalkan');
-            $code   = (string) ($result['code'] ?? '');
-            $msg    = (string) ($result['message'] ?? '');
+            $matched = $this->findMatchingBpjsBooking($p, '', true);
+            if (!$matched || empty($matched['kodebooking'])) {
+                $this->unregisteredCancelled[$noRawat] = true;
+                $this->log->debug("[BLOCK 2] {$noRawat}: cancelled in SIMRS but not found on BPJS — clean skip (never /antrean/add)");
+                continue;
+            }
+
+            $kb = (string) $matched['kodebooking'];
+            $waktuStr = $p['tgl_registrasi'] . ' ' . ($p['jam_reg'] ?? '12:00:00');
+
+            if (($matched['status'] ?? '') === 'Batal') {
+                $this->log->info("[BLOCK 2] {$noRawat} ({$kb}): already cancelled on BPJS — syncing local state");
+                $this->db->saveToReferensiMobileJkn($p, $kb);
+                $this->db->markCancellationAsSent('', $kb);
+                $this->db->insertTaskId($noRawat, '99', $waktuStr);
+                $this->successCount++;
+                continue;
+            }
+
+            $this->log->info("[BLOCK 2] {$noRawat} ({$kb}): cancelled in SIMRS and active on BPJS — sending cancellation");
+            $result = $this->api->batalAntrean($kb, 'Dibatalkan oleh admin');
+            $code = (string) ($result['code'] ?? '');
+            $msg = (string) ($result['message'] ?? '');
 
             $isBatalSuccess = self::isCancellationResponse($code, $msg);
-            $waktuStr = $c['tanggalbatal'] ?? date('Y-m-d H:i:s');
-            $targetRawat = !empty($noRawat) ? $noRawat : $nb;
-
             if ($isBatalSuccess) {
-                $this->db->markCancellationAsSent($c['nomorreferensi'] ?? '', $nb);
-                $this->log->info("[BLOCK 2] ✓ Cancelled booking {$nb} on BPJS (code={$code})");
+                $this->db->saveToReferensiMobileJkn($p, $kb);
+                $this->db->markCancellationAsSent('', $kb);
+                $this->log->info("[BLOCK 2] ✓ Cancelled booking {$kb} on BPJS (code={$code})");
                 $this->successCount++;
-
-                // Step 2: Send taskid=99
-                $this->sendTaskId($nb, $targetRawat, '99', $waktuStr, 'BLOCK 2');
+                $r99 = $this->sendTaskId($kb, $noRawat, '99', $waktuStr, 'BLOCK 2');
+                if (!$r99['ok'] && ($r99['reason'] ?? '') !== 'already_in_db') {
+                    $this->db->insertTaskId($noRawat, '99', $waktuStr);
+                }
             } else {
-                // Fallback: If /antrean/batal returned 201/error, attempt sending Task 99 directly
-                $this->log->warning("[BLOCK 2] /antrean/batal returned {$code} ({$msg}). Attempting fallback Task 99...");
-                $r99 = $this->sendTaskId($nb, $targetRawat, '99', $waktuStr, 'BLOCK 2');
+                $r99 = $this->sendTaskId($kb, $noRawat, '99', $waktuStr, 'BLOCK 2');
                 if ($r99['ok'] || ($r99['reason'] ?? '') === 'already_in_db' || ($r99['reason'] ?? '') === 'cancelled_on_bpjs') {
-                    $this->db->markCancellationAsSent($c['nomorreferensi'] ?? '', $nb);
-                    $this->log->info("[BLOCK 2] ✓ Fallback Task 99 accepted for booking {$nb}. Cancellation finalized.");
+                    $this->db->saveToReferensiMobileJkn($p, $kb);
+                    $this->db->markCancellationAsSent('', $kb);
+                    $this->log->info("[BLOCK 2] ✓ Fallback Task 99 accepted for booking {$kb}. Cancellation finalized.");
                     $this->successCount++;
                 } else {
-                    $this->log->warning("[BLOCK 2] ✗ Cancel and Task 99 failed for {$nb}: {$msg}");
+                    $this->log->warning("[BLOCK 2] ✗ Cancel and Task 99 failed for {$kb}: {$msg}");
                     $this->failCount++;
                 }
             }
@@ -682,6 +750,38 @@ class QueueProcessor
         return str_contains($msgLower, 'data dokter tidak ditemukan')
             || str_contains($msgLower, 'rujukan tidak valid')
             || str_contains($msgLower, 'limit hari tanggal pelayanan');
+    }
+
+    /**
+     * Match SIMRS identity (NIK or BPJS card) against BPJS value that may be masked with asterisks (*).
+     */
+    public static function isMaskedIdentityMatch(string $simrsVal, string $bpjsVal): bool
+    {
+        $simrsClean = trim($simrsVal);
+        $bpjsClean  = trim($bpjsVal);
+
+        // Placeholder or empty values are ignored in matching
+        if ($simrsClean === '' || $simrsClean === '-' || $bpjsClean === '' || $bpjsClean === '-') {
+            return true;
+        }
+
+        // Handle masked values containing asterisks (e.g. "35************01" or "00*********84")
+        if (str_contains($bpjsClean, '*')) {
+            $prefix = rtrim(strstr($bpjsClean, '*', true) ?: '', '*');
+            $suffix = ltrim(strrchr($bpjsClean, '*') ?: '', '*');
+            if (strlen($simrsClean) !== strlen($bpjsClean)) {
+                return false;
+            }
+            if ($prefix !== '' && !str_starts_with($simrsClean, $prefix)) {
+                return false;
+            }
+            if ($suffix !== '' && !str_ends_with($simrsClean, $suffix)) {
+                return false;
+            }
+            return true;
+        }
+
+        return $simrsClean === $bpjsClean;
     }
 
     /**
@@ -2049,12 +2149,12 @@ class QueueProcessor
     /**
      * Find matching existing BPJS booking for a patient record on the same date.
      * Strict matching hierarchy:
-     *  1. Exact Medical Record (norm) + Date (tanggal) + Not Cancelled (status != 'Batal')
+     *  1. Exact Medical Record (norm) + Date (tanggal) + Masked NIK/Card Match
      *  2. Polyclinic (kodepoli == kd_poli_bpjs)
      *  3. Doctor (kodedokter == kd_dokter_bpjs)
      *  4. Queue Number (angkaantrean == no_reg) or Reference (nomorreferensi == nomorRef)
      */
-    private function findMatchingBpjsBooking(array $patient, string $nomorRef = ''): ?array
+    private function findMatchingBpjsBooking(array $patient, string $nomorRef = '', bool $includeCancelled = false): ?array
     {
         $tgl = $patient['tgl_registrasi'] ?? '';
         if (empty($tgl)) return null;
@@ -2079,8 +2179,8 @@ class QueueProcessor
         // ═══════════════════════════════════════════════════════════════════════
         $candidates = [];
         foreach ($list as $item) {
-            // Skip cancelled entries
-            if (($item['status'] ?? '') === 'Batal') {
+            // Skip cancelled entries unless searching for cancellations
+            if (!$includeCancelled && ($item['status'] ?? '') === 'Batal') {
                 continue;
             }
 
@@ -2090,13 +2190,13 @@ class QueueProcessor
                 continue;
             }
 
-            // Check Card / NIK consistency if present
+            // Check Card / NIK consistency with masking support (e.g. "35************01")
             $bpjsKartu = trim((string)($item['nokapst'] ?? ''));
             $bpjsNik   = trim((string)($item['nik'] ?? ''));
-            if ($simrsKartu !== '' && $bpjsKartu !== '' && $simrsKartu !== $bpjsKartu) {
+            if (!self::isMaskedIdentityMatch($simrsKartu, $bpjsKartu)) {
                 continue;
             }
-            if ($simrsNik !== '' && $bpjsNik !== '' && $simrsNik !== $bpjsNik) {
+            if (!self::isMaskedIdentityMatch($simrsNik, $bpjsNik)) {
                 continue;
             }
 

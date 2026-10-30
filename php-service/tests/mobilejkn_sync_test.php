@@ -234,5 +234,17 @@ $testDb->deleteReferensiMobileJkn('2026/10/27/999999', $kb1);
 $kb3 = $testDb->fetchOrGenerateNobooking($patientA, true);
 ok($kb3 === $kb1, 'deleteReferensiMobileJkn preserves cached generated booking code so retries do not jump sequence');
 
+echo "\n── 10. Unlinked Cancelled Registrations & Precision Matching ──\n";
+
+ok($dbClass->hasMethod('fetchCancelledRegistrationsWithoutRef'), 'MobileJknDatabase has fetchCancelledRegistrationsWithoutRef method');
+ok($qpClass->hasProperty('unregisteredCancelled'), 'QueueProcessor has unregisteredCancelled property for in-memory clean skip');
+
+// Test masked identity matcher
+ok(QueueProcessor::isMaskedIdentityMatch('3517085408060003', '35************03') === true, 'isMaskedIdentityMatch matches unmasked NIK against masked NIK with asterisks');
+ok(QueueProcessor::isMaskedIdentityMatch('0000727990863', '00*********63') === true, 'isMaskedIdentityMatch matches unmasked BPJS card against masked card with asterisks');
+ok(QueueProcessor::isMaskedIdentityMatch('-', '35************03') === true, 'isMaskedIdentityMatch ignores dash placeholder');
+ok(QueueProcessor::isMaskedIdentityMatch('3517085408060003', '-') === true, 'isMaskedIdentityMatch ignores BPJS dash placeholder');
+ok(QueueProcessor::isMaskedIdentityMatch('3517085408060003', '35************04') === false, 'isMaskedIdentityMatch rejects mismatched suffix');
+
 echo "\nSummary: {$passed} passed, {$failed} failed.\n";
 exit($failed > 0 ? 1 : 0);

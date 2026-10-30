@@ -207,6 +207,47 @@ SQL;
         return true;
     }
 
+    /**
+     * Fetch cancelled outpatient registrations in reg_periksa that are NOT yet recorded
+     * in referensi_mobilejkn_bpjs as 'Batal' and have no Task 99 record.
+     * Used to resolve cancellations for patients whose antrean was created outside SIMRS reference tables.
+     */
+    public function fetchCancelledRegistrationsWithoutRef(string $dateFrom, string $dateTo): array
+    {
+        $sql = <<<'SQL'
+SELECT
+    rp.no_reg, rp.no_rawat, rp.no_rkm_medis, rp.tgl_registrasi, rp.jam_reg,
+    rp.kd_dokter, COALESCE(d.nm_dokter, '') as nm_dokter,
+    rp.kd_poli, COALESCE(pol.nm_poli, '') as nm_poli,
+    COALESCE(mp.kd_poli_bpjs, '') as kd_poli_bpjs,
+    COALESCE(md.kd_dokter_bpjs, '') as kd_dokter_bpjs,
+    rp.stts_daftar, rp.stts, rp.kd_pj,
+    COALESCE(p.no_ktp, '-') as no_ktp, COALESCE(p.no_peserta, '') as no_peserta, COALESCE(p.no_tlp, '-') as no_tlp
+FROM reg_periksa rp
+LEFT JOIN dokter d ON rp.kd_dokter = d.kd_dokter
+LEFT JOIN poliklinik pol ON rp.kd_poli = pol.kd_poli
+LEFT JOIN maping_poli_bpjs mp ON rp.kd_poli = mp.kd_poli_rs
+LEFT JOIN maping_dokter_dpjpvclaim md ON rp.kd_dokter = md.kd_dokter
+LEFT JOIN pasien p ON rp.no_rkm_medis = p.no_rkm_medis
+WHERE rp.tgl_registrasi BETWEEN :df AND :dt
+  AND rp.status_lanjut = 'Ralan'
+  AND rp.kd_poli != 'IGDK'
+  AND rp.stts = 'Batal'
+  AND NOT EXISTS (
+      SELECT 1 FROM referensi_mobilejkn_bpjs_taskid t
+      WHERE t.no_rawat = rp.no_rawat AND t.taskid = '99'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM referensi_mobilejkn_bpjs r
+      WHERE r.no_rawat = rp.no_rawat AND r.status = 'Batal'
+  )
+ORDER BY CONCAT(rp.tgl_registrasi, ' ', rp.jam_reg)
+SQL;
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['df' => $dateFrom, 'dt' => $dateTo]);
+        return $stmt->fetchAll();
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Block 3: JKN Patients with statuskirim='Sudah' — task chain processing
     // Matches Java ANTROL-ROBOT.JAVA lines 227–239 (main JKN query)
